@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+/* ?raw inlines the file at build time — the button hands out exactly the
+   template that is committed alongside this component. */
+import TEMPLATE_MD from "../claude-recipe-template.md?raw";
 
 /* ══════════════════════════════════════════════════════════════════
    Tokens
@@ -637,7 +640,7 @@ const UNFILED = "\u0000unfiled";   // sentinel: recipes with no author named
    was refused before it began. */
 const isFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
 
-const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "" };
+const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "", nutrition: null };
 
 /* ══════════════════════════════════════════════════════════════════
    Shared bits
@@ -1079,6 +1082,17 @@ export default function RecipeBox() {
     }
   };
 
+  const downloadTemplate = () => {
+    const url = URL.createObjectURL(new Blob([TEMPLATE_MD], { type: "text/markdown" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "claude-recipe-template.md";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+
   /* Comma-separated terms are ANDed: "lime, tequila" means both, not either. */
   const terms = fold(query).split(",").map((t) => t.trim()).filter(Boolean);
   const haystack = (r) => {
@@ -1187,7 +1201,7 @@ export default function RecipeBox() {
       title: r.title, contributor: r.contributor || "", description: r.description || "",
       servings: r.servings || "", time: r.time || "", tagText: (r.tags || []).join(", "),
       ingredientText: r.ingredients.join("\n"), equipmentText: (r.equipment || []).join("\n"),
-      stepText: r.steps.map(stepLine).join("\n"), notes: r.notes || "",
+      stepText: r.steps.map(stepLine).join("\n"), notes: r.notes || "", nutrition: r.nutrition || null,
     });
     setEditingId(r.id); setView("form");
   };
@@ -1206,7 +1220,7 @@ export default function RecipeBox() {
       ingredientText: p.ingredients.length ? p.ingredients.join("\n") : f.ingredientText,
       equipmentText: p.equipment?.length ? p.equipment.join("\n") : f.equipmentText,
       stepText: p.steps.length ? p.steps.map(stepLine).join("\n") : f.stepText,
-      notes: p.notes || f.notes,
+      notes: p.notes || f.notes, nutrition: p.nutrition || f.nutrition,
     }));
     setPasteText("");
   };
@@ -1244,8 +1258,8 @@ export default function RecipeBox() {
       steps: form.stepText.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => stepParts(l)),
       notes: form.notes.trim(),
       created: editingId ? box.recipes.find((r) => r.id === editingId)?.created : Date.now(),
-      /* no field for it in the form, so an edit would otherwise drop it */
-      nutrition: editingId ? box.recipes.find((r) => r.id === editingId)?.nutrition || null : null,
+      /* carried on the form, so it survives an edit and a pasted import alike */
+      nutrition: form.nutrition || null,
     };
     persist({ ...box, recipes: editingId ? box.recipes.map((r) => (r.id === editingId ? recipe : r)) : [recipe, ...box.recipes] });
 
@@ -1955,7 +1969,15 @@ export default function RecipeBox() {
                     style={{ ...input, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}
                     placeholder={"## Ingredients\n- 2 lb pork shoulder\n\n## Steps\n1. Brown the pork: Sear it 8 minutes a side."}
                   />
-                  <button className="rb-btn rb-focus" style={{ ...btnQuiet, marginTop: 12 }} onClick={applyPaste}>Fill the fields</button>
+                  <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+                    <button className="rb-btn rb-focus" style={btnQuiet} onClick={applyPaste}>Fill the fields</button>
+                    <button className="rb-btn rb-focus" style={btnQuiet} onClick={downloadTemplate}>Download template</button>
+                  </div>
+                  <p style={{ font: `400 12px/1.6 ${UI}`, color: "var(--card-muted)", margin: "10px 0 0" }}>
+                    The template is a prompt for Claude plus the exact schema this importer reads —
+                    ingredients, timers, equipment and estimated nutrition. Fill it in, then paste the
+                    result above or drop the file anywhere on the page.
+                  </p>
                 </div>
               )}
 

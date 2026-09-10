@@ -1,0 +1,284 @@
+# Recipe template for the recipe box
+
+Everything here targets the importer as it actually behaves — structured frontmatter,
+`{id}` placeholders, explicit timers, equipment. Paste section 1 into Claude and the
+output will import without touching a single field by hand.
+
+---
+
+## 1. The prompt to paste
+
+> Give me a recipe for **[DISH]**.
+>
+> Output it as one markdown file and nothing else — no preamble, no closing commentary,
+> no code fence around the whole thing. Follow this schema exactly:
+>
+> ```
+> ---
+> title: "Recipe Name"
+> contributor: "Devon"
+> description: "One or two sentences. What it tastes like, when to make it."
+> servings: 4
+> yield: "Makes about 6 cups"
+> total_time_minutes: 45
+> category: "Dinner"
+> tags:
+>   - weeknight
+>   - one-pan
+> equipment:
+>   - 12-inch skillet
+>   - kitchen scale
+>   - instant-read thermometer
+> ingredients:
+>   - id: "onion"
+>     amount: 1
+>     name: "yellow onion, diced"
+>   - id: "butter"
+>     amount: 2
+>     unit: "tbsp"
+>     name: "unsalted butter"
+>   - id: "thyme"
+>     amount: 0.5
+>     unit: "tsp"
+>     name: "dried thyme"
+>     optional: true
+> nutrition:
+>   calories: 320
+>   fat: "18 g"
+>   saturated_fat: "7 g"
+>   carbs: "31 g"
+>   fiber: "2 g"
+>   sugars: "12 g"
+>   protein: "8 g"
+>   sodium: "410 mg"
+> steps:
+>   - id: "s1"
+>     title: "Short imperative title"
+>     content: "The instruction. Reference ingredients as {onion} and {butter} — the site
+>       swaps in the real amounts. Say why a step matters, not just what to do."
+>     timer_seconds: 300
+> ---
+>
+> Any prose you want to add — background, substitutions, a table of swaps — goes
+> below the closing `---`. It lands in the recipe's Notes.
+> ```
+>
+> Rules:
+> - `amount` is a plain number. Use decimals, not fractions: `0.75`, `1.3`, `2`.
+> - Omit `unit` for countable things and fold the noun into `name` ("3 garlic cloves"
+>   → `amount: 3`, `name: "garlic cloves"`).
+> - Give every ingredient an `id`, and reference it in steps as `{id}`.
+> - Set `timer_seconds` on **every** step that involves waiting, or on none at all.
+>   Declaring it on some steps but not others suppresses timers on the rest.
+> - `servings` must be a bare number — it drives the serving-size scaler.
+> - List `equipment` for anything beyond a knife and a bowl, including measuring tools.
+> - Work out `nutrition` yourself: take each ingredient at the amount listed, look up
+>   what that quantity contributes, total the recipe, then divide by `servings`. The
+>   numbers you publish are for **one serving of the finished dish**, not for the
+>   whole batch and not per ingredient.
+> - `calories` is a bare number. Every other value is a quoted string carrying its
+>   unit — `"18 g"`, `"410 mg"` — because the site prints them exactly as written.
+> - Skip ingredients marked `optional: true`; they may never go in.
+> - Count what is actually eaten. Frying oil that stays in the pan, a brine that gets
+>   poured off, or a marinade that is discarded should not be counted in full.
+> - Round honestly: calories to the nearest 5, grams to the nearest whole, milligrams
+>   to the nearest 10. False precision reads as authority the estimate has not earned.
+> - Omit any line you cannot estimate rather than guessing — the site renders only the
+>   rows present, so a partial block is fine and a wrong one is not.
+
+---
+
+## 2. Blank schema
+
+```markdown
+---
+title: ""
+contributor: ""
+description: ""
+servings: 4
+yield: ""
+total_time_minutes: 0
+category: ""
+tags:
+  - 
+equipment:
+  - 
+ingredients:
+  - id: ""
+    amount: 0
+    unit: ""
+    name: ""
+nutrition:
+  calories: 0
+  fat: ""
+  saturated_fat: ""
+  carbs: ""
+  fiber: ""
+  sugars: ""
+  protein: ""
+  sodium: ""
+steps:
+  - id: "s1"
+    title: ""
+    content: ""
+    timer_seconds: 0
+---
+
+Prose goes here and becomes the recipe's Notes.
+```
+
+---
+
+## 3. Filled example
+
+```markdown
+---
+title: "Skillet Cornbread"
+contributor: "Devon"
+description: "Crisp-edged, barely sweet cornbread baked in a preheated cast iron pan."
+servings: 8
+total_time_minutes: 35
+category: "Sides"
+tags:
+  - baking
+  - quick
+equipment:
+  - 10-inch cast iron skillet
+  - Kitchen scale
+  - Whisk
+ingredients:
+  - id: "cornmeal"
+    amount: 1.5
+    unit: "cup"
+    name: "medium-grind yellow cornmeal"
+  - id: "flour"
+    amount: 0.5
+    unit: "cup"
+    name: "all-purpose flour"
+  - id: "buttermilk"
+    amount: 1.25
+    unit: "cup"
+    name: "buttermilk"
+  - id: "eggs"
+    amount: 2
+    name: "large eggs"
+  - id: "butter"
+    amount: 4
+    unit: "tbsp"
+    name: "unsalted butter"
+  - id: "honey"
+    amount: 1
+    unit: "tbsp"
+    name: "honey"
+    optional: true
+nutrition:
+  calories: 195
+  fat: "8 g"
+  saturated_fat: "4 g"
+  carbs: "24 g"
+  fiber: "1 g"
+  sugars: "2 g"
+  protein: "6 g"
+  sodium: "60 mg"
+steps:
+  - id: "s1"
+    title: "Preheat the skillet"
+    content: "Put the empty skillet in the oven and heat to 425°F. A cold pan is the
+      difference between a crust and a crumb — the batter has to hit hot iron."
+    timer_seconds: 900
+  - id: "s2"
+    title: "Mix dry, then wet"
+    content: "Whisk {cornmeal} and {flour} together. In a second bowl beat {eggs} into
+      {buttermilk}, then add {honey} if using."
+  - id: "s3"
+    title: "Melt and combine"
+    content: "Pull the skillet out, melt {butter} in it, and pour most of the butter into
+      the wet bowl, leaving a slick behind. Combine wet and dry until just mixed."
+  - id: "s4"
+    title: "Bake"
+    content: "Pour the batter into the hot skillet — it should hiss. Bake until the top
+      is golden and the edges pull away."
+    timer_seconds: 1200
+---
+
+Buttermilk is doing real work here; regular milk with a splash of vinegar is a
+passable substitute but the crumb will be tighter.
+```
+
+---
+
+## 4. What the importer does with each field
+
+| Field | Result |
+|---|---|
+| `title` | Recipe name |
+| `contributor` (or `author`, `from`) | "from ___'s kitchen", and feeds the Cooks filter |
+| `description` | The intro paragraph with the drop cap |
+| `servings` | Bare number becomes "Serves N" and enables the scaler |
+| `yield` | Shown in Notes when `servings` is also set |
+| `total_time_minutes` / `prep_time_minutes` / `time` | The time line |
+| `tags` + `category` | Merged, lowercased, deduped into filter chips |
+| `equipment` (or `tools`, `appliances`) | The "You'll need" list, searchable by Equipment scope |
+| `ingredients[]` | `amount` + `unit` + `name`, rendered as fractions (`0.75` → `¾`), pluralized above 1, `optional: true` appends "(optional)" |
+| `steps[].title` | Headline in cooking mode |
+| `steps[].content` | The instruction; `{id}` resolves to the full ingredient |
+| `steps[].timer_seconds` | A one-tap timer button |
+| `nutrition` | The "Nutrition" panel under the ingredients, as an estimated per-serving label. Accepts `saturated_fat`, `saturatedFat` or `saturatedFatContent`; only the rows you supply are drawn |
+| Body prose | Notes, with `#` and `**` stripped |
+| Anything else | Parsed and discarded — `slug`, `scalable` included |
+
+---
+
+## 5. The lightweight version
+
+For a quick recipe where the structured form is overkill, this imports fine too:
+
+```markdown
+---
+title: Grandma's Pozole
+contributor: Rosa
+servings: Serves 8
+tags: dinner, holiday
+nutrition:
+  calories: 410
+  fat: "22 g"
+  protein: "31 g"
+  sodium: "890 mg"
+---
+
+A Sunday recipe.
+
+## Equipment
+- Dutch oven
+- Ladle
+
+## Ingredients
+- 2 lb pork shoulder
+- 3 cloves garlic
+
+## Steps
+1. Brown the pork: Sear it 8 minutes a side.
+2. Simmer for 2 hours.
+
+## Notes
+Better on day two.
+```
+
+Quantities still scale, and durations in the step text ("8 minutes", "2 hours") are
+detected as timers automatically since no `timer_seconds` is declared anywhere. What
+you give up is `{id}` substitution and per-step control over which timers exist.
+
+`nutrition` works here too — it is read from the frontmatter either way, and a partial
+block like the one above is fine.
+
+---
+
+## 6. A note on the nutrition numbers
+
+They are estimates and the site says so on the recipe, under the heading. They come
+from a language model reading an ingredient list, not from weighing the finished dish,
+so treat them as a guide rather than a label — and do not rely on them for allergies,
+medical diets, or anything where being wrong matters.
+
+The figures do **not** move when you use the serving scaler. That is correct: scaling
+to 16 servings makes twice the food, but a serving is still a serving.
