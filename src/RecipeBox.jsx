@@ -817,9 +817,8 @@ export default function RecipeBox() {
   const cancelBoxRef = useRef(false);
   const [staged, setStaged] = useState([]);
   const [importErrors, setImportErrors] = useState([]);
+  const [exporting, setExporting] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [dragId, setDragId] = useState(null);
-  const dragIdRef = useRef(null);
   const [factor, setFactor] = useState(1);
   const [cooking, setCooking] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
@@ -862,8 +861,11 @@ export default function RecipeBox() {
     (async () => {
       const data = await loadBox();
       const loaded = data && Array.isArray(data.recipes) ? data : { name: "The Hackwith Family Recipe Box", recipes: [SEED] };
-      const stored = Array.isArray(loaded.authors) ? loaded.authors : Array.isArray(loaded.cooks) ? loaded.cooks : [];
-      loaded.authors = Array.from(new Set([...stored, ...DEFAULT_AUTHORS]));
+      /* DEFAULT_AUTHORS seeds a box that has never stored a roster. Unioning it
+         in on every load instead would make the four permanent: remove one and
+         it reappears on the next visit, which the shelf offers to do. */
+      const stored = Array.isArray(loaded.authors) ? loaded.authors : Array.isArray(loaded.cooks) ? loaded.cooks : null;
+      loaded.authors = stored ? Array.from(new Set(stored)) : [...DEFAULT_AUTHORS];
       delete loaded.cooks;
       setBox(loaded);
       setLoading(false);
@@ -986,6 +988,51 @@ export default function RecipeBox() {
     if (existing) { flash(`${existing} is already listed`); setActiveBox(existing); return; }
     persist({ ...box, authors: [...(box.authors || DEFAULT_AUTHORS), name] });
     setActiveBox(name);
+  };
+
+  /* Only an empty box can go. allAuthors also gathers names off the recipes
+     themselves, so dropping a name that still has recipes would leave the box
+     on the shelf regardless and strand them under a name no longer offered as
+     a filing choice. Removing is safe precisely because it is reversible: the
+     name can be added straight back. */
+  const removeBox = (name) => {
+    if (boxCount(name) > 0) { flash(`${name} still has recipes — move those first`); return; }
+    setActiveBox(null);
+    persist({ ...box, authors: (box.authors || DEFAULT_AUTHORS).filter((a) => a !== name) });
+  };
+
+  /* A backup, not a share. The box object round-trips through the existing
+     importer, which reads data.recipes. Full-size photos live under their own
+     keys rather than inside the box, so they are fetched and folded in here —
+     without that the file preserves thumbnails only, which is not much of a
+     backup of a recipe with a picture. */
+  const exportAll = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const photos = {};
+      await Promise.all(box.recipes.map(async (r) => {
+        try {
+          const res = await window.storage?.get(imageKey(r.id), true);
+          if (res?.value) photos[r.id] = res.value;
+        } catch { /* no full-size photo stored for this one */ }
+      }));
+      const payload = { ...box, photos, exported: new Date().toISOString() };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `recipe-box-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      const n = box.recipes.length;
+      flash(`Exported ${n} ${n === 1 ? "recipe" : "recipes"}`);
+    } catch (err) {
+      flash(`Export failed — ${err.message}`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   /* Comma-separated terms are ANDed: "lime, tequila" means both, not either. */
@@ -1210,7 +1257,32 @@ export default function RecipeBox() {
     .rb-step { animation: rbfade 260ms ease both; }
     @keyframes rbfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
     @media (prefers-reduced-motion: reduce) { .rb-step { animation: none; } }
-    @media print { .rb { background: #fff !important; } .rb-noprint { display: none !important; } .rb-sheet { box-shadow: none !important; padding: 0 !important; } }
+    @media print {
+      @page { margin: 14mm; }
+      /* The dark palette follows the screen onto paper otherwise, which means
+         near-white text on a white sheet. Force the light one either way. */
+      .rb, .rb[data-theme="dark"] {
+        background: #fff !important;
+        --card-bg: #fff; --card-lift: #fff; --card-text: #1B1913;
+        --card-muted: #4A4638; --card-edge: #C9C2AE; --card-accent: #A2412A;
+        --grain-op: 0;
+      }
+      .rb-noprint { display: none !important; }
+      /* overflow:hidden on the sheet clips whatever crosses a page boundary */
+      .rb-sheet { box-shadow: none !important; padding: 0 !important; overflow: visible !important; }
+      .rb-pad { padding: 0 !important; }
+      /* Grid items cannot break across pages — the two-column layout is what
+         was slicing sections at the margin. One column flows properly. */
+      .rb-detail { display: block !important; }
+      .rb-detail > div + div { margin-top: 30px; }
+      /* Never split one ingredient, one step, or the notes block in half. */
+      .rb-detail li, .rb-notes { break-inside: avoid; page-break-inside: avoid; }
+      /* Never strand a heading at the foot of a page. */
+      h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
+      p { orphans: 3; widows: 3; }
+      /* A photo at screen size otherwise eats most of the first sheet. */
+      .rb-sheet img { max-height: 2.4in !important; }
+    }
 
     /* ── phones ── */
     @media (max-width: 640px) {
@@ -1309,9 +1381,21 @@ export default function RecipeBox() {
                 ? `${boxCount(activeBox)} ${boxCount(activeBox) === 1 ? "recipe" : "recipes"} from ${activeBox}.`
                 : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}
             </p>
+            {activeBox && activeBox !== UNFILED && boxCount(activeBox) === 0 && (
+              <button
+                className="rb-btn rb-focus"
+                onClick={() => removeBox(activeBox)}
+                style={{ ...btnGhost, marginTop: 14, padding: "6px 12px", fontSize: 12.5 }}
+              >
+                Remove this box
+              </button>
+            )}
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button className="rb-btn rb-focus" style={btnGhost} onClick={() => fileRef.current?.click()}>Import files</button>
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={exportAll} disabled={exporting}>
+              {exporting ? "Exporting…" : "Export all"}
+            </button>
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
           </div>
         </div>
@@ -1346,26 +1430,10 @@ export default function RecipeBox() {
                     key={b.key ?? "all"}
                     className={`rb-focus${b.key === null ? " rb-shelf-all" : ""}`}
                     onClick={() => { setActiveBox(b.key); setQuery(""); setTagFilter(null); }}
-                    onDragEnter={(e) => {
-                      if (!droppable || !dragIdRef.current) return;
-                      e.preventDefault();
-                    }}
-                    onDragOver={(e) => {
-                      if (!droppable || !dragIdRef.current) return;
-                      e.preventDefault();                       // this is what makes a drop legal
-                      e.dataTransfer.dropEffect = "move";
-                    }}
-                    onDrop={(e) => {
-                      if (!droppable || !dragIdRef.current) return;
-                      e.preventDefault();
-                      moveRecipe(dragIdRef.current, b.key);
-                      dragIdRef.current = null;
-                      setDragId(null);
-                    }}
                     style={{
                       display: "flex", flexDirection: "column", gap: 4, textAlign: "left", cursor: "pointer",
                       padding: "11px 16px", borderRadius: 2, minWidth: 120,
-                      border:  `1px solid ${on ? T.marigold : dragId && droppable ? "rgba(231,164,39,.45)" : "rgba(247,242,230,.22)"}`,
+                      border:  `1px solid ${on ? T.marigold : "rgba(247,242,230,.22)"}`,
                       background: on ? "rgba(231,164,39,.14)" : "transparent",
                       transform: "none",
                     }}
@@ -1417,11 +1485,6 @@ export default function RecipeBox() {
               )}
             </div>
 
-            {dragId && (
-              <p style={{ font: `500 12.5px/1.5 ${UI}`, color: T.marigold, margin: "0 0 16px" }}>
-                Drop it on a name above to move it there.
-              </p>
-            )}
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 16 }}>
               <input
@@ -1506,8 +1569,7 @@ export default function RecipeBox() {
                     className="rb-card rb-focus"
                     style={{
                       ...sheet, display: "flex", flexDirection: "column",
-                      cursor: dragId === r.id ? "grabbing" : "pointer",
-                      opacity: dragId === r.id ? 0.45 : 1,
+                      cursor: "pointer",
                     }}
                   >
                     <div style={ruleTop} />
@@ -1527,31 +1589,8 @@ export default function RecipeBox() {
                       </div>
                     )}
                     <Grain card />
-                    <span
-                      draggable
-                      role="button"
-                      tabIndex={-1}
-                      aria-label={`Drag ${r.title} to someone else's recipes`}
-                      title="Drag me to someone else's recipes"
-                      onClick={(e) => e.stopPropagation()}
-                      onDragStart={(e) => {
-                        dragIdRef.current = r.id;
-                        e.dataTransfer.setData("text/plain", r.title);
-                        e.dataTransfer.effectAllowed = "move";
-                        setDragId(r.id);
-                      }}
-                      onDragEnd={() => { dragIdRef.current = null; setDragId(null); }}
-                      style={{
-                        position: "absolute", top: 15, right: 10, zIndex: 3, cursor: "grab",
-                        padding: "2px 7px", borderRadius: 3, lineHeight: 1,
-                        font: `600 15px/1 ${UI}`, letterSpacing: "1px",
-                        color: "var(--card-edge)", userSelect: "none",
-                      }}
-                    >
-                      ⠿
-                    </span>
                     <div style={{ position: "relative", padding: "22px 24px 20px", display: "flex", flexDirection: "column", gap: 9, flex: 1 }}>
-                      <h3 style={{ font: `400 24px/1.18 ${DISPLAY}`, color: "var(--card-text)", margin: 0, letterSpacing: "-0.01em", paddingRight: 22 }}>{r.title}</h3>
+                      <h3 style={{ font: `400 24px/1.18 ${DISPLAY}`, color: "var(--card-text)", margin: 0, letterSpacing: "-0.01em" }}>{r.title}</h3>
                       {r.contributor && <p style={{ font: `italic 400 14.5px/1.4 ${DISPLAY}`, color: "var(--card-accent)", margin: 0 }}>from {r.contributor}'s kitchen</p>}
                       {r.description && <p className="rb-clamp" style={{ font: `400 14px/1.65 ${UI}`, color: "var(--card-muted)", margin: 0 }}>{r.description}</p>}
                       <div style={{ marginTop: "auto", paddingTop: 14, borderTop: `1px solid var(--card-edge)`, font: `400 12.5px/1.4 ${UI}`, color: "var(--card-muted)", display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -1760,7 +1799,7 @@ export default function RecipeBox() {
                   </ol>
 
                   {openRecipe.notes && (
-                    <div style={{ marginTop: 28, padding: "18px 20px", background: "var(--card-lift)", borderLeft: `3px solid var(--card-accent)` }}>
+                    <div className="rb-notes" style={{ marginTop: 28, padding: "18px 20px", background: "var(--card-lift)", borderLeft: `3px solid var(--card-accent)` }}>
                       <h4 style={{ font: `400 18px/1.2 ${DISPLAY}`, margin: "0 0 7px", color: "var(--card-text)" }}>Notes</h4>
                       <p style={{ font: `400 15px/1.72 ${UI}`, color: "var(--card-muted)", margin: 0, whiteSpace: "pre-wrap" }}>{openRecipe.notes}</p>
                     </div>
