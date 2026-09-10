@@ -280,5 +280,7 @@ from a language model reading an ingredient list, not from weighing the finished
 so treat them as a guide rather than a label — and do not rely on them for allergies,
 medical diets, or anything where being wrong matters.
 
-The figures do **not** move when you use the serving scaler. That is correct: scaling
-to 16 servings makes twice the food, but a serving is still a serving.
+The figures move with the serving scaler. Write them **per serving** — one portion,
+not the whole batch. The recipe page multiplies them by the number of servings showing
+on the stepper, so the panel always describes the amount actually being made, and its
+heading names the count it is showing.

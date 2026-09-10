@@ -116,7 +116,7 @@ async function saveBox(box) {
    Quantities — parsing, scaling, pretty-printing
    ══════════════════════════════════════════════════════════════════ */
 const UNI = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875 };
-const NUM = "(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d*\\.?\\d+|[¼½¾⅓⅔⅛⅜⅝⅞])";
+const NUM = "(?:\\d+\\s+\\d+\\/\\d+|\\d+\\s*[¼½¾⅓⅔⅛⅜⅝⅞]|\\d+\\/\\d+|\\d*\\.?\\d+|[¼½¾⅓⅔⅛⅜⅝⅞])";
 const QTY_RE = new RegExp(`^(\\s*)(${NUM})(\\s*(?:-|–|to)\\s*)?(${NUM})?`);
 const FRACTIONS = [
   [1 / 8, "⅛"], [1 / 4, "¼"], [1 / 3, "⅓"], [3 / 8, "⅜"], [1 / 2, "½"],
@@ -171,6 +171,8 @@ const UNITS = new Set([
   "lb","lbs","pound","pounds","g","gram","grams","kg","ml","l","liter","liters","clove","cloves","can","cans",
   "pinch","pinches","sprig","sprigs","slice","slices","stick","sticks","bunch","bunches","package","packages",
   "quart","quarts","pint","pints","dash","dashes","qt","pt",
+  "scoop","scoops","packet","packets","handful","handfuls","head","heads","stalk","stalks",
+  "sheet","sheets","drop","drops","jar","jars","bottle","bottles","bag","bags","knob","knobs",
 ]);
 
 function splitQty(s) {
@@ -182,6 +184,44 @@ function splitQty(s) {
   if (unit && UNITS.has(unit)) qty += " " + m[2];
   else if (m[2]) rest = m[2] + " " + rest;
   return [qty, rest];
+}
+
+/* A step’s quantities were resolved into prose when the recipe was imported, so
+   they sit there as plain text and do not follow the scaler the way the
+   ingredient list does. Scale a number only where a measure follows it: that
+   leaves "8 minutes", "425°F" and "step 2 of 6" alone, none of which may move.
+   Parentheses are skipped as well, because that is where package sizes live — a
+   100 g packet is still 100 g however many of them go in. */
+const STEP_QTY_RE = new RegExp(`(${NUM})(\\s*(?:-|–|to)\\s*(${NUM}))?(\\s+)([A-Za-z]+)\\b`, "g");
+
+/* A measure followed by one of these is sizing the container, not the amount
+   going into it: a 40 oz pitcher is still 40 oz however much you make, and a
+   14 oz can is the tin you bought. */
+const VESSELS = new Set([
+  "pitcher","pitchers","blender","blenders","bowl","bowls","pan","pans","skillet","skillets",
+  "dish","dishes","pot","pots","tin","tins","ramekin","ramekins","mold","molds","tray","trays",
+  "jar","jars","bottle","bottles","can","cans","packet","packets","bag","bags","box","boxes",
+  "tub","tubs","container","containers","carton","cartons","block","blocks","loaf","loaves",
+]);
+
+function scaleText(text, factor) {
+  if (!text || !factor || factor === 1) return text;
+  return String(text)
+    .split(/(\([^)]*\))/)
+    .map((seg) =>
+      seg.startsWith("(")
+        ? seg
+        : seg.replace(STEP_QTY_RE, (whole, a, _range, b, gap, word, offset, str) => {
+            if (!UNITS.has(word.toLowerCase())) return whole;
+            const next = str.slice(offset + whole.length).match(/^\s+([A-Za-z]+)/);
+            if (next && VESSELS.has(next[1].toLowerCase())) return whole;
+            const A = toNumber(a);
+            if (A == null) return whole;
+            const B = b ? toNumber(b) : null;
+            return prettyNumber(A * factor) + (B != null ? `–${prettyNumber(B * factor)}` : "") + gap + word;
+          })
+    )
+    .join("");
 }
 
 const servingsCount = (s) => {
@@ -526,6 +566,18 @@ const normalizeNutrition = (raw) => {
   return Object.keys(out).length ? out : null;
 };
 
+/* Stored per serving and written with its unit ("18 g"), so scaling means
+   lifting the number off the front and putting the unit back after. Anything
+   that does not begin with a number passes through untouched. */
+const scaleNutrient = (value, mult) => {
+  const m = String(value ?? "").match(/^\s*(\d+(?:[.,]\d+)?)\s*(.*)$/);
+  if (!m) return value;
+  const n = parseFloat(m[1].replace(",", ".")) * mult;
+  if (!Number.isFinite(n)) return value;
+  const rounded = n >= 10 ? Math.round(n) : Math.round(n * 10) / 10;
+  return m[2] ? `${rounded} ${m[2]}` : String(rounded);
+};
+
 /* A cleared input means the line does not apply, so it is dropped rather than
    stored empty — an object of blank values would still draw the panel with
    nothing under it. */
@@ -790,7 +842,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
             </h2>
           )}
           <p style={{ font: `400 clamp(17px, 2.4vw, 21px)/1.68 ${DISPLAY}`, color: "rgba(247,242,230,.92)", margin: 0, maxWidth: "56ch" }}>
-            {step.text}
+            {scaleText(step.text, factor)}
           </p>
           {secs && (
             <button
@@ -991,6 +1043,9 @@ export default function RecipeBox() {
 
   const openRecipe = box.recipes.find((r) => r.id === openId);
   const baseServings = servingsCount(openRecipe?.servings);
+  /* Nutrition is stored for one serving. The panel describes the batch actually
+     being made, so it moves with the scaler exactly as the ingredients do. */
+  const servingsMade = baseServings ? Math.max(1, Math.round(baseServings * factor)) : null;
   const allTags = Array.from(new Set(box.recipes.flatMap((r) => r.tags || []))).sort();
   const allAuthors = Array.from(
     new Set([...(box.authors || DEFAULT_AUTHORS), ...box.recipes.map((r) => r.contributor).filter(Boolean)])
@@ -1853,7 +1908,7 @@ export default function RecipeBox() {
                   {openRecipe.nutrition && (
                     <div className="rb-nutrition" style={{ marginTop: 30 }}>
                       <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 3px", color: "var(--card-text)" }}>Nutrition</h3>
-                      <p style={{ font: `400 12px/1.5 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>Estimated, per serving.</p>
+                      <p style={{ font: `400 12px/1.5 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>{servingsMade ? `Estimated, total for ${servingsMade} ${servingsMade === 1 ? "serving" : "servings"}.` : "Estimated, per serving."}</p>
                       <dl style={{ margin: 0, borderTop: `2px solid var(--card-text)` }}>
                         {NUTRIENTS.filter((n) => openRecipe.nutrition[n.key]).map((n) => (
                           <div
@@ -1864,7 +1919,7 @@ export default function RecipeBox() {
                             }}
                           >
                             <dt style={{ font: `400 14.5px/1.4 ${UI}`, color: "var(--card-text)" }}>{n.label}</dt>
-                            <dd className="rb-num" style={{ margin: 0, fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap" }}>{openRecipe.nutrition[n.key]}</dd>
+                            <dd className="rb-num" style={{ margin: 0, fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap" }}>{scaleNutrient(openRecipe.nutrition[n.key], servingsMade || 1)}</dd>
                           </div>
                         ))}
                       </dl>
@@ -1883,7 +1938,7 @@ export default function RecipeBox() {
                           <span className="rb-num" style={{ fontSize: 26, color: "var(--card-edge)", lineHeight: 1.15, textAlign: "right", paddingRight: 4 }}>{i + 1}</span>
                           <div style={{ maxWidth: "64ch" }}>
                             {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
-                            <p style={{ font: `400 16.5px/1.75 ${DISPLAY}`, color: "var(--card-text)", margin: 0 }}>{text}</p>
+                            <p style={{ font: `400 16.5px/1.75 ${DISPLAY}`, color: "var(--card-text)", margin: 0 }}>{scaleText(text, factor)}</p>
                             {secs && (
                               <button
                                 className="rb-btn rb-focus rb-noprint"
