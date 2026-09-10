@@ -810,7 +810,11 @@ export default function RecipeBox() {
   /* Snapshot of the list the recipe was opened from, so Back returns to the
      same search, scope, tag and box — not to a reset list. */
   const listStateRef = useRef({ query: "", scope: "all", tagFilter: null, activeBox: null });
-  const [editingName, setEditingName] = useState(false);
+  const [addingBox, setAddingBox] = useState(false);
+  const [newBoxName, setNewBoxName] = useState("");
+  /* Escape has to beat the input's own blur handler, which would otherwise
+     file the half-typed name on the way out. */
+  const cancelBoxRef = useRef(false);
   const [staged, setStaged] = useState([]);
   const [importErrors, setImportErrors] = useState([]);
   const [dragging, setDragging] = useState(false);
@@ -964,6 +968,24 @@ export default function RecipeBox() {
     if (!recipe || recipe.contributor === author) return;
     persist({ ...box, recipes: box.recipes.map((r) => (r.id === id ? { ...r, contributor: author } : r)) });
     flash(author ? `Moved "${recipe.title}" to ${author}'s recipes` : `Removed the author from "${recipe.title}"`);
+  };
+
+  /* A box is just a name in box.authors. Persisting that list writes it to
+     shared storage, so the box turns up for everyone — empty until someone
+     files a recipe under the name. allAuthors already folds in contributors
+     found on the recipes themselves, so a name in use is a duplicate rather
+     than a new box. Seeding from DEFAULT_AUTHORS matters on the first add:
+     until box.authors exists, the roster is only the hardcoded four. */
+  const addBox = () => {
+    const name = newBoxName.trim();
+    setAddingBox(false);
+    setNewBoxName("");
+    if (cancelBoxRef.current) { cancelBoxRef.current = false; return; }
+    if (!name) return;
+    const existing = allAuthors.find((a) => a.toLowerCase() === name.toLowerCase());
+    if (existing) { flash(`${existing} is already listed`); setActiveBox(existing); return; }
+    persist({ ...box, authors: [...(box.authors || DEFAULT_AUTHORS), name] });
+    setActiveBox(name);
   };
 
   /* Comma-separated terms are ANDed: "lime, tequila" means both, not either. */
@@ -1199,7 +1221,7 @@ export default function RecipeBox() {
       .rb-scope { width: 100%; }
       .rb-scope button { flex: 1 1 0; padding: 11px 4px !important; }
       /* 16px keeps iOS from zooming the viewport on focus */
-      .rb input:not(.rb-title-input), .rb textarea { font-size: 16px !important; }
+      .rb input, .rb textarea { font-size: 16px !important; }
       .rb-actions button { flex: 1 1 auto; }
       .rb-corner { top: 8px !important; right: 16px !important; }
       .rb-shelf { gap: 8px; }
@@ -1208,6 +1230,7 @@ export default function RecipeBox() {
          row keeps it first and leaves an even number of author boxes below,
          so none is left alone on the last row stretched to full width. */
       .rb-shelf button.rb-shelf-all { flex: 1 1 100%; }
+      .rb-shelf .rb-new-box { flex: 0 0 auto; }
       .rb-tray { padding: 10px 12px !important; }
     }
     @media (max-width: 400px) {
@@ -1278,32 +1301,9 @@ export default function RecipeBox() {
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 22, alignItems: "flex-end", justifyContent: "space-between" }}>
           <div style={{ minWidth: 260 }}>
-            {activeBox ? (
-              <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: T.paper }}>
-                {activeBox}'s Recipes
-              </h1>
-            ) : editingName ? (
-              <input
-                autoFocus
-                className="rb-title-input"
-                value={box.name}
-                onChange={(e) => setBox({ ...box, name: e.target.value })}
-                onBlur={() => { setEditingName(false); persist(box); }}
-                onKeyDown={(e) => e.key === "Enter" && e.target.blur()}
-                style={{
-                  font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, background: "transparent", border: "none",
-                  borderBottom: `1px dashed ${T.marigold}`, color: T.paper, padding: 0, width: "min(100%, 560px)", letterSpacing: "-0.015em",
-                }}
-              />
-            ) : (
-              <h1
-                onClick={() => setEditingName(true)}
-                title="Click to rename"
-                style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, cursor: "text", letterSpacing: "-0.015em", color: T.paper }}
-              >
-                {box.name}
-              </h1>
-            )}
+            <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: T.paper }}>
+              {activeBox ? `${activeBox}'s Recipes` : box.name}
+            </h1>
             <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(247,242,230,.58)", margin: "12px 0 0", maxWidth: "46ch" }}>
               {activeBox
                 ? `${boxCount(activeBox)} ${boxCount(activeBox) === 1 ? "recipe" : "recipes"} from ${activeBox}.`
@@ -1377,6 +1377,44 @@ export default function RecipeBox() {
                   </button>
                 );
               })}
+
+              {addingBox ? (
+                <input
+                  autoFocus
+                  className="rb-new-box"
+                  value={newBoxName}
+                  onChange={(e) => setNewBoxName(e.target.value)}
+                  onBlur={addBox}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.target.blur();
+                    if (e.key === "Escape") { cancelBoxRef.current = true; e.target.blur(); }
+                  }}
+                  placeholder="Name"
+                  aria-label="Name of the person to add"
+                  style={{
+                    padding: "11px 16px", borderRadius: 2, width: 150, maxWidth: "100%",
+                    border: `1px solid ${T.marigold}`, background: "transparent",
+                    color: T.paper, font: `400 17px/1.2 ${DISPLAY}`, outline: "none",
+                  }}
+                />
+              ) : (
+                <button
+                  className="rb-focus rb-new-box"
+                  onClick={() => setAddingBox(true)}
+                  title="Add someone new"
+                  aria-label="Add someone new"
+                  style={{
+                    display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start",
+                    textAlign: "left", cursor: "pointer", padding: "11px 16px", borderRadius: 2, minWidth: 120,
+                    border: "1px dashed rgba(247,242,230,.3)", background: "transparent", transform: "none",
+                  }}
+                >
+                  <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: T.paper }}>+</span>
+                  <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(247,242,230,.45)" }}>
+                    Add someone
+                  </span>
+                </button>
+              )}
             </div>
 
             {dragId && (
