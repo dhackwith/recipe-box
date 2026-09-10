@@ -494,18 +494,17 @@ function parseMarkdown(raw) {
 
 /* Estimated nutrition, per serving of the finished dish. Values are kept as
    written — "18 g", "410 mg" — rather than parsed into numbers: the site only
-   prints them, and a unit stated by the source beats one inferred here. Order
-   is the order they appear on the recipe, sub-nutrients indented under their
-   parent the way a printed label sets them. */
+   prints them, and a unit stated by the source beats one inferred here. Every
+   label sits flush left; order is the order they appear on the recipe. */
 const NUTRIENTS = [
-  { key: "calories", label: "Calories", alt: ["kcal", "energy"] },
-  { key: "fat", label: "Fat", alt: ["totalFat", "fatContent"] },
-  { key: "saturatedFat", label: "Saturated fat", sub: true, alt: ["satFat", "saturated", "saturatedFatContent"] },
-  { key: "carbs", label: "Carbohydrate", alt: ["carbohydrate", "carbohydrates", "carbohydrateContent"] },
-  { key: "fiber", label: "Fiber", sub: true, alt: ["dietaryFiber", "fiberContent"] },
-  { key: "sugars", label: "Sugars", sub: true, alt: ["sugar", "sugarContent"] },
-  { key: "protein", label: "Protein", alt: ["proteinContent"] },
-  { key: "sodium", label: "Sodium", alt: ["sodiumContent"] },
+  { key: "calories", label: "Calories", eg: "320", alt: ["kcal", "energy"] },
+  { key: "fat", label: "Fat", eg: "18 g", alt: ["totalFat", "fatContent"] },
+  { key: "saturatedFat", label: "Saturated fat", eg: "7 g", alt: ["satFat", "saturated", "saturatedFatContent"] },
+  { key: "carbs", label: "Carbohydrate", eg: "31 g", alt: ["carbohydrate", "carbohydrates", "carbohydrateContent"] },
+  { key: "fiber", label: "Fiber", eg: "2 g", alt: ["dietaryFiber", "fiberContent"] },
+  { key: "sugars", label: "Sugars", eg: "12 g", alt: ["sugar", "sugarContent"] },
+  { key: "protein", label: "Protein", eg: "8 g", alt: ["proteinContent"] },
+  { key: "sodium", label: "Sodium", eg: "410 mg", alt: ["sodiumContent"] },
 ];
 
 const flatKey = (k) => String(k).toLowerCase().replace(/[_\s-]/g, "");
@@ -523,6 +522,19 @@ const normalizeNutrition = (raw) => {
       .map((name) => flat[flatKey(name)])
       .find((v) => v !== undefined && v !== null && String(v).trim() !== "");
     if (hit !== undefined) out[n.key] = clean(String(hit));
+  }
+  return Object.keys(out).length ? out : null;
+};
+
+/* A cleared input means the line does not apply, so it is dropped rather than
+   stored empty — an object of blank values would still draw the panel with
+   nothing under it. */
+const cleanNutrition = (n) => {
+  if (!n) return null;
+  const out = {};
+  for (const { key } of NUTRIENTS) {
+    const v = String(n[key] ?? "").trim();
+    if (v) out[key] = v;
   }
   return Object.keys(out).length ? out : null;
 };
@@ -1082,6 +1094,9 @@ export default function RecipeBox() {
     }
   };
 
+  const setNutrient = (key, value) =>
+    setForm((prev) => ({ ...prev, nutrition: { ...(prev.nutrition || {}), [key]: value } }));
+
   const downloadTemplate = () => {
     const url = URL.createObjectURL(new Blob([TEMPLATE_MD], { type: "text/markdown" }));
     const a = document.createElement("a");
@@ -1259,7 +1274,7 @@ export default function RecipeBox() {
       notes: form.notes.trim(),
       created: editingId ? box.recipes.find((r) => r.id === editingId)?.created : Date.now(),
       /* carried on the form, so it survives an edit and a pasted import alike */
-      nutrition: form.nutrition || null,
+      nutrition: cleanNutrition(form.nutrition),
     };
     persist({ ...box, recipes: editingId ? box.recipes.map((r) => (r.id === editingId ? recipe : r)) : [recipe, ...box.recipes] });
 
@@ -1848,7 +1863,7 @@ export default function RecipeBox() {
                               padding: "8px 0", borderBottom: `1px solid var(--card-edge)`,
                             }}
                           >
-                            <dt style={{ font: `400 14.5px/1.4 ${UI}`, color: "var(--card-text)", paddingLeft: n.sub ? 16 : 0 }}>{n.label}</dt>
+                            <dt style={{ font: `400 14.5px/1.4 ${UI}`, color: "var(--card-text)" }}>{n.label}</dt>
                             <dd className="rb-num" style={{ margin: 0, fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap" }}>{openRecipe.nutrition[n.key]}</dd>
                           </div>
                         ))}
@@ -2066,6 +2081,27 @@ export default function RecipeBox() {
               <Field label="Tags" hint="Comma separated — dinner, holiday, abuela.">
                 <input className="rb-focus" style={input} value={form.tagText} onChange={(e) => setForm({ ...form, tagText: e.target.value })} />
               </Field>
+
+              <div style={{ marginBottom: 20 }}>
+                <span style={{ display: "block", font: `600 13px/1.4 ${UI}`, color: "var(--card-text)", marginBottom: 2 }}>Nutrition</span>
+                <span style={{ display: "block", font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", marginBottom: 7 }}>
+                  Estimated, per serving. Filled in for you when an imported or pasted recipe carries it. Clear a box to drop that line.
+                </span>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10 }}>
+                  {NUTRIENTS.map((n) => (
+                    <label key={n.key} style={{ display: "block" }}>
+                      <span style={{ display: "block", font: `500 12px/1.4 ${UI}`, color: "var(--card-muted)", marginBottom: 4 }}>{n.label}</span>
+                      <input
+                        className="rb-focus"
+                        style={input}
+                        value={(form.nutrition && form.nutrition[n.key]) || ""}
+                        onChange={(e) => setNutrient(n.key, e.target.value)}
+                        placeholder={n.eg}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
 
               <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
                 <button className="rb-btn rb-focus" style={{ ...btnPrimary, opacity: form.title.trim() ? 1 : 0.45 }} onClick={saveRecipe} disabled={!form.title.trim()}>
