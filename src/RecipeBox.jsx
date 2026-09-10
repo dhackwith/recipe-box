@@ -1,0 +1,1965 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
+
+/* ══════════════════════════════════════════════════════════════════
+   Tokens
+   ══════════════════════════════════════════════════════════════════ */
+const T = {
+  ink: "#0B2F32",
+  inkDeep: "#061E21",
+  inkSoft: "#144043",
+  paper: "#F7F2E6",
+  paperLift: "#FFFCF4",
+  edge: "#DCD0B2",
+  marigold: "#E7A427",
+  rust: "#A2412A",
+  sage: "#8FA68C",
+  text: "#1B1913",
+  muted: "#6B6450",
+};
+
+const DISPLAY = "'Fraunces', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif";
+const UI = "'Karla', 'Avenir Next', 'Segoe UI', system-ui, -apple-system, sans-serif";
+const STORAGE_KEY = "recipe-box";
+
+/* ══════════════════════════════════════════════════════════════════
+   Photos
+   Storage holds text, so a picture has to become a data URL. Two sizes:
+   a thumbnail small enough to live inside the recipe record (the list view
+   reads dozens at once), and a full copy under its own key, fetched only
+   when a recipe is opened.
+   ══════════════════════════════════════════════════════════════════ */
+const FULL_MAX = 1400;
+const THUMB_MAX = 300;
+const imageKey = (id) => `image:${id}`;
+
+async function loadBitmap(file) {
+  try {
+    return await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    const url = URL.createObjectURL(file);
+    try {
+      return await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => rej(new Error("not an image"));
+        img.src = url;
+      });
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+  }
+}
+
+async function shrink(source, maxDim, quality) {
+  const w = source.width;
+  const h = source.height;
+  const scale = Math.min(1, maxDim / Math.max(w, h));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+async function prepPhoto(file) {
+  const bmp = await loadBitmap(file);
+  const full = await shrink(bmp, FULL_MAX, 0.78);
+  const thumb = await shrink(bmp, THUMB_MAX, 0.6);
+  bmp.close?.();
+  return { full, thumb };
+}
+
+/* Strip accents so a search for "acai" finds "açaí" and "jalapeno" finds
+   "jalapeño". NFD splits a letter from its accent; the range below is the
+   combining-mark block. */
+const fold = (v) =>
+  String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+const SCOPES = [
+  { id: "all", label: "Everything", placeholder: "Search titles, authors, ingredients, equipment" },
+  { id: "ingredient", label: "Ingredient", placeholder: "e.g. lime, tequila" },
+  { id: "author", label: "Author", placeholder: "Who wrote it? e.g. Tracey" },
+  { id: "equipment", label: "Equipment", placeholder: "e.g. blender, stand mixer" },
+];
+
+const NOISE =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
+
+/* ══════════════════════════════════════════════════════════════════
+   Storage
+   ══════════════════════════════════════════════════════════════════ */
+async function loadBox() {
+  if (typeof window === "undefined" || !window.storage) return null;
+  try {
+    const res = await window.storage.get(STORAGE_KEY, true);
+    return res?.value ? JSON.parse(res.value) : null;
+  } catch {
+    return null;
+  }
+}
+async function saveBox(box) {
+  if (typeof window === "undefined" || !window.storage) return false;
+  try {
+    return !!(await window.storage.set(STORAGE_KEY, JSON.stringify(box), true));
+  } catch (err) {
+    console.error("Save failed:", err);
+    return false;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Quantities — parsing, scaling, pretty-printing
+   ══════════════════════════════════════════════════════════════════ */
+const UNI = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875 };
+const NUM = "(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d*\\.?\\d+|[¼½¾⅓⅔⅛⅜⅝⅞])";
+const QTY_RE = new RegExp(`^(\\s*)(${NUM})(\\s*(?:-|–|to)\\s*)?(${NUM})?`);
+const FRACTIONS = [
+  [1 / 8, "⅛"], [1 / 4, "¼"], [1 / 3, "⅓"], [3 / 8, "⅜"], [1 / 2, "½"],
+  [5 / 8, "⅝"], [2 / 3, "⅔"], [3 / 4, "¾"], [7 / 8, "⅞"],
+];
+
+function toNumber(tok) {
+  if (!tok) return null;
+  const t = String(tok).trim();
+  if (UNI[t] != null) return UNI[t];
+  const mixed = t.match(/^(\d+)\s*([¼½¾⅓⅔⅛⅜⅝⅞])$/);
+  if (mixed) return parseInt(mixed[1], 10) + UNI[mixed[2]];
+  const mixedFrac = t.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+  if (mixedFrac) return parseInt(mixedFrac[1], 10) + Number(mixedFrac[2]) / Number(mixedFrac[3]);
+  const frac = t.match(/^(\d+)\/(\d+)$/);
+  if (frac) return Number(frac[1]) / Number(frac[2]);
+  const n = parseFloat(t.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+function prettyNumber(n) {
+  if (n == null || !Number.isFinite(n)) return "";
+  if (n < 0.05) return String(Math.round(n * 100) / 100);
+  if (n >= 10) return String(Math.round(n * 10) / 10);
+  const whole = Math.floor(n + 1e-9);
+  const rem = n - whole;
+  if (rem < 0.06) return String(whole || 0);
+  let best = null;
+  let bestGap = Infinity;
+  for (const [val, glyph] of FRACTIONS) {
+    const gap = Math.abs(rem - val);
+    if (gap < bestGap) { bestGap = gap; best = glyph; }
+  }
+  if (bestGap > 0.07) return String(Math.round(n * 100) / 100);
+  return whole ? `${whole}${best}` : best;
+}
+
+function scaleLine(line, factor) {
+  if (!factor || factor === 1) return line;
+  const m = line.match(QTY_RE);
+  if (!m) return line;
+  const a = toNumber(m[2]);
+  if (a == null) return line;
+  const b = m[4] ? toNumber(m[4]) : null;
+  const scaled = prettyNumber(a * factor) + (b != null ? `${m[3] || "–"}${prettyNumber(b * factor)}` : "");
+  return line.slice(0, m[1].length) + scaled + line.slice(m[0].length);
+}
+
+/* split leading quantity from the ingredient name, for the ruled column */
+const UNITS = new Set([
+  "cup","cups","tbsp","tbsps","tablespoon","tablespoons","tsp","tsps","teaspoon","teaspoons","oz","ounce","ounces",
+  "lb","lbs","pound","pounds","g","gram","grams","kg","ml","l","liter","liters","clove","cloves","can","cans",
+  "pinch","pinches","sprig","sprigs","slice","slices","stick","sticks","bunch","bunches","package","packages",
+  "quart","quarts","pint","pints","dash","dashes","qt","pt",
+]);
+
+function splitQty(s) {
+  const m = s.match(new RegExp(`^\\s*(${NUM}(?:\\s*(?:-|–|to)\\s*${NUM})?)\\s*([A-Za-z]+\\.?)?\\s+(.*)$`));
+  if (!m) return [null, s];
+  let qty = m[1];
+  let rest = m[3];
+  const unit = m[2] ? m[2].toLowerCase().replace(/\.$/, "") : null;
+  if (unit && UNITS.has(unit)) qty += " " + m[2];
+  else if (m[2]) rest = m[2] + " " + rest;
+  return [qty, rest];
+}
+
+const servingsCount = (s) => {
+  const m = String(s || "").match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
+};
+const scaleServings = (s, factor) => {
+  const n = servingsCount(s);
+  if (!n) return s;
+  return String(s).replace(/\d+/, String(Math.max(1, Math.round(n * factor))));
+};
+
+/* ══════════════════════════════════════════════════════════════════
+   Steps — titles and timers
+   ══════════════════════════════════════════════════════════════════ */
+const DUR_RE = /(\d+(?:\.\d+)?)\s*(?:–|-|to)?\s*(\d+(?:\.\d+)?)?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/i;
+
+function stepParts(step) {
+  if (step && typeof step === "object")
+    return {
+      title: step.title || "",
+      text: step.text || step.content || "",
+      seconds: step.seconds ?? step.timer_seconds ?? null,
+    };
+  const s = String(step || "");
+  const m = s.match(/^([^.!?;]{2,52}):\s+(.+)$/);
+  return m ? { title: m[1].trim(), text: m[2].trim(), seconds: null } : { title: "", text: s, seconds: null };
+}
+
+function stepDuration(step) {
+  const { title, text, seconds } = stepParts(step);
+  if (seconds === 0) return null;               // author said this step has no timer
+  if (seconds) return Number(seconds);          // an explicit timer always wins
+  const m = `${title} ${text}`.match(DUR_RE);
+  if (!m) return null;
+  const value = Number(m[2] || m[1]);
+  const unit = m[3].toLowerCase();
+  const mult = unit.startsWith("h") ? 3600 : unit.startsWith("m") ? 60 : 1;
+  const secs = Math.round(value * mult);
+  return secs >= 20 && secs <= 60 * 60 * 24 ? secs : null;
+}
+
+const clock = (s) => {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+};
+const durLabel = (s) => (s >= 3600 ? `${Math.round((s / 3600) * 10) / 10} hr` : s >= 60 ? `${Math.round(s / 60)} min` : `${s} sec`);
+
+function beep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    [0, 0.45, 0.9].forEach((offset) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = 784;
+      o.connect(g);
+      g.connect(ctx.destination);
+      const t0 = ctx.currentTime + offset;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+      o.start(t0);
+      o.stop(t0 + 0.35);
+    });
+    setTimeout(() => ctx.close?.(), 2000);
+  } catch {}
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Import parsing — markdown, frontmatter, JSON (incl. schema.org)
+   ══════════════════════════════════════════════════════════════════ */
+const SECTION =
+  /^\s*#{0,6}\s*\**\s*(ingredients?|equipment|tools?|appliances?|steps?|instructions?|directions?|method|preparation|notes?|tips?)\s*\**\s*:?\s*$/i;
+const stripBullet = (l) => l.replace(/^\s*(?:[-*•+]|\d+[.)])\s+/, "").trim();
+const clean = (s) => String(s || "").replace(/\*\*/g, "").replace(/^#+\s*/, "").trim();
+
+const asList = (v) =>
+  Array.isArray(v)
+    ? v
+        .map((x) =>
+          typeof x === "string"
+            ? clean(x)
+            : x?.title && (x?.text || x?.content)
+            ? { title: clean(x.title), text: clean(x.text || x.content), seconds: x.timer_seconds ?? x.seconds ?? null }
+            : clean(x?.text || x?.name || x?.content || "")
+        )
+        .filter((x) => (typeof x === "string" ? x : x.text))
+    : String(v || "").split("\n").map(stripBullet).filter(Boolean);
+
+/* ── a small YAML subset: nested maps, block sequences, sequences of maps ── */
+function yamlScalar(v) {
+  const t = v.trim();
+  if (!t) return "";
+  if (/^["'].*["']$/.test(t)) return t.slice(1, -1);
+  if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+  if (t === "true" || t === "false") return t === "true";
+  return t;
+}
+
+function parseYamlBlock(lines, indent) {
+  /* returns [value, nextIndex] for the block starting at lines[0] */
+  const isSeq = lines.length && /^\s*-\s?/.test(lines[0]);
+  if (isSeq) {
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const ind = line.search(/\S/);
+      if (ind < indent || !/^\s*-\s?/.test(line)) break;
+      const first = line.replace(/^\s*-\s?/, "");
+      const childIndent = ind + 2;
+      const block = [];
+      if (/^[A-Za-z_][\w-]*\s*:/.test(first)) block.push(" ".repeat(childIndent) + first);
+      i++;
+      while (i < lines.length) {
+        const nInd = lines[i].search(/\S/);
+        if (nInd < childIndent || /^\s*-\s?/.test(lines[i].slice(0, childIndent + 2))) break;
+        block.push(lines[i]);
+        i++;
+      }
+      if (block.length) out.push(parseYamlBlock(block, childIndent)[0]);
+      else out.push(yamlScalar(first));
+    }
+    return [out, i];
+  }
+
+  const map = {};
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim() || /^\s*#/.test(line)) { i++; continue; }
+    const ind = line.search(/\S/);
+    if (ind < indent) break;
+    const kv = line.match(/^\s*([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
+    if (!kv) { i++; continue; }
+    const key = kv[1].toLowerCase();
+    const inline = kv[2];
+    if (inline.trim()) {
+      /* A quoted string may wrap across several indented lines — keep pulling
+         them in until the closing quote shows up. */
+      let raw = inline.trim();
+      const q = raw[0];
+      i++;
+      if ((q === '"' || q === "'") && !(raw.length > 1 && raw.endsWith(q))) {
+        while (i < lines.length) {
+          const cont = lines[i].trim();
+          const contInd = lines[i].search(/\S/);
+          if (!cont || contInd <= ind) break;
+          raw += " " + cont;
+          i++;
+          if (cont.endsWith(q)) break;
+        }
+      }
+      map[key] = yamlScalar(raw);
+    } else {
+      const child = [];
+      i++;
+      while (i < lines.length) {
+        const nInd = lines[i].search(/\S/);
+        if (lines[i].trim() && nInd <= ind) break;
+        child.push(lines[i]);
+        i++;
+      }
+      const childIndent = child.length ? Math.max(...[child[0].search(/\S/)]) : ind + 2;
+      map[key] = child.length ? parseYamlBlock(child, childIndent)[0] : "";
+    }
+  }
+  return [map, i];
+}
+
+function parseFrontmatter(raw) {
+  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!m) return { meta: {}, body: raw };
+  let meta = {};
+  try { meta = parseYamlBlock(m[1].split("\n"), 0)[0] || {}; } catch { meta = {}; }
+  return { meta, body: raw.slice(m[0].length) };
+}
+
+/* ── structured ingredients: { amount, unit, name } → "1⅓ cups almond milk" ── */
+const PLURAL_UNITS = new Set([
+  "cup","packet","scoop","clove","can","slice","stick","sprig","bunch","package",
+  "pinch","dash","quart","pint","ounce","pound","gram","liter","handful","head","stalk",
+]);
+
+function renderIngredient(x) {
+  if (typeof x === "string") return clean(x);
+  if (!x || typeof x !== "object") return "";
+  const name = clean(x.name || x.ingredient || x.item || x.text || "");
+  if (!name) return "";
+  const amount = x.amount ?? x.quantity ?? null;
+  let unit = clean(x.unit || "");
+  if (unit && PLURAL_UNITS.has(unit.toLowerCase()) && Number(amount) > 1) unit += "s";
+  const qty = amount == null || amount === "" ? "" : prettyNumber(Number(amount));
+  const optional = x.optional ? " (optional)" : "";
+  return [qty, unit, name].filter(Boolean).join(" ") + optional;
+}
+
+/* steps written with {ingredient_id} placeholders get the real amounts spliced in */
+function resolvePlaceholders(text, ingredients) {
+  if (!text || !Array.isArray(ingredients)) return text;
+  const byId = new Map();
+  for (const ing of ingredients) {
+    if (ing && typeof ing === "object" && ing.id) byId.set(String(ing.id), renderIngredient(ing));
+  }
+  if (!byId.size) return text;
+  return text.replace(/\{([A-Za-z0-9_-]+)\}/g, (whole, id) => byId.get(id) ?? whole);
+}
+
+function parseMarkdown(raw) {
+  const { meta, body } = parseFrontmatter(raw);
+
+  /* Path A — the frontmatter already carries the recipe (structured export).
+     Trust it, and keep the prose body as notes rather than trying to re-parse it. */
+  const metaIngredients = Array.isArray(meta.ingredients) ? meta.ingredients : null;
+  const metaSteps = Array.isArray(meta.steps) ? meta.steps : null;
+
+  if (metaIngredients || metaSteps) {
+    const ingredients = (metaIngredients || []).map(renderIngredient).filter(Boolean);
+    /* If the author declared timers anywhere, they own the timers — 0 means
+       "deliberately none here", which stops us guessing from the prose. */
+    const authored = (metaSteps || []).some((st) => st && (st.timer_seconds ?? st.seconds) != null);
+    const steps = (metaSteps || [])
+      .map((st) => {
+        if (typeof st === "string") return clean(st);
+        const text = resolvePlaceholders(clean(st.content || st.text || ""), metaIngredients || []);
+        const declared = st.timer_seconds ?? st.seconds ?? null;
+        return { title: clean(st.title || ""), text, seconds: declared ?? (authored ? 0 : null) };
+      })
+      .filter((st) => (typeof st === "string" ? st : st.text));
+
+    const prose = body
+      .split("\n")
+      .map((l) => l.replace(/^#{1,6}\s*/, "").replace(/\*\*/g, ""))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+    const minutes = meta.total_time_minutes ?? meta.prep_time_minutes ?? null;
+    const servings =
+      meta.servings != null && meta.servings !== ""
+        ? /\d/.test(String(meta.servings)) && !/[a-z]/i.test(String(meta.servings))
+          ? `Serves ${meta.servings}`
+          : String(meta.servings)
+        : "";
+
+    return normalize({
+      title: meta.title || "",
+      contributor: meta.contributor || meta.author || meta.from || "",
+      description: meta.description || meta.summary || "",
+      servings: servings || meta.yield || "",
+      time: meta.time || (minutes ? `${minutes} minutes` : "") || meta.total_time || "",
+      tags: [meta.tags, meta.category, meta.categories].flat().filter(Boolean),
+      ingredients,
+      equipment: meta.equipment || meta.tools || meta.appliances || [],
+      steps,
+      notes: [meta.yield && servings ? `Yield: ${meta.yield}` : "", prose].filter(Boolean).join("\n\n"),
+    });
+  }
+
+  /* Path B — plain markdown with Ingredients / Steps headings. */
+  const ingredients = [];
+  const equipment = [];
+  const steps = [];
+  const notes = [];
+  const head = [];
+  let section = "head";
+
+  for (const rawLine of body.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || /^[-=_*]{3,}$/.test(line)) continue;
+    const hit = line.match(SECTION);
+    if (hit) {
+      const w = hit[1].toLowerCase();
+      section = w.startsWith("ingredient")
+        ? "ingredients"
+        : w.startsWith("equipment") || w.startsWith("tool") || w.startsWith("appliance")
+        ? "equipment"
+        : w.startsWith("note") || w.startsWith("tip")
+        ? "notes"
+        : "steps";
+      continue;
+    }
+    if (section === "head") head.push(clean(line));
+    else if (section === "ingredients") ingredients.push(clean(stripBullet(line)));
+    else if (section === "equipment") equipment.push(clean(stripBullet(line)));
+    else if (section === "steps") steps.push(clean(stripBullet(line).replace(/^\*\*(.+?)\*\*:?\s*/, "$1: ")));
+    else notes.push(clean(stripBullet(line)));
+  }
+
+  return normalize({
+    title: meta.title || head[0] || "",
+    contributor: meta.contributor || meta.author || meta.from || "",
+    description: meta.description || head.slice(1).join(" "),
+    servings: meta.servings || meta.yield || "",
+    time: meta.time || meta.totaltime || "",
+    tags: meta.tags || meta.categories || "",
+    ingredients,
+    equipment: meta.equipment || meta.tools || meta.appliances || equipment,
+    steps,
+    notes: notes.join("\n"),
+  });
+}
+
+function normalize(r) {
+  if (!r || typeof r !== "object") return null;
+  const title = clean(r.title || r.name || r.recipeName || "");
+  const rawIngredients = r.ingredients || r.recipeIngredient || r.ingredientText;
+  const ingredients = (Array.isArray(rawIngredients)
+    ? rawIngredients.map(renderIngredient)
+    : asList(rawIngredients).map((x) => (typeof x === "string" ? x : x.text))
+  ).filter(Boolean);
+  const steps = asList(r.steps || r.instructions || r.recipeInstructions || r.directions || r.method);
+  const equipment = asList(r.equipment || r.tools || r.appliances || r.equipmentText || r.tool)
+    .map((x) => (typeof x === "string" ? x : x.text || x.name || ""))
+    .filter(Boolean);
+  if (!title && !ingredients.length) return null;
+
+  const rawTags = Array.isArray(r.tags)
+    ? r.tags.flat().map((t) => String(t).toLowerCase().trim())
+    : String(r.tags || r.keywords || r.recipeCategory || "").split(",").map((t) => t.toLowerCase().trim());
+  const tags = Array.from(new Set(rawTags.filter(Boolean)));
+
+  return {
+    id: r.id || `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    title: title || "Untitled recipe",
+    contributor: clean(r.contributor || r.author?.name || r.author || r.from || ""),
+    description: clean(r.description || r.summary || ""),
+    servings: clean(r.servings || r.recipeYield || r.yield || ""),
+    time: clean(r.time || r.totalTime || r.totaltime || ""),
+    tags,
+    imageUrl: typeof (r.image || r.photo || r.imageUrl) === "string" ? clean(r.image || r.photo || r.imageUrl) : "",
+    thumb: typeof r.thumb === "string" ? r.thumb : "",
+    ingredients,
+    equipment,
+    steps,
+    notes: clean(r.notes || r.note || r.tips || ""),
+    created: r.created || Date.now(),
+  };
+}
+
+const parseJSON = (raw) => {
+  const data = JSON.parse(raw);
+  const pool = Array.isArray(data) ? data : Array.isArray(data.recipes) ? data.recipes : [data];
+  return pool.map(normalize).filter(Boolean);
+};
+
+function parseFile(name, text) {
+  const isJSON = /\.json$/i.test(name) || text.trim().startsWith("{") || text.trim().startsWith("[");
+  if (isJSON) return parseJSON(text);
+  const one = parseMarkdown(text);
+  if (one && !one.title) one.title = name.replace(/\.[^.]+$/, "");
+  return one ? [one] : [];
+}
+
+/* ── step formatting, shared by the form and the parser ── */
+const stepLine = (s) => {
+  const { title, text } = stepParts(s);
+  return title ? `${title}: ${text}` : text;
+};
+
+
+/* ══════════════════════════════════════════════════════════════════
+   Seed
+   ══════════════════════════════════════════════════════════════════ */
+const SEED = {
+  id: "seed-sangria",
+  title: "Cantina-Style Red Sangria",
+  contributor: "Devon",
+  description:
+    "A reverse-engineered take on the sangria at Javier's — dry Spanish red, brandy, orange liqueur, and a reposado accent that sits in the background where it belongs.",
+  servings: "Serves 6",
+  time: "20 minutes, plus overnight",
+  tags: ["drinks", "party"],
+  equipment: ["Large pitcher (2 qt or bigger)", "Small saucepan", "Citrus juicer", "Long bar spoon", "Sharp paring knife"],
+  ingredients: [
+    "750 ml dry Spanish red wine (Garnacha or Tempranillo)",
+    "3 oz Spanish brandy",
+    "2 oz orange liqueur (Cointreau or good triple sec)",
+    "1 oz reposado tequila",
+    "6 oz fresh orange juice",
+    "4 oz pineapple juice",
+    "1 oz fresh lime juice",
+    "2 oz simple syrup, plus more to taste",
+    "1 orange, sliced into half-moons",
+    "1 lime, sliced into thin rounds",
+    "1 Granny Smith apple, diced",
+    "1 cinnamon stick",
+    "6 oz club soda, chilled",
+  ],
+  steps: [
+    { title: "Make the simple syrup", text: "Combine equal parts sugar and water over medium heat until dissolved, then let it cool for 5 minutes. Hot syrup dulls the fruit." },
+    { title: "Macerate the fruit", text: "Put the orange, lime, and apple in the pitcher with the orange liqueur and simple syrup. Leave it 10 minutes — this is what separates restaurant sangria from wine with fruit floating in it." },
+    { title: "Build the base", text: "Add the wine, brandy, tequila, and all three juices. Drop in the cinnamon stick and stir gently. If you can pick the tequila out cleanly, you used too much." },
+    { title: "Chill and steep", text: "Cover and refrigerate 4 hours, ideally overnight. The brandy heat rounds off and the cinnamon blooms. Pull the cinnamon stick after about 6 hours." },
+    { title: "Taste and adjust", text: "Taste it cold — chilling flattens sweetness. Add syrup a half ounce at a time if it's thin, more lime if it's cloying." },
+    { title: "Serve over ice", text: "Pour over plenty of ice with a spoonful of the macerated fruit. Top with club soda for lift." },
+  ],
+  notes:
+    "Sweeter and more purple-fruit forward? Swap the pineapple juice for blackberry or pomegranate. Drier? Cut the syrup to 1 oz and skip the tequila.",
+  created: 1,
+};
+
+const DEFAULT_AUTHORS = ["Tracey", "Devon", "Haven", "Ashton"];
+const UNFILED = "\u0000unfiled";   // sentinel: recipes with no author named
+/* A drag carrying files is an import. Card drags are tracked in a ref instead:
+   custom dataTransfer MIME types aren't readable during dragover in every
+   browser, so relying on them meant preventDefault never ran and the drop
+   was refused before it began. */
+const isFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
+
+const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "" };
+
+/* ══════════════════════════════════════════════════════════════════
+   Shared bits
+   ══════════════════════════════════════════════════════════════════ */
+const Grain = ({ opacity = 0.045, blend = "normal", card = false }) => (
+  <div
+    aria-hidden
+    style={{
+      position: "absolute", inset: 0, backgroundImage: NOISE, pointerEvents: "none",
+      opacity: card ? "var(--grain-op)" : opacity,
+      mixBlendMode: card ? "var(--grain-blend)" : blend,
+    }}
+  />
+);
+
+function Field({ label, hint, children }) {
+  return (
+    <label style={{ display: "block", marginBottom: 20 }}>
+      <span style={{ display: "block", font: `600 13px/1.4 ${UI}`, color: "var(--card-text)", marginBottom: 2 }}>{label}</span>
+      {hint && <span style={{ display: "block", font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", marginBottom: 7 }}>{hint}</span>}
+      {children}
+    </label>
+  );
+}
+
+const input = {
+  width: "100%", boxSizing: "border-box", font: `400 15px/1.55 ${UI}`, color: "var(--card-text)",
+  padding: "10px 12px", border: `1px solid var(--card-edge)`, borderRadius: 2, background: "var(--card-lift)",
+};
+
+/* servings stepper */
+function Servings({ base, factor, setFactor, dark }) {
+  if (!base) return null;
+  const current = Math.max(1, Math.round(base * factor));
+  const set = (n) => setFactor(Math.max(1, n) / base);
+  const fg = dark ? "rgba(247,242,230,.9)" : "var(--card-text)";
+  const line = dark ? "rgba(247,242,230,.3)" : "var(--card-edge)";
+  const btn = {
+    width: 34, height: 34, borderRadius: 2, cursor: "pointer", background: "transparent",
+    border: `1px solid ${line}`, color: fg, font: `500 18px/1 ${UI}`,
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <span style={{ font: `600 12px/1 ${UI}`, color: dark ? "rgba(247,242,230,.6)" : "var(--card-muted)" }}>Servings</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button className="rb-focus" style={btn} onClick={() => set(current - 1)} aria-label="Fewer servings">−</button>
+        <span className="rb-num" style={{ minWidth: 30, textAlign: "center", fontSize: 21, color: fg }}>{current}</span>
+        <button className="rb-focus" style={btn} onClick={() => set(current + 1)} aria-label="More servings">+</button>
+      </div>
+      {Math.abs(factor - 1) > 0.001 && (
+        <button
+          className="rb-focus"
+          onClick={() => setFactor(1)}
+          style={{ background: "none", border: "none", cursor: "pointer", font: `500 12.5px/1 ${UI}`, color: dark ? T.marigold : "var(--card-accent)", textDecoration: "underline" }}
+        >
+          reset to {base}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Static styles
+   ══════════════════════════════════════════════════════════════════ */
+const btnPrimary = { background: T.marigold, color: T.inkDeep, border: "none", padding: "12px 22px" };
+const btnGhost = { background: "transparent", color: "rgba(247,242,230,.88)", border: "1px solid rgba(247,242,230,.28)", padding: "11px 20px" };
+const btnQuiet = { background: "transparent", color: "var(--card-muted)", border: `1px solid var(--card-edge)`, padding: "10px 18px" };
+const sheet = { position: "relative", background: "var(--card-bg)", color: "var(--card-text)", borderRadius: 3, boxShadow: "0 26px 60px -30px rgba(0,0,0,.7)", overflow: "hidden" };
+const ruleTop = { height: 7, background: `linear-gradient(90deg, ${T.marigold} 0 46%, ${T.rust} 46% 62%, ${T.sage} 62% 100%)` };
+
+/* ══════════════════════════════════════════════════════════════════
+   Cooking mode — defined at module scope on purpose. Declaring it inside
+   RecipeBox would make it a brand-new component type on every render, so
+   each timer tick would unmount and remount the whole overlay (and replay
+   its entrance animation), which read as a full-screen flash.
+   ══════════════════════════════════════════════════════════════════ */
+function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseServings,
+                      showPantry, setShowPantry, onClose, startTimer, prevStep, nextStep }) {
+  const steps = recipe.steps;
+  const step = stepParts(steps[stepIndex]);
+  const secs = stepDuration(steps[stepIndex]);
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 60, display: "flex", flexDirection: "column",
+        background: `radial-gradient(120% 80% at 50% 0%, ${T.inkSoft} 0%, ${T.ink} 50%, ${T.inkDeep} 100%)`,
+      }}
+    >
+      <Grain opacity={0.06} />
+      {/* top bar */}
+      <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "18px 22px", flexWrap: "wrap" }}>
+        <div>
+          <p style={{ font: `400 17px/1.3 ${DISPLAY}`, color: T.paper, margin: 0 }}>{recipe.title}</p>
+          <p style={{ font: `500 12px/1.4 ${UI}`, color: "rgba(247,242,230,.55)", margin: "2px 0 0" }}>
+            Step {stepIndex + 1} of {steps.length}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <Servings base={baseServings} factor={factor} setFactor={setFactor} dark />
+          <button className="rb-btn rb-focus" style={btnGhost} onClick={() => setShowPantry((s) => !s)}>
+            {showPantry ? "Hide ingredients" : "Ingredients"}
+          </button>
+          <button className="rb-btn rb-focus" style={btnGhost} onClick={() => onClose()}>Done</button>
+        </div>
+      </div>
+
+      {/* progress */}
+      <div style={{ position: "relative", display: "flex", gap: 3, padding: "0 22px 6px" }}>
+        {steps.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setStepIndex(i)}
+            aria-label={`Go to step ${i + 1}`}
+            className="rb-focus"
+            style={{
+              flex: 1, height: 3, border: "none", padding: 0, cursor: "pointer",
+              background: i <= stepIndex ? T.marigold : "rgba(247,242,230,.18)",
+            }}
+          />
+        ))}
+      </div>
+
+      {/* body */}
+      <div style={{ position: "relative", flex: 1, overflowY: "auto", padding: "26px 22px 10px" }}>
+        <div key={stepIndex} className="rb-step" style={{ maxWidth: 780, margin: "0 auto" }}>
+          {step.title && (
+            <h2 style={{ font: `300 clamp(28px, 5vw, 44px)/1.1 ${DISPLAY}`, color: T.paper, margin: "0 0 18px", letterSpacing: "-0.02em" }}>
+              {step.title}
+            </h2>
+          )}
+          <p style={{ font: `400 clamp(17px, 2.4vw, 21px)/1.68 ${DISPLAY}`, color: "rgba(247,242,230,.92)", margin: 0, maxWidth: "56ch" }}>
+            {step.text}
+          </p>
+          {secs && (
+            <button
+              className="rb-btn rb-focus"
+              style={{ ...btnPrimary, marginTop: 26 }}
+              onClick={() => startTimer(`${recipe.title} — ${step.title || `step ${stepIndex + 1}`}`, secs)}
+            >
+              Start a {durLabel(secs)} timer
+            </button>
+          )}
+        </div>
+
+        {showPantry && (
+          <div style={{ maxWidth: 780, margin: "34px auto 0", borderTop: "1px solid rgba(247,242,230,.2)", paddingTop: 20 }}>
+            <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: T.paper, margin: "0 0 12px" }}>Ingredients</p>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, columns: "220px 2", columnGap: 30 }}>
+              {recipe.ingredients.map((ing, i) => (
+                <li key={i} style={{ font: `400 14.5px/1.5 ${UI}`, color: "rgba(247,242,230,.8)", padding: "7px 0", breakInside: "avoid" }}>
+                  {scaleLine(ing, factor)}
+                </li>
+              ))}
+            </ul>
+            {recipe.equipment?.length > 0 && (
+              <>
+                <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: T.paper, margin: "22px 0 12px" }}>You'll need</p>
+                <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(247,242,230,.8)", margin: 0 }}>
+                  {recipe.equipment.join(" · ")}
+                </p>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* nav */}
+      <div style={{ position: "relative", display: "flex", gap: 12, padding: "14px 22px 22px", borderTop: "1px solid rgba(247,242,230,.14)" }}>
+        <button
+          className="rb-btn rb-focus"
+          style={{ ...btnGhost, flex: 1, opacity: stepIndex === 0 ? 0.4 : 1 }}
+          onClick={prevStep}
+          disabled={stepIndex === 0}
+        >
+          Back
+        </button>
+        {stepIndex === steps.length - 1 ? (
+          <button className="rb-btn rb-focus" style={{ ...btnPrimary, flex: 2 }} onClick={() => onClose()}>Finish</button>
+        ) : (
+          <button className="rb-btn rb-focus" style={{ ...btnPrimary, flex: 2 }} onClick={nextStep}>Next step</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   App
+   ══════════════════════════════════════════════════════════════════ */
+export default function RecipeBox() {
+  const [box, setBox] = useState({ name: "The Hackwith Family Recipe Box", recipes: [] });
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("");
+  const [view, setView] = useState("list");
+  const [openId, setOpenId] = useState(null);
+  const [query, setQuery] = useState("");
+  const [tagFilter, setTagFilter] = useState(null);
+  const [activeBox, setActiveBox] = useState(null);   // null = every box
+  const [scope, setScope] = useState("all");
+  const [theme, setTheme] = useState("light");
+  const [form, setForm] = useState(BLANK);
+  const [editingId, setEditingId] = useState(null);
+  const [pasteText, setPasteText] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [hero, setHero] = useState("");        // full-size photo for the open recipe
+  const photoRef = useRef(null);
+  /* Snapshot of the list the recipe was opened from, so Back returns to the
+     same search, scope, tag and box — not to a reset list. */
+  const listStateRef = useRef({ query: "", scope: "all", tagFilter: null, activeBox: null });
+  const [editingName, setEditingName] = useState(false);
+  const [staged, setStaged] = useState([]);
+  const [importErrors, setImportErrors] = useState([]);
+  const [dragging, setDragging] = useState(false);
+  const [dragId, setDragId] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
+  const dragIdRef = useRef(null);
+  const [factor, setFactor] = useState(1);
+  const [cooking, setCooking] = useState(false);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [showPantry, setShowPantry] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [timers, setTimers] = useState([]);
+  const fileRef = useRef(null);
+  const wakeRef = useRef(null);
+  const firedRef = useRef(new Set());
+
+  /* fonts */
+  useEffect(() => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href =
+      "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=Karla:wght@400;500;600;700&display=swap";
+    document.head.appendChild(link);
+    return () => link.remove();
+  }, []);
+
+  /* the theme is a personal setting: stored unshared, so one person's choice
+     doesn't repaint the box for everyone else */
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage?.get("theme", false);
+        if (res?.value === "dark" || res?.value === "light") setTheme(res.value);
+      } catch {}
+    })();
+  }, []);
+
+  const flipTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    try { window.storage?.set("theme", next, false); } catch {}
+  };
+
+  /* load */
+  useEffect(() => {
+    (async () => {
+      const data = await loadBox();
+      const loaded = data && Array.isArray(data.recipes) ? data : { name: "The Hackwith Family Recipe Box", recipes: [SEED] };
+      const stored = Array.isArray(loaded.authors) ? loaded.authors : Array.isArray(loaded.cooks) ? loaded.cooks : [];
+      loaded.authors = Array.from(new Set([...stored, ...DEFAULT_AUTHORS]));
+      delete loaded.cooks;
+      setBox(loaded);
+      setLoading(false);
+    })();
+  }, []);
+
+  /* timer tick — one interval for the life of the app. Returns the same array
+     reference when nothing changed, so React skips the re-render entirely. */
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTimers((prev) => {
+        if (!prev.some((t) => t.running)) return prev;
+        let changed = false;
+        const next = prev.map((t) => {
+          if (!t.running || !t.endsAt) return t;
+          const remaining = Math.max(0, Math.ceil((t.endsAt - Date.now()) / 1000));
+          if (remaining === t.remaining) return t;
+          changed = true;
+          if (remaining === 0 && !firedRef.current.has(t.id)) {
+            firedRef.current.add(t.id);
+            beep();
+          }
+          return { ...t, remaining, running: remaining > 0 };
+        });
+        return changed ? next : prev;
+      });
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  /* the full-size photo is only worth fetching once a recipe is opened */
+  useEffect(() => {
+    let cancelled = false;
+    const r = box.recipes.find((x) => x.id === openId);
+    if (!openId || !r) { setHero(""); return; }
+    if (r.imageUrl) { setHero(r.imageUrl); return; }
+    setHero(r.thumb || "");
+    (async () => {
+      try {
+        const res = await window.storage?.get(imageKey(openId), true);
+        if (!cancelled && res?.value) setHero(res.value);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [openId]);
+
+  /* never leave a half-armed delete behind when navigating */
+  useEffect(() => { setConfirmRemove(false); }, [openId, view]);
+
+  /* keep the screen awake while cooking */
+  useEffect(() => {
+    if (!cooking) return;
+    (async () => {
+      try { wakeRef.current = await navigator.wakeLock?.request("screen"); } catch {}
+    })();
+    return () => { try { wakeRef.current?.release(); } catch {} wakeRef.current = null; };
+  }, [cooking]);
+
+  const flash = (msg) => { setStatus(msg); setTimeout(() => setStatus(""), 3000); };
+  const persist = async (next) => {
+    setBox(next);
+    flash((await saveBox(next)) ? "Saved" : "Couldn't save — that change is only on this screen");
+  };
+
+  const openRecipe = box.recipes.find((r) => r.id === openId);
+  const baseServings = servingsCount(openRecipe?.servings);
+  const allTags = Array.from(new Set(box.recipes.flatMap((r) => r.tags || []))).sort();
+  const allAuthors = Array.from(
+    new Set([...(box.authors || DEFAULT_AUTHORS), ...box.recipes.map((r) => r.contributor).filter(Boolean)])
+  ).sort();
+  const boxCount = (author) => box.recipes.filter((r) => r.contributor === author).length;
+  const unfiled = box.recipes.filter((r) => !r.contributor).length;
+
+  const showEverything = () => {
+    setActiveBox(null);
+    setQuery("");
+    setTagFilter(null);
+    setScope("all");
+    listStateRef.current = { query: "", scope: "all", tagFilter: null, activeBox: null };
+    setView("list");
+  };
+
+  const openCard = (id) => {
+    listStateRef.current = { query, scope, tagFilter, activeBox };
+    setOpenId(id);
+    setFactor(1);
+    setView("detail");
+  };
+
+  const goBack = () => {
+    const from = listStateRef.current;
+    setQuery(from.query);
+    setScope(from.scope);
+    setTagFilter(from.tagFilter);
+    setActiveBox(from.activeBox);
+    setView("list");
+  };
+
+  /* what Back will say, described from the snapshot rather than current state */
+  const backLabel = () => {
+    const from = listStateRef.current;
+    if (from.query || from.tagFilter) return "Back to results";
+    if (from.activeBox === UNFILED) return "Back to unattributed";
+    if (from.activeBox) return `Back to ${from.activeBox}'s box`;
+    return "Back to all recipes";
+  };
+
+  const moveRecipe = (id, target) => {
+    const recipe = box.recipes.find((r) => r.id === id);
+    const author = target === UNFILED ? "" : target;
+    if (!recipe || recipe.contributor === author) return;
+    persist({ ...box, recipes: box.recipes.map((r) => (r.id === id ? { ...r, contributor: author } : r)) });
+    flash(author ? `Moved "${recipe.title}" to ${author}'s box` : `Removed the author from "${recipe.title}"`);
+  };
+
+  /* Comma-separated terms are ANDed: "lime, tequila" means both, not either. */
+  const terms = fold(query).split(",").map((t) => t.trim()).filter(Boolean);
+  const haystack = (r) => {
+    if (scope === "ingredient") return fold(r.ingredients.join(" "));
+    if (scope === "author") return fold(r.contributor);
+    if (scope === "equipment") return fold((r.equipment || []).join(" "));
+    return fold(
+      [r.title, r.contributor, r.ingredients.join(" "), (r.equipment || []).join(" "), (r.tags || []).join(" ")].join(" ")
+    );
+  };
+
+  const visible = box.recipes.filter((r) => {
+    const hay = haystack(r);
+    const hitQ = !terms.length || terms.every((t) => hay.includes(t));
+    const inBox =
+      activeBox === null ? true : activeBox === UNFILED ? !r.contributor : r.contributor === activeBox;
+    return hitQ && (!tagFilter || (r.tags || []).includes(tagFilter)) && inBox;
+  });
+
+  const startTimer = (label, seconds) => {
+    setTimers((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random()}`, label, total: seconds, remaining: seconds, running: true, endsAt: Date.now() + seconds * 1000 },
+    ]);
+  };
+  const toggleTimer = (id) =>
+    setTimers((p) =>
+      p.map((t) => {
+        if (t.id !== id || t.remaining <= 0) return t;
+        return t.running
+          ? { ...t, running: false, endsAt: null }
+          : { ...t, running: true, endsAt: Date.now() + t.remaining * 1000 };
+      })
+    );
+  const dropTimer = (id) => {
+    firedRef.current.delete(id);
+    setTimers((p) => p.filter((t) => t.id !== id));
+  };
+
+  /* Escape backs out of a recipe, the same as the button */
+  useEffect(() => {
+    if (view !== "detail" || cooking) return;
+    const onKey = (e) => { if (e.key === "Escape") goBack(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, cooking]);
+
+  /* cooking-mode keyboard */
+  const nextStep = useCallback(() => setStepIndex((i) => Math.min(i + 1, (openRecipe?.steps.length || 1) - 1)), [openRecipe]);
+  const prevStep = useCallback(() => setStepIndex((i) => Math.max(i - 1, 0)), []);
+  useEffect(() => {
+    if (!cooking) return;
+    const onKey = (e) => {
+      if (e.key === "ArrowRight") nextStep();
+      else if (e.key === "ArrowLeft") prevStep();
+      else if (e.key === "Escape") setCooking(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cooking, nextStep, prevStep]);
+
+  /* file intake */
+  const ingestFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const found = [];
+    const errs = [];
+    for (const f of files) {
+      try {
+        const text = await f.text();
+        const parsed = parseFile(f.name, text);
+        if (!parsed.length) errs.push(`${f.name} — no recipe found inside`);
+        else found.push(...parsed.map((r) => ({ ...r, _source: f.name })));
+      } catch (err) {
+        errs.push(`${f.name} — couldn't read it (${err.message})`);
+      }
+    }
+    setStaged(found);
+    setImportErrors(errs);
+    setView("import");
+  };
+
+  const commitImport = () => {
+    const existing = new Set(box.recipes.map((r) => r.id));
+    const additions = staged.filter((r) => r._keep !== false && !existing.has(r.id)).map(({ _source, _keep, ...r }) => r);
+    persist({ ...box, recipes: [...additions, ...box.recipes] });
+    setStaged([]); setImportErrors([]); setView("list");
+    flash(`Added ${additions.length} ${additions.length === 1 ? "recipe" : "recipes"}`);
+  };
+
+  /* form */
+  const startAdd = () => {
+    const prefill = activeBox && activeBox !== UNFILED ? { ...BLANK, contributor: activeBox } : BLANK;
+    setForm(prefill);
+    setPasteText("");
+    setEditingId(null);
+    setView("form");
+  };
+  const startEdit = (r) => {
+    setForm({
+      thumb: r.thumb || "", full: null, photoTouched: false,
+      title: r.title, contributor: r.contributor || "", description: r.description || "",
+      servings: r.servings || "", time: r.time || "", tagText: (r.tags || []).join(", "),
+      ingredientText: r.ingredients.join("\n"), equipmentText: (r.equipment || []).join("\n"),
+      stepText: r.steps.map(stepLine).join("\n"), notes: r.notes || "",
+    });
+    setEditingId(r.id); setView("form");
+  };
+
+  const applyPaste = () => {
+    if (!pasteText.trim()) return;
+    let p;
+    try { p = /^[[{]/.test(pasteText.trim()) ? parseJSON(pasteText)[0] : parseMarkdown(pasteText); }
+    catch { p = parseMarkdown(pasteText); }
+    if (!p) return flash("Couldn't make sense of that text");
+    setForm((f) => ({
+      ...f,
+      title: p.title || f.title, contributor: p.contributor || f.contributor, description: p.description || f.description,
+      servings: p.servings || f.servings, time: p.time || f.time,
+      tagText: p.tags?.length ? p.tags.join(", ") : f.tagText,
+      ingredientText: p.ingredients.length ? p.ingredients.join("\n") : f.ingredientText,
+      equipmentText: p.equipment?.length ? p.equipment.join("\n") : f.equipmentText,
+      stepText: p.steps.length ? p.steps.map(stepLine).join("\n") : f.stepText,
+      notes: p.notes || f.notes,
+    }));
+    setPasteText("");
+  };
+
+  const pickPhoto = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return flash("That file isn't an image");
+    setPhotoBusy(true);
+    try {
+      const { full, thumb } = await prepPhoto(file);
+      setForm((f) => ({ ...f, thumb, full, photoTouched: true }));
+    } catch {
+      flash("Couldn't read that image");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const dropPhoto = () => setForm((f) => ({ ...f, thumb: "", full: null, photoTouched: true }));
+
+  const saveRecipe = () => {
+    if (!form.title.trim()) return;
+    const recipe = {
+      id: editingId || `r-${Date.now()}`,
+      thumb: form.thumb || "",
+      imageUrl: editingId ? box.recipes.find((r) => r.id === editingId)?.imageUrl || "" : "",
+      title: form.title.trim(),
+      contributor: form.contributor.trim(),
+      description: form.description.trim(),
+      servings: form.servings.trim(),
+      time: form.time.trim(),
+      tags: form.tagText.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+      ingredients: form.ingredientText.split("\n").map((l) => l.trim()).filter(Boolean),
+      equipment: form.equipmentText.split("\n").map((l) => l.trim()).filter(Boolean),
+      steps: form.stepText.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => stepParts(l)),
+      notes: form.notes.trim(),
+      created: editingId ? box.recipes.find((r) => r.id === editingId)?.created : Date.now(),
+    };
+    persist({ ...box, recipes: editingId ? box.recipes.map((r) => (r.id === editingId ? recipe : r)) : [recipe, ...box.recipes] });
+
+    if (form.photoTouched) {
+      (async () => {
+        try {
+          if (form.full) await window.storage?.set(imageKey(recipe.id), form.full, true);
+          else await window.storage?.delete(imageKey(recipe.id), true);
+        } catch {}
+        setHero(form.full || "");
+      })();
+    }
+
+    setOpenId(recipe.id); setFactor(1); setView("detail");
+  };
+
+  /* styles */
+  const css = `
+    .rb {
+      --card-bg: ${T.paper};
+      --card-lift: ${T.paperLift};
+      --card-text: ${T.text};
+      --card-muted: ${T.muted};
+      --card-edge: ${T.edge};
+      --card-accent: ${T.rust};
+      --card-danger: ${T.rust};
+      --grain-op: 0.035;
+      --grain-blend: multiply;
+    }
+    .rb[data-theme="dark"] {
+      --card-bg: #123B3F;
+      --card-lift: #17494D;
+      --card-text: #EFE8D6;
+      --card-muted: #A3B3A9;
+      --card-edge: rgba(239,232,214,.26);
+      --card-accent: #F0A578;
+      --card-danger: #F08A6B;
+      --grain-op: 0.05;
+      --grain-blend: overlay;
+    }
+    .rb * { box-sizing: border-box; }
+    .rb ::selection { background: ${T.marigold}; color: ${T.inkDeep}; }
+    .rb-focus:focus-visible { outline: 2px solid ${T.marigold}; outline-offset: 3px; }
+    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
+    .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .rb-detail { display: grid; grid-template-columns: 1fr; gap: 34px; }
+    @media (min-width: 760px) { .rb-detail { grid-template-columns: 292px 1fr; gap: 52px; } }
+    .rb-card { transition: transform 160ms cubic-bezier(.2,.7,.3,1), box-shadow 160ms ease; }
+    .rb-card:active { cursor: grabbing; }
+    .rb-shelf button { transition: transform 120ms ease, border-color 120ms ease, background 120ms ease; }
+    @media (prefers-reduced-motion: reduce) { .rb-shelf button { transition: none; } }
+    .rb-card:hover, .rb-card:focus-visible { transform: translateY(-3px); box-shadow: 0 14px 30px -14px rgba(0,0,0,.55); }
+    @media (prefers-reduced-motion: reduce) { .rb-card { transition: none; } .rb-card:hover { transform: none; } }
+    .rb-btn { cursor: pointer; border-radius: 2px; font-family: ${UI}; font-weight: 600; font-size: 14px; letter-spacing: .01em; transition: filter 120ms ease; }
+    .rb-btn:hover { filter: brightness(1.07); }
+    .rb-btn:disabled { cursor: not-allowed; filter: none; }
+    .rb-lede::first-letter { float: left; font-family: ${DISPLAY}; font-weight: 500; font-size: 3.4em; line-height: .82; padding: .04em .09em 0 0; color: var(--card-accent); }
+    .rb-num { font-family: ${DISPLAY}; font-weight: 400; font-variant-numeric: lining-nums tabular-nums; }
+    .rb-step { animation: rbfade 260ms ease both; }
+    @keyframes rbfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .rb-step { animation: none; } }
+    @media print { .rb { background: #fff !important; } .rb-noprint { display: none !important; } .rb-sheet { box-shadow: none !important; padding: 0 !important; } }
+
+    /* ── phones ── */
+    @media (max-width: 640px) {
+      .rb-head { padding: 26px 16px 0 !important; }
+      .rb-main { padding: 20px 16px 0 !important; }
+      .rb-pad { padding: 24px 18px 30px !important; }
+      .rb-grid { grid-template-columns: 1fr; gap: 16px; }
+      .rb-scope { width: 100%; }
+      .rb-scope button { flex: 1 1 0; padding: 11px 4px !important; }
+      /* 16px keeps iOS from zooming the viewport on focus */
+      .rb input:not(.rb-title-input), .rb textarea { font-size: 16px !important; }
+      .rb-actions button { flex: 1 1 auto; }
+      .rb-corner { top: 8px !important; right: 16px !important; }
+      .rb-shelf { gap: 8px; }
+      .rb-shelf button { flex: 1 1 132px; min-width: 0 !important; padding: 10px 12px !important; }
+      .rb-tray { padding: 10px 12px !important; }
+    }
+    @media (max-width: 400px) {
+      .rb-scope button { font-size: 11.5px !important; letter-spacing: 0 !important; }
+    }
+  `;
+
+  /* ═══════════════════════════════════════════════════════════════ */
+  return (
+    <div
+      className="rb"
+      data-theme={theme}
+      onDragOver={(e) => { if (isFileDrag(e)) { e.preventDefault(); setDragging(true); } }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        setDragging(false);
+        ingestFiles(e.dataTransfer.files);
+      }}
+      style={{
+        position: "relative", minHeight: "100vh", color: T.paper,
+        background: `radial-gradient(120% 90% at 50% 0%, ${T.inkSoft} 0%, ${T.ink} 45%, ${T.inkDeep} 100%)`,
+        paddingBottom: timers.length ? 130 : 80,
+      }}
+    >
+      <style>{css}</style>
+      <Grain opacity={0.06} />
+
+      {dragging && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(6,30,33,.88)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
+          <p style={{ font: `400 30px/1.3 ${DISPLAY}`, color: T.marigold, textAlign: "center", padding: 24 }}>Drop .json or .md files to add them</p>
+        </div>
+      )}
+
+      {cooking && openRecipe && (
+        <CookingMode
+          recipe={openRecipe}
+          stepIndex={stepIndex}
+          setStepIndex={setStepIndex}
+          factor={factor}
+          setFactor={setFactor}
+          baseServings={baseServings}
+          showPantry={showPantry}
+          setShowPantry={setShowPantry}
+          onClose={() => setCooking(false)}
+          startTimer={startTimer}
+          prevStep={prevStep}
+          nextStep={nextStep}
+        />
+      )}
+
+      {/* ─── masthead ─── */}
+      <header className="rb-noprint rb-head" style={{ position: "relative", maxWidth: 1120, margin: "0 auto", padding: "52px 26px 0" }}>
+        <button
+          className="rb-btn rb-focus rb-corner"
+          onClick={flipTheme}
+          aria-pressed={theme === "dark"}
+          title="Switch between light and dark mode"
+          style={{
+            position: "absolute", top: 14, right: 26, zIndex: 5,
+            background: "transparent", border: "1px solid rgba(247,242,230,.22)",
+            color: "rgba(247,242,230,.7)", padding: "7px 13px", fontSize: 12.5, fontWeight: 500,
+          }}
+        >
+          {theme === "dark" ? "Light mode" : "Dark mode"}
+        </button>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 22, alignItems: "flex-end", justifyContent: "space-between" }}>
+          <div style={{ minWidth: 260 }}>
+            {activeBox ? (
+              <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: T.paper }}>
+                {activeBox}'s Recipe Box
+              </h1>
+            ) : editingName ? (
+              <input
+                autoFocus
+                className="rb-title-input"
+                value={box.name}
+                onChange={(e) => setBox({ ...box, name: e.target.value })}
+                onBlur={() => { setEditingName(false); persist(box); }}
+                onKeyDown={(e) => e.key === "Enter" && e.target.blur()}
+                style={{
+                  font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, background: "transparent", border: "none",
+                  borderBottom: `1px dashed ${T.marigold}`, color: T.paper, padding: 0, width: "min(100%, 560px)", letterSpacing: "-0.015em",
+                }}
+              />
+            ) : (
+              <h1
+                onClick={() => setEditingName(true)}
+                title="Click to rename"
+                style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, cursor: "text", letterSpacing: "-0.015em", color: T.paper }}
+              >
+                {box.name}
+              </h1>
+            )}
+            <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(247,242,230,.58)", margin: "12px 0 0", maxWidth: "46ch" }}>
+              {activeBox
+                ? `${boxCount(activeBox)} ${boxCount(activeBox) === 1 ? "recipe" : "recipes"} from ${activeBox}.`
+                : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={showEverything}>All recipes</button>
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={() => fileRef.current?.click()}>Import files</button>
+            <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
+          </div>
+        </div>
+
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept=".json,.md,.markdown,.txt,application/json,text/markdown,text/plain"
+          onChange={(e) => { ingestFiles(e.target.files); e.target.value = ""; }}
+          style={{ display: "none" }}
+        />
+        <div style={{ marginTop: 30, borderTop: `1px solid rgba(247,242,230,.22)`, borderBottom: `1px solid rgba(247,242,230,.1)`, height: 4 }} />
+      </header>
+
+      <main className="rb-main" style={{ position: "relative", maxWidth: 1120, margin: "0 auto", padding: "30px 26px 0" }}>
+        {status && <p className="rb-noprint" style={{ font: `500 13px/1.4 ${UI}`, color: T.marigold, margin: "0 0 18px" }}>{status}</p>}
+        {loading && <p style={{ font: `400 15px/1.6 ${UI}`, color: "rgba(247,242,230,.7)" }}>Opening the box…</p>}
+
+        {/* ═══════ LIST ═══════ */}
+        {!loading && view === "list" && (
+          <>
+            <div className="rb-shelf" style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 26 }}>
+              {[
+                { key: null, name: "All recipes", count: box.recipes.length },
+                ...allAuthors.map((c) => ({ key: c, name: `${c}'s box`, count: boxCount(c) })),
+                ...(unfiled ? [{ key: UNFILED, name: "No author", count: unfiled }] : []),
+              ].map((b) => {
+                const on = activeBox === b.key;
+                const droppable = b.key !== null;                 // "All recipes" isn't a destination
+                const armed = dropTarget === b.key;
+                return (
+                  <button
+                    key={b.key ?? "all"}
+                    className="rb-focus"
+                    onClick={() => { setActiveBox(b.key); setQuery(""); setTagFilter(null); }}
+                    onDragEnter={(e) => {
+                      if (!droppable || !dragIdRef.current) return;
+                      e.preventDefault();
+                      setDropTarget(b.key);
+                    }}
+                    onDragOver={(e) => {
+                      if (!droppable || !dragIdRef.current) return;
+                      e.preventDefault();                       // this is what makes a drop legal
+                      e.dataTransfer.dropEffect = "move";
+                      if (dropTarget !== b.key) setDropTarget(b.key);
+                    }}
+                    onDragLeave={() => setDropTarget((t) => (t === b.key ? null : t))}
+                    onDrop={(e) => {
+                      if (!droppable || !dragIdRef.current) return;
+                      e.preventDefault();
+                      moveRecipe(dragIdRef.current, b.key);
+                      dragIdRef.current = null;
+                      setDropTarget(null);
+                      setDragId(null);
+                    }}
+                    style={{
+                      display: "flex", flexDirection: "column", gap: 4, textAlign: "left", cursor: "pointer",
+                      padding: "11px 16px", borderRadius: 2, minWidth: 120,
+                      border: armed
+                        ? `1px dashed ${T.marigold}`
+                        : `1px solid ${on ? T.marigold : dragId && droppable ? "rgba(231,164,39,.45)" : "rgba(247,242,230,.22)"}`,
+                      background: armed ? "rgba(231,164,39,.24)" : on ? "rgba(231,164,39,.14)" : "transparent",
+                      transform: armed ? "translateY(-2px)" : "none",
+                    }}
+                  >
+                    <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: on ? T.marigold : T.paper }}>{b.name}</span>
+                    <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(247,242,230,.45)" }}>
+                      {b.count} {b.count === 1 ? "recipe" : "recipes"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {dragId && (
+              <p style={{ font: `500 12.5px/1.5 ${UI}`, color: T.marigold, margin: "0 0 16px" }}>
+                Drop it on a box above to move it there.
+              </p>
+            )}
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 16 }}>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={SCOPES.find((s2) => s2.id === scope).placeholder}
+                className="rb-focus"
+                style={{
+                  flex: "1 1 250px", font: `400 15px/1.5 ${UI}`, padding: "12px 15px", borderRadius: 2,
+                  border: `1px solid rgba(247,242,230,.22)`, background: "rgba(247,242,230,.06)", color: T.paper,
+                }}
+              />
+              <div className="rb-scope" style={{ display: "flex", border: `1px solid rgba(247,242,230,.22)`, borderRadius: 2, overflow: "hidden" }}>
+                {SCOPES.map((s2) => (
+                  <button
+                    key={s2.id}
+                    className="rb-focus"
+                    onClick={() => setScope(s2.id)}
+                    style={{
+                      font: `500 12.5px/1 ${UI}`, padding: "11px 14px", cursor: "pointer", border: "none",
+                      background: scope === s2.id ? "rgba(247,242,230,.14)" : "transparent",
+                      color: scope === s2.id ? T.marigold : "rgba(247,242,230,.66)",
+                    }}
+                  >
+                    {s2.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {scope === "ingredient" && (
+              <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(247,242,230,.5)", margin: "0 0 16px" }}>
+                Separate ingredients with commas to find recipes that use all of them — “lime, tequila”.
+              </p>
+            )}
+
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: 30 }}>
+              {allTags.length > 0 && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {allTags.map((t) => {
+                    const on = tagFilter === t;
+                    return (
+                      <button
+                        key={t}
+                        className="rb-focus"
+                        onClick={() => setTagFilter(on ? null : t)}
+                        style={{
+                          font: `500 12.5px/1 ${UI}`, padding: "8px 13px", borderRadius: 999, cursor: "pointer",
+                          border: `1px solid ${on ? T.marigold : "rgba(247,242,230,.26)"}`,
+                          background: on ? T.marigold : "transparent", color: on ? T.inkDeep : "rgba(247,242,230,.8)",
+                        }}
+                      >
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {visible.length === 0 ? (
+              <div style={{ border: `1px dashed rgba(247,242,230,.28)`, borderRadius: 3, padding: "56px 30px", textAlign: "center" }}>
+                <p style={{ font: `300 26px/1.35 ${DISPLAY}`, margin: "0 0 10px" }}>Nothing in the box yet.</p>
+                <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "rgba(247,242,230,.62)", margin: "0 0 22px" }}>
+                  {box.recipes.length === 0
+                    ? "Add one by hand, or drag a folder of .md or .json files anywhere on this page."
+                    : activeBox && activeBox !== UNFILED && !query && !tagFilter
+                    ? `${activeBox} hasn't added a recipe yet. Anything you add from here gets filed to this box.`
+                    : "No recipe matches that search."}
+                </p>
+                <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
+              </div>
+            ) : (
+              <div className="rb-grid">
+                {visible.map((r) => (
+                  <article
+                    key={r.id}
+                    tabIndex={0}
+                    role="button"
+                    onClick={() => openCard(r.id)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(r.id); } }}
+                    className="rb-card rb-focus"
+                    style={{
+                      ...sheet, display: "flex", flexDirection: "column",
+                      cursor: dragId === r.id ? "grabbing" : "pointer",
+                      opacity: dragId === r.id ? 0.45 : 1,
+                    }}
+                  >
+                    <div style={ruleTop} />
+                    {(r.thumb || r.imageUrl) && (
+                      <div
+                        style={{
+                          display: "flex", justifyContent: "center", alignItems: "center",
+                          height: 168, borderBottom: `1px solid var(--card-edge)`,
+                        }}
+                      >
+                        <img
+                          src={r.thumb || r.imageUrl}
+                          alt=""
+                          loading="lazy"
+                          style={{ display: "block", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%" }}
+                        />
+                      </div>
+                    )}
+                    <Grain card />
+                    <span
+                      draggable
+                      role="button"
+                      tabIndex={-1}
+                      aria-label={`Drag ${r.title} to another box`}
+                      title="Drag me to another box"
+                      onClick={(e) => e.stopPropagation()}
+                      onDragStart={(e) => {
+                        dragIdRef.current = r.id;
+                        e.dataTransfer.setData("text/plain", r.title);
+                        e.dataTransfer.effectAllowed = "move";
+                        setDragId(r.id);
+                      }}
+                      onDragEnd={() => { dragIdRef.current = null; setDragId(null); setDropTarget(null); }}
+                      style={{
+                        position: "absolute", top: 15, right: 10, zIndex: 3, cursor: "grab",
+                        padding: "2px 7px", borderRadius: 3, lineHeight: 1,
+                        font: `600 15px/1 ${UI}`, letterSpacing: "1px",
+                        color: "var(--card-edge)", userSelect: "none",
+                      }}
+                    >
+                      ⠿
+                    </span>
+                    <div style={{ position: "relative", padding: "22px 24px 20px", display: "flex", flexDirection: "column", gap: 9, flex: 1 }}>
+                      <h3 style={{ font: `400 24px/1.18 ${DISPLAY}`, color: "var(--card-text)", margin: 0, letterSpacing: "-0.01em", paddingRight: 22 }}>{r.title}</h3>
+                      {r.contributor && <p style={{ font: `italic 400 14.5px/1.4 ${DISPLAY}`, color: "var(--card-accent)", margin: 0 }}>from {r.contributor}'s kitchen</p>}
+                      {r.description && <p className="rb-clamp" style={{ font: `400 14px/1.65 ${UI}`, color: "var(--card-muted)", margin: 0 }}>{r.description}</p>}
+                      <div style={{ marginTop: "auto", paddingTop: 14, borderTop: `1px solid var(--card-edge)`, font: `400 12.5px/1.4 ${UI}`, color: "var(--card-muted)", display: "flex", gap: 16, flexWrap: "wrap" }}>
+                        <span>{r.ingredients.length} ingredients</span>
+                        <span>{r.steps.length} steps</span>
+                        {r.time && <span>{r.time}</span>}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+
+            <div className="rb-noprint" style={{ marginTop: 50, paddingTop: 24, borderTop: `1px solid rgba(247,242,230,.16)` }}>
+              <p style={{ font: `400 12.5px/1.65 ${UI}`, color: "rgba(247,242,230,.48)", margin: 0, maxWidth: 460 }}>
+                Everyone shares one box. Whoever has the link can add, change, or remove anything in it.
+              </p>
+            </div>
+          </>
+        )}
+
+        {/* ═══════ IMPORT REVIEW ═══════ */}
+        {!loading && view === "import" && (
+          <div style={{ ...sheet, maxWidth: 820 }}>
+            <div style={ruleTop} />
+            <Grain card />
+            <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 34px" }}>
+              <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Review before adding</h2>
+              <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 24px", maxWidth: "58ch" }}>
+                {staged.length} {staged.length === 1 ? "recipe" : "recipes"} read from your files. Uncheck anything you don't want, then add the rest.
+              </p>
+
+              {importErrors.length > 0 && (
+                <div style={{ borderLeft: `3px solid var(--card-accent)`, background: "var(--card-lift)", padding: "12px 16px", marginBottom: 22 }}>
+                  <p style={{ font: `600 13px/1.4 ${UI}`, color: "var(--card-accent)", margin: "0 0 6px" }}>Some files didn't come through</p>
+                  {importErrors.map((e, i) => <p key={i} style={{ font: `400 13px/1.6 ${UI}`, color: "var(--card-muted)", margin: 0 }}>{e}</p>)}
+                </div>
+              )}
+
+              {staged.map((r, i) => (
+                <label key={i} style={{ display: "flex", gap: 14, alignItems: "flex-start", padding: "14px 0", borderTop: i === 0 ? `1px solid var(--card-edge)` : "none", borderBottom: `1px solid var(--card-edge)`, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={r._keep !== false}
+                    onChange={(e) => setStaged(staged.map((s, j) => (j === i ? { ...s, _keep: e.target.checked } : s)))}
+                    style={{ marginTop: 5, width: 17, height: 17, accentColor: T.rust }}
+                  />
+                  <div>
+                    <p style={{ font: `400 19px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: 0 }}>{r.title}</p>
+                    <p style={{ font: `400 13px/1.6 ${UI}`, color: "var(--card-muted)", margin: "3px 0 0" }}>
+                      {r.ingredients.length} ingredients · {r.steps.length} steps{r.contributor ? ` · ${r.contributor}` : ""}
+                      {r.imageUrl ? " · has a photo" : ""} · from {r._source}
+                    </p>
+                  </div>
+                </label>
+              ))}
+
+              <div style={{ display: "flex", gap: 10, marginTop: 26, flexWrap: "wrap" }}>
+                <button
+                  className="rb-btn rb-focus"
+                  style={{ ...btnPrimary, opacity: staged.some((s) => s._keep !== false) ? 1 : 0.45 }}
+                  disabled={!staged.some((s) => s._keep !== false)}
+                  onClick={commitImport}
+                >
+                  Add to the box
+                </button>
+                <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => { setStaged([]); setImportErrors([]); setView("list"); }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════ DETAIL ═══════ */}
+        {!loading && view === "detail" && openRecipe && (
+          <article className="rb-sheet" style={sheet}>
+            <div style={ruleTop} className="rb-noprint" />
+            {hero && (
+              <div
+                style={{
+                  display: "flex", justifyContent: "center",
+                  borderBottom: `1px solid var(--card-edge)`,
+                }}
+              >
+                <img
+                  src={hero}
+                  alt={openRecipe.title}
+                  style={{
+                    display: "block", width: "auto", height: "auto",
+                    maxWidth: "100%", maxHeight: 460,
+                  }}
+                />
+              </div>
+            )}
+            <Grain card />
+            <div className="rb-pad" style={{ position: "relative", padding: "38px 34px 42px" }}>
+              <button
+                className="rb-btn rb-focus rb-noprint"
+                onClick={goBack}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 18,
+                  background: "transparent", border: "none", padding: "4px 0",
+                  color: "var(--card-accent)", font: `600 13.5px/1 ${UI}`,
+                }}
+              >
+                <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
+                {backLabel()}
+              </button>
+              <h2 style={{ font: `300 clamp(30px, 4.6vw, 42px)/1.08 ${DISPLAY}`, margin: "0 0 10px", letterSpacing: "-0.02em", color: "var(--card-text)" }}>
+                {openRecipe.title}
+              </h2>
+              {openRecipe.contributor && (
+                <p style={{ font: `italic 400 17px/1.4 ${DISPLAY}`, color: "var(--card-accent)", margin: "0 0 20px" }}>from {openRecipe.contributor}'s kitchen</p>
+              )}
+              {openRecipe.description && (
+                <p className="rb-lede" style={{ font: `400 17px/1.72 ${DISPLAY}`, color: "var(--card-text)", maxWidth: "60ch", margin: "0 0 26px" }}>
+                  {openRecipe.description}
+                </p>
+              )}
+
+              <div className="rb-noprint" style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 30 }}>
+                <button
+                  className="rb-btn rb-focus"
+                  style={btnPrimary}
+                  onClick={() => { setStepIndex(0); setShowPantry(false); setCooking(true); }}
+                >
+                  Start cooking
+                </button>
+                <Servings base={baseServings} factor={factor} setFactor={setFactor} />
+              </div>
+
+              <div className="rb-detail">
+                <div>
+                  {(openRecipe.servings || openRecipe.time) && (
+                    <div style={{ font: `400 13px/1.8 ${UI}`, color: "var(--card-muted)", paddingBottom: 15, marginBottom: 18, borderBottom: `2px solid var(--card-text)` }}>
+                      {openRecipe.servings && <div>{scaleServings(openRecipe.servings, factor)}</div>}
+                      {openRecipe.time && <div>{openRecipe.time}</div>}
+                    </div>
+                  )}
+                  <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 14px", color: "var(--card-text)" }}>Ingredients</h3>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                    {openRecipe.ingredients.map((ing, i) => {
+                      const [qty, rest] = splitQty(scaleLine(ing, factor));
+                      return (
+                        <li
+                          key={i}
+                          style={{
+                            display: "grid", gridTemplateColumns: qty ? "auto 1fr" : "1fr", gap: 12,
+                            padding: "9px 0", borderBottom: `1px solid var(--card-edge)`, alignItems: "baseline",
+                          }}
+                        >
+                          {qty && <span className="rb-num" style={{ fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap" }}>{qty}</span>}
+                          <span style={{ font: `400 14.5px/1.5 ${UI}`, color: "var(--card-text)" }}>{rest}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  {openRecipe.equipment?.length > 0 && (
+                    <div style={{ marginTop: 30 }}>
+                      <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 12px", color: "var(--card-text)" }}>You'll need</h3>
+                      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                        {openRecipe.equipment.map((tool, i) => (
+                          <li
+                            key={i}
+                            style={{
+                              font: `400 14.5px/1.5 ${UI}`, color: "var(--card-text)", padding: "8px 0 8px 16px",
+                              borderBottom: `1px solid var(--card-edge)`, position: "relative",
+                            }}
+                          >
+                            <span aria-hidden style={{ position: "absolute", left: 0, top: 15, width: 6, height: 6, background: T.sage, borderRadius: "50%" }} />
+                            {tool}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 18px", color: "var(--card-text)" }}>Method</h3>
+                  <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                    {openRecipe.steps.map((s, i) => {
+                      const { title, text } = stepParts(s);
+                      const secs = stepDuration(s);
+                      return (
+                        <li key={i} style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, marginBottom: 24 }}>
+                          <span className="rb-num" style={{ fontSize: 26, color: "var(--card-edge)", lineHeight: 1.15, textAlign: "right", paddingRight: 4 }}>{i + 1}</span>
+                          <div style={{ maxWidth: "64ch" }}>
+                            {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
+                            <p style={{ font: `400 16.5px/1.75 ${DISPLAY}`, color: "var(--card-text)", margin: 0 }}>{text}</p>
+                            {secs && (
+                              <button
+                                className="rb-btn rb-focus rb-noprint"
+                                style={{ ...btnQuiet, marginTop: 10, padding: "7px 14px", fontSize: 13 }}
+                                onClick={() => startTimer(`${openRecipe.title} — ${title || `step ${i + 1}`}`, secs)}
+                              >
+                                Start a {durLabel(secs)} timer
+                              </button>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+
+                  {openRecipe.notes && (
+                    <div style={{ marginTop: 28, padding: "18px 20px", background: "var(--card-lift)", borderLeft: `3px solid var(--card-accent)` }}>
+                      <h4 style={{ font: `400 18px/1.2 ${DISPLAY}`, margin: "0 0 7px", color: "var(--card-text)" }}>Notes</h4>
+                      <p style={{ font: `400 15px/1.72 ${UI}`, color: "var(--card-muted)", margin: 0, whiteSpace: "pre-wrap" }}>{openRecipe.notes}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rb-noprint rb-actions" style={{ display: "flex", gap: 10, marginTop: 38, flexWrap: "wrap" }}>
+                <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => startEdit(openRecipe)}>Edit</button>
+                <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => window.print()}>Print</button>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ font: `500 13px/1 ${UI}`, color: "var(--card-muted)" }}>Move to</span>
+                  <select
+                    className="rb-focus"
+                    value={openRecipe.contributor || UNFILED}
+                    onChange={(e) => moveRecipe(openRecipe.id, e.target.value)}
+                    style={{
+                      font: `600 13.5px/1 ${UI}`, color: "var(--card-text)", background: "var(--card-lift)",
+                      border: `1px solid var(--card-edge)`, borderRadius: 2, padding: "10px 12px", cursor: "pointer",
+                    }}
+                  >
+                    {allAuthors.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                    <option value={UNFILED}>No author</option>
+                  </select>
+                </label>
+                {confirmRemove ? (
+                  <span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ font: `500 13.5px/1.4 ${UI}`, color: "var(--card-danger)" }}>
+                      Remove this for everyone? It can't be undone.
+                    </span>
+                    <button
+                      className="rb-btn rb-focus"
+                      style={{ ...btnQuiet, background: "var(--card-danger)", color: T.inkDeep, borderColor: "var(--card-danger)" }}
+                      onClick={() => {
+                        persist({ ...box, recipes: box.recipes.filter((r) => r.id !== openRecipe.id) });
+                        window.storage?.delete(imageKey(openRecipe.id), true).catch(() => {});
+                        setConfirmRemove(false);
+                        setView("list");
+                      }}
+                    >
+                      Yes, remove it
+                    </button>
+                    <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => setConfirmRemove(false)}>
+                      Keep it
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    className="rb-btn rb-focus"
+                    style={{ ...btnQuiet, color: "var(--card-danger)", borderColor: "var(--card-danger)" }}
+                    onClick={() => setConfirmRemove(true)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          </article>
+        )}
+
+        {/* ═══════ FORM ═══════ */}
+        {!loading && view === "form" && (
+          <div style={{ ...sheet, maxWidth: 820 }}>
+            <div style={ruleTop} />
+            <Grain card />
+            <div className="rb-pad" style={{ position: "relative", padding: "34px 32px 38px" }}>
+              <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 24px", color: "var(--card-text)" }}>{editingId ? "Edit recipe" : "Add a recipe"}</h2>
+
+              {!editingId && (
+                <div style={{ background: "var(--card-lift)", border: `1px solid var(--card-edge)`, padding: "18px 20px", marginBottom: 28 }}>
+                  <p style={{ font: `600 14px/1.4 ${UI}`, color: "var(--card-text)", margin: "0 0 4px" }}>Paste a recipe</p>
+                  <p style={{ font: `400 13px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>Markdown or JSON both work. Or drag a file anywhere on the page instead.</p>
+                  <textarea
+                    value={pasteText}
+                    onChange={(e) => setPasteText(e.target.value)}
+                    rows={5}
+                    className="rb-focus"
+                    style={{ ...input, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}
+                    placeholder={"## Ingredients\n- 2 lb pork shoulder\n\n## Steps\n1. Brown the pork: Sear it 8 minutes a side."}
+                  />
+                  <button className="rb-btn rb-focus" style={{ ...btnQuiet, marginTop: 12 }} onClick={applyPaste}>Fill the fields</button>
+                </div>
+              )}
+
+              <Field label="Recipe name">
+                <input className="rb-focus" style={input} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+              </Field>
+
+              <Field label="Photo" hint="Optional. Resized in your browser before it's saved — originals never leave your device at full size.">
+                <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                  {form.thumb ? (
+                    <img
+                      src={form.thumb}
+                      alt=""
+                      style={{
+                        width: "auto", height: "auto", maxWidth: 118, maxHeight: 88,
+                        borderRadius: 2, border: `1px solid var(--card-edge)`,
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 108, height: 78, borderRadius: 2, border: `1px dashed var(--card-edge)`,
+                        display: "grid", placeItems: "center", font: `400 12px/1.3 ${UI}`, color: "var(--card-muted)",
+                      }}
+                    >
+                      No photo
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => photoRef.current?.click()} disabled={photoBusy}>
+                      {photoBusy ? "Working…" : form.thumb ? "Replace photo" : "Choose a photo"}
+                    </button>
+                    {form.thumb && (
+                      <button className="rb-btn rb-focus" style={btnQuiet} onClick={dropPhoto}>Remove photo</button>
+                    )}
+                  </div>
+                  <input
+                    ref={photoRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => { pickPhoto(e.target.files?.[0]); e.target.value = ""; }}
+                    style={{ display: "none" }}
+                  />
+                </div>
+              </Field>
+
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 200px" }}>
+                  <Field label="Author" hint="Whose recipe is it? This decides which box it lands in.">
+                    <input className="rb-focus" style={input} value={form.contributor} onChange={(e) => setForm({ ...form, contributor: e.target.value })} placeholder="Grandma Rosa" />
+                  </Field>
+                </div>
+                <div style={{ flex: "1 1 140px" }}>
+                  <Field label="Servings" hint="Include a number — it drives the scaler.">
+                    <input className="rb-focus" style={input} value={form.servings} onChange={(e) => setForm({ ...form, servings: e.target.value })} placeholder="Serves 6" />
+                  </Field>
+                </div>
+                <div style={{ flex: "1 1 140px" }}>
+                  <Field label="Time">
+                    <input className="rb-focus" style={input} value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} placeholder="About 2 hours" />
+                  </Field>
+                </div>
+              </div>
+
+              <Field label="A line about it" hint="What it tastes like, when you make it, who it came from.">
+                <textarea className="rb-focus" rows={2} style={input} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+              </Field>
+
+              <Field label="Ingredients" hint="One per line, quantity first — that's what gets scaled.">
+                <textarea className="rb-focus" rows={8} style={input} value={form.ingredientText} onChange={(e) => setForm({ ...form, ingredientText: e.target.value })} />
+              </Field>
+
+              <Field label="Equipment and tools" hint="One per line — blender, 9x13 pan, kitchen scale, candy thermometer.">
+                <textarea className="rb-focus" rows={4} style={input} value={form.equipmentText}
+                  onChange={(e) => setForm({ ...form, equipmentText: e.target.value })} />
+              </Field>
+
+              <Field label="Steps" hint={'One per line. Write "Short title: the actual instruction" and the title shows in cooking mode. Any duration you mention becomes a timer.'}>
+                <textarea className="rb-focus" rows={8} style={input} value={form.stepText} onChange={(e) => setForm({ ...form, stepText: e.target.value })} />
+              </Field>
+
+              <Field label="Notes" hint="Substitutions, warnings, the story behind it.">
+                <textarea className="rb-focus" rows={3} style={input} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              </Field>
+
+              <Field label="Tags" hint="Comma separated — dinner, holiday, abuela.">
+                <input className="rb-focus" style={input} value={form.tagText} onChange={(e) => setForm({ ...form, tagText: e.target.value })} />
+              </Field>
+
+              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                <button className="rb-btn rb-focus" style={{ ...btnPrimary, opacity: form.title.trim() ? 1 : 0.45 }} onClick={saveRecipe} disabled={!form.title.trim()}>
+                  {editingId ? "Save changes" : "Add to the box"}
+                </button>
+                <button
+                  className="rb-btn rb-focus"
+                  style={btnQuiet}
+                  onClick={() => (editingId ? setView("detail") : goBack())}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* ═══════ TIMER TRAY ═══════ */}
+      {timers.length > 0 && (
+        <div
+          className="rb-noprint rb-tray"
+          style={{
+            position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 70,
+            background: "rgba(6,30,33,.96)", borderTop: `1px solid rgba(247,242,230,.2)`,
+            padding: "12px 18px", display: "flex", gap: 12, overflowX: "auto",
+          }}
+        >
+          {timers.map((t) => {
+            const done = t.remaining === 0;
+            return (
+              <div
+                key={t.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", flex: "0 0 auto",
+                  border: `1px solid ${done ? T.marigold : "rgba(247,242,230,.24)"}`, borderRadius: 2,
+                  background: done ? "rgba(231,164,39,.16)" : "transparent",
+                }}
+              >
+                <span className="rb-num" style={{ fontSize: 22, color: done ? T.marigold : T.paper, minWidth: 66 }}>{clock(t.remaining)}</span>
+                <span style={{ font: `400 12.5px/1.35 ${UI}`, color: "rgba(247,242,230,.7)", maxWidth: 190 }}>
+                  {done ? "Time's up — " : ""}{t.label}
+                </span>
+                {!done && (
+                  <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "6px 12px", fontSize: 12.5 }} onClick={() => toggleTimer(t.id)}>
+                    {t.running ? "Pause" : "Resume"}
+                  </button>
+                )}
+                <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "6px 12px", fontSize: 12.5 }} onClick={() => dropTimer(t.id)}>
+                  {done ? "Clear" : "Stop"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
