@@ -2,7 +2,15 @@
  * Storage API for the recipe box.
  *
  * Requires a KV namespace bound as RECIPES (Pages project → Settings →
- * Functions → KV namespace bindings).
+ * Bindings → KV namespace). Bind it in BOTH the Production and the Preview
+ * environment — those are configured separately — then redeploy, because a
+ * binding only takes effect on a new deployment. While it is unbound every
+ * write fails silently: saveBox swallows the 500, so the box lives in React
+ * state and is gone on reload.
+ *
+ * Reads are served from a ~60s edge cache, so a save reaches other devices
+ * within about a minute. The person saving sees their own change at once —
+ * the app keeps the authoritative box in memory and does not re-read.
  *
  * Cloudflare Access sits in front of this, so every request that arrives here
  * has already been checked against the allowlist. The identity it forwards is

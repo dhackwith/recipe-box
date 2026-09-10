@@ -13,7 +13,7 @@
  * the signed-in person by Cloudflare Access, which is how the light/dark
  * preference stays personal.
  */
-const API = "/api/kv";
+const API = "/api/storage";
 
 async function call(method, params, body) {
   const url = new URL(API, window.location.origin);
