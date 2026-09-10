@@ -954,7 +954,7 @@ export default function RecipeBox() {
     const from = listStateRef.current;
     if (from.query || from.tagFilter) return "Back to results";
     if (from.activeBox === UNFILED) return "Back to unattributed";
-    if (from.activeBox) return `Back to ${from.activeBox}'s box`;
+    if (from.activeBox) return `Back to ${from.activeBox}'s recipes`;
     return "Back to all recipes";
   };
 
@@ -963,7 +963,7 @@ export default function RecipeBox() {
     const author = target === UNFILED ? "" : target;
     if (!recipe || recipe.contributor === author) return;
     persist({ ...box, recipes: box.recipes.map((r) => (r.id === id ? { ...r, contributor: author } : r)) });
-    flash(author ? `Moved "${recipe.title}" to ${author}'s box` : `Removed the author from "${recipe.title}"`);
+    flash(author ? `Moved "${recipe.title}" to ${author}'s recipes` : `Removed the author from "${recipe.title}"`);
   };
 
   /* Comma-separated terms are ANDed: "lime, tequila" means both, not either. */
@@ -1204,6 +1204,10 @@ export default function RecipeBox() {
       .rb-corner { top: 8px !important; right: 16px !important; }
       .rb-shelf { gap: 8px; }
       .rb-shelf button { flex: 1 1 132px; min-width: 0 !important; padding: 10px 12px !important; }
+      /* Two boxes fit per row at this width. Giving "All recipes" the whole
+         row keeps it first and leaves an even number of author boxes below,
+         so none is left alone on the last row stretched to full width. */
+      .rb-shelf button.rb-shelf-all { flex: 1 1 100%; }
       .rb-tray { padding: 10px 12px !important; }
     }
     @media (max-width: 400px) {
@@ -1276,7 +1280,7 @@ export default function RecipeBox() {
           <div style={{ minWidth: 260 }}>
             {activeBox ? (
               <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: T.paper }}>
-                {activeBox}'s Recipe Box
+                {activeBox}'s Recipes
               </h1>
             ) : editingName ? (
               <input
@@ -1333,14 +1337,14 @@ export default function RecipeBox() {
             <div className="rb-shelf" style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 26 }}>
               {[
                 { key: null, name: "All recipes", count: box.recipes.length },
-                ...allAuthors.map((c) => ({ key: c, name: `${c}'s box`, count: boxCount(c) })),
+                ...allAuthors.map((c) => ({ key: c, name: `${c}'s recipes`, count: boxCount(c) })),
                 ...(unfiled ? [{ key: UNFILED, name: "No author", count: unfiled }] : []),
               ].map((b) => {
                 const on = activeBox === b.key;              
                 return (
                   <button
                     key={b.key ?? "all"}
-                    className="rb-focus"
+                    className={`rb-focus${b.key === null ? " rb-shelf-all" : ""}`}
                     onClick={() => { setActiveBox(b.key); setQuery(""); setTagFilter(null); }}
                     onDragEnter={(e) => {
                       if (!droppable || !dragIdRef.current) return;
@@ -1377,7 +1381,7 @@ export default function RecipeBox() {
 
             {dragId && (
               <p style={{ font: `500 12.5px/1.5 ${UI}`, color: T.marigold, margin: "0 0 16px" }}>
-                Drop it on a box above to move it there.
+                Drop it on a name above to move it there.
               </p>
             )}
 
@@ -1489,8 +1493,8 @@ export default function RecipeBox() {
                       draggable
                       role="button"
                       tabIndex={-1}
-                      aria-label={`Drag ${r.title} to another box`}
-                      title="Drag me to another box"
+                      aria-label={`Drag ${r.title} to someone else's recipes`}
+                      title="Drag me to someone else's recipes"
                       onClick={(e) => e.stopPropagation()}
                       onDragStart={(e) => {
                         dragIdRef.current = r.id;
