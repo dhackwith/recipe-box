@@ -438,6 +438,7 @@ function parseMarkdown(raw) {
       tags: [meta.tags, meta.category, meta.categories].flat().filter(Boolean),
       ingredients,
       equipment: meta.equipment || meta.tools || meta.appliances || [],
+      nutrition: meta.nutrition || meta.nutrition_facts || meta.nutritional_facts,
       steps,
       notes: [meta.yield && servings ? `Yield: ${meta.yield}` : "", prose].filter(Boolean).join("\n\n"),
     });
@@ -482,10 +483,46 @@ function parseMarkdown(raw) {
     tags: meta.tags || meta.categories || "",
     ingredients,
     equipment: meta.equipment || meta.tools || meta.appliances || equipment,
+    nutrition: meta.nutrition || meta.nutrition_facts || meta.nutritional_facts,
     steps,
     notes: notes.join("\n"),
   });
 }
+
+/* Estimated nutrition, per serving of the finished dish. Values are kept as
+   written — "18 g", "410 mg" — rather than parsed into numbers: the site only
+   prints them, and a unit stated by the source beats one inferred here. Order
+   is the order they appear on the recipe, sub-nutrients indented under their
+   parent the way a printed label sets them. */
+const NUTRIENTS = [
+  { key: "calories", label: "Calories", alt: ["kcal", "energy"] },
+  { key: "fat", label: "Fat", alt: ["totalFat", "fatContent"] },
+  { key: "saturatedFat", label: "Saturated fat", sub: true, alt: ["satFat", "saturated", "saturatedFatContent"] },
+  { key: "carbs", label: "Carbohydrate", alt: ["carbohydrate", "carbohydrates", "carbohydrateContent"] },
+  { key: "fiber", label: "Fiber", sub: true, alt: ["dietaryFiber", "fiberContent"] },
+  { key: "sugars", label: "Sugars", sub: true, alt: ["sugar", "sugarContent"] },
+  { key: "protein", label: "Protein", alt: ["proteinContent"] },
+  { key: "sodium", label: "Sodium", alt: ["sodiumContent"] },
+];
+
+const flatKey = (k) => String(k).toLowerCase().replace(/[_\s-]/g, "");
+
+/* Accepts snake_case, camelCase and the schema.org *Content names, since the
+   source of a pasted recipe varies. Returns null when nothing usable is there,
+   so the section simply does not render. */
+const normalizeNutrition = (raw) => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const flat = {};
+  for (const [k, v] of Object.entries(raw)) flat[flatKey(k)] = v;
+  const out = {};
+  for (const n of NUTRIENTS) {
+    const hit = [n.key, ...(n.alt || [])]
+      .map((name) => flat[flatKey(name)])
+      .find((v) => v !== undefined && v !== null && String(v).trim() !== "");
+    if (hit !== undefined) out[n.key] = clean(String(hit));
+  }
+  return Object.keys(out).length ? out : null;
+};
 
 function normalize(r) {
   if (!r || typeof r !== "object") return null;
@@ -520,6 +557,7 @@ function normalize(r) {
     equipment,
     steps,
     notes: clean(r.notes || r.note || r.tips || ""),
+    nutrition: normalizeNutrition(r.nutrition || r.nutritionalFacts || r.nutritionInformation),
     created: r.created || Date.now(),
   };
 }
@@ -587,6 +625,11 @@ const SEED = {
 };
 
 const DEFAULT_AUTHORS = ["Tracey", "Devon", "Haven", "Ashton"];
+
+/* Identifies the button a timer came from. Keyed by step rather than by the
+   label so the same step started from the recipe page and again from cook
+   mode counts as one timer, not two identical countdowns. */
+const timerKey = (recipeId, stepIndex) => `${recipeId}:${stepIndex}`;
 const UNFILED = "\u0000unfiled";   // sentinel: recipes with no author named
 /* A drag carrying files is an import. Card drags are tracked in a ref instead:
    custom dataTransfer MIME types aren't readable during dragover in every
@@ -678,7 +721,7 @@ const ruleTop = { height: 7, background: `linear-gradient(90deg, ${T.marigold} 0
    its entrance animation), which read as a full-screen flash.
    ══════════════════════════════════════════════════════════════════ */
 function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseServings,
-                      showPantry, setShowPantry, onClose, startTimer, prevStep, nextStep }) {
+                      showPantry, setShowPantry, onClose, startTimer, hasTimer, prevStep, nextStep }) {
   const steps = recipe.steps;
   const step = stepParts(steps[stepIndex]);
   const secs = stepDuration(steps[stepIndex]);
@@ -738,9 +781,10 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
             <button
               className="rb-btn rb-focus"
               style={{ ...btnPrimary, marginTop: 26 }}
-              onClick={() => startTimer(`${recipe.title} — ${step.title || `step ${stepIndex + 1}`}`, secs)}
+              disabled={hasTimer(timerKey(recipe.id, stepIndex))}
+              onClick={() => startTimer(`${recipe.title} — ${step.title || `step ${stepIndex + 1}`}`, secs, timerKey(recipe.id, stepIndex))}
             >
-              Start a {durLabel(secs)} timer
+              {hasTimer(timerKey(recipe.id, stepIndex)) ? `${durLabel(secs)} timer running` : `Start a ${durLabel(secs)} timer`}
             </button>
           )}
         </div>
@@ -1054,12 +1098,16 @@ export default function RecipeBox() {
     return hitQ && (!tagFilter || (r.tags || []).includes(tagFilter)) && inBox;
   });
 
-  const startTimer = (label, seconds) => {
-    setTimers((prev) => [
+  /* Spam-clicking otherwise stacks identical countdowns. A second press on a
+     step that is already counting does nothing; a different step is free to
+     run alongside it. */
+  const startTimer = (label, seconds, key) => {
+    setTimers((prev) => (prev.some((t) => t.key === key) ? prev : [
       ...prev,
-      { id: `${Date.now()}-${Math.random()}`, label, total: seconds, remaining: seconds, running: true, endsAt: Date.now() + seconds * 1000 },
-    ]);
+      { id: `${Date.now()}-${Math.random()}`, key, label, total: seconds, remaining: seconds, running: true, endsAt: Date.now() + seconds * 1000 },
+    ]));
   };
+  const hasTimer = (key) => timers.some((t) => t.key === key);
   const toggleTimer = (id) =>
     setTimers((p) =>
       p.map((t) => {
@@ -1196,6 +1244,8 @@ export default function RecipeBox() {
       steps: form.stepText.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => stepParts(l)),
       notes: form.notes.trim(),
       created: editingId ? box.recipes.find((r) => r.id === editingId)?.created : Date.now(),
+      /* no field for it in the form, so an edit would otherwise drop it */
+      nutrition: editingId ? box.recipes.find((r) => r.id === editingId)?.nutrition || null : null,
     };
     persist({ ...box, recipes: editingId ? box.recipes.map((r) => (r.id === editingId ? recipe : r)) : [recipe, ...box.recipes] });
 
@@ -1251,7 +1301,7 @@ export default function RecipeBox() {
     @media (prefers-reduced-motion: reduce) { .rb-card { transition: none; } .rb-card:hover { transform: none; } }
     .rb-btn { cursor: pointer; border-radius: 2px; font-family: ${UI}; font-weight: 600; font-size: 14px; letter-spacing: .01em; transition: filter 120ms ease; }
     .rb-btn:hover { filter: brightness(1.07); }
-    .rb-btn:disabled { cursor: not-allowed; filter: none; }
+    .rb-btn:disabled { cursor: not-allowed; filter: none; opacity: .5; }
     .rb-lede::first-letter { float: left; font-family: ${DISPLAY}; font-weight: 500; font-size: 3.4em; line-height: .82; padding: .04em .09em 0 0; color: var(--card-accent); }
     .rb-num { font-family: ${DISPLAY}; font-weight: 400; font-variant-numeric: lining-nums tabular-nums; }
     .rb-step { animation: rbfade 260ms ease both; }
@@ -1276,7 +1326,7 @@ export default function RecipeBox() {
       .rb-detail { display: block !important; }
       .rb-detail > div + div { margin-top: 30px; }
       /* Never split one ingredient, one step, or the notes block in half. */
-      .rb-detail li, .rb-notes { break-inside: avoid; page-break-inside: avoid; }
+      .rb-detail li, .rb-notes, .rb-nutrition { break-inside: avoid; page-break-inside: avoid; }
       /* Never strand a heading at the foot of a page. */
       h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
       p { orphans: 3; widows: 3; }
@@ -1350,6 +1400,7 @@ export default function RecipeBox() {
           setShowPantry={setShowPantry}
           onClose={() => setCooking(false)}
           startTimer={startTimer}
+          hasTimer={hasTimer}
           prevStep={prevStep}
           nextStep={nextStep}
         />
@@ -1769,6 +1820,27 @@ export default function RecipeBox() {
                       </ul>
                     </div>
                   )}
+
+                  {openRecipe.nutrition && (
+                    <div className="rb-nutrition" style={{ marginTop: 30 }}>
+                      <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 3px", color: "var(--card-text)" }}>Nutrition</h3>
+                      <p style={{ font: `400 12px/1.5 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>Estimated, per serving.</p>
+                      <dl style={{ margin: 0, borderTop: `2px solid var(--card-text)` }}>
+                        {NUTRIENTS.filter((n) => openRecipe.nutrition[n.key]).map((n) => (
+                          <div
+                            key={n.key}
+                            style={{
+                              display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline",
+                              padding: "8px 0", borderBottom: `1px solid var(--card-edge)`,
+                            }}
+                          >
+                            <dt style={{ font: `400 14.5px/1.4 ${UI}`, color: "var(--card-text)", paddingLeft: n.sub ? 16 : 0 }}>{n.label}</dt>
+                            <dd className="rb-num" style={{ margin: 0, fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap" }}>{openRecipe.nutrition[n.key]}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1787,9 +1859,10 @@ export default function RecipeBox() {
                               <button
                                 className="rb-btn rb-focus rb-noprint"
                                 style={{ ...btnQuiet, marginTop: 10, padding: "7px 14px", fontSize: 13 }}
-                                onClick={() => startTimer(`${openRecipe.title} — ${title || `step ${i + 1}`}`, secs)}
+                                disabled={hasTimer(timerKey(openRecipe.id, i))}
+                                onClick={() => startTimer(`${openRecipe.title} — ${title || `step ${i + 1}`}`, secs, timerKey(openRecipe.id, i))}
                               >
-                                Start a {durLabel(secs)} timer
+                                {hasTimer(timerKey(openRecipe.id, i)) ? `${durLabel(secs)} timer running` : `Start a ${durLabel(secs)} timer`}
                               </button>
                             )}
                           </div>
