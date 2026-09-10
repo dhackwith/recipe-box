@@ -638,21 +638,26 @@ function Servings({ base, factor, setFactor, dark }) {
   };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-      <span style={{ font: `600 12px/1 ${UI}`, color: dark ? "rgba(247,242,230,.6)" : "var(--card-muted)" }}>Servings</span>
+      <div>
+        {Math.abs(factor - 1) > 0.001 ? (
+          
+          <button
+            className="rb-focus"
+            onClick={() => setFactor(1)}
+            style={{ background: "none", border: "none", cursor: "pointer", whiteSpace: "break-spaces", maxWidth: 50 }}
+          >
+            <span style={{ font: `600 12px/1 ${UI}`, color: dark ? "rgba(247,242,230,.6)" : "var(--card-muted)" }}>Reset</span>
+          </button>
+        ) : (
+          <span style={{ font: `600 12px/1 ${UI}`, color: dark ? "rgba(247,242,230,.6)" : "var(--card-muted)" }}>Servings</span>
+        )}
+      </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button className="rb-focus" style={btn} onClick={() => set(current - 1)} aria-label="Fewer servings">−</button>
         <span className="rb-num" style={{ minWidth: 30, textAlign: "center", fontSize: 21, color: fg }}>{current}</span>
         <button className="rb-focus" style={btn} onClick={() => set(current + 1)} aria-label="More servings">+</button>
       </div>
-      {Math.abs(factor - 1) > 0.001 && (
-        <button
-          className="rb-focus"
-          onClick={() => setFactor(1)}
-          style={{ background: "none", border: "none", cursor: "pointer", font: `500 12.5px/1 ${UI}`, color: dark ? T.marigold : "var(--card-accent)", textDecoration: "underline" }}
-        >
-          reset to {base}
-        </button>
-      )}
+
     </div>
   );
 }
@@ -810,7 +815,6 @@ export default function RecipeBox() {
   const [importErrors, setImportErrors] = useState([]);
   const [dragging, setDragging] = useState(false);
   const [dragId, setDragId] = useState(null);
-  const [dropTarget, setDropTarget] = useState(null);
   const dragIdRef = useRef(null);
   const [factor, setFactor] = useState(1);
   const [cooking, setCooking] = useState(false);
@@ -928,15 +932,6 @@ export default function RecipeBox() {
   ).sort();
   const boxCount = (author) => box.recipes.filter((r) => r.contributor === author).length;
   const unfiled = box.recipes.filter((r) => !r.contributor).length;
-
-  const showEverything = () => {
-    setActiveBox(null);
-    setQuery("");
-    setTagFilter(null);
-    setScope("all");
-    listStateRef.current = { query: "", scope: "all", tagFilter: null, activeBox: null };
-    setView("list");
-  };
 
   const openCard = (id) => {
     listStateRef.current = { query, scope, tagFilter, activeBox };
@@ -1312,7 +1307,6 @@ export default function RecipeBox() {
             </p>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button className="rb-btn rb-focus" style={btnGhost} onClick={showEverything}>All recipes</button>
             <button className="rb-btn rb-focus" style={btnGhost} onClick={() => fileRef.current?.click()}>Import files</button>
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
           </div>
@@ -1342,9 +1336,7 @@ export default function RecipeBox() {
                 ...allAuthors.map((c) => ({ key: c, name: `${c}'s box`, count: boxCount(c) })),
                 ...(unfiled ? [{ key: UNFILED, name: "No author", count: unfiled }] : []),
               ].map((b) => {
-                const on = activeBox === b.key;
-                const droppable = b.key !== null;                 // "All recipes" isn't a destination
-                const armed = dropTarget === b.key;
+                const on = activeBox === b.key;              
                 return (
                   <button
                     key={b.key ?? "all"}
@@ -1353,31 +1345,25 @@ export default function RecipeBox() {
                     onDragEnter={(e) => {
                       if (!droppable || !dragIdRef.current) return;
                       e.preventDefault();
-                      setDropTarget(b.key);
                     }}
                     onDragOver={(e) => {
                       if (!droppable || !dragIdRef.current) return;
                       e.preventDefault();                       // this is what makes a drop legal
                       e.dataTransfer.dropEffect = "move";
-                      if (dropTarget !== b.key) setDropTarget(b.key);
                     }}
-                    onDragLeave={() => setDropTarget((t) => (t === b.key ? null : t))}
                     onDrop={(e) => {
                       if (!droppable || !dragIdRef.current) return;
                       e.preventDefault();
                       moveRecipe(dragIdRef.current, b.key);
                       dragIdRef.current = null;
-                      setDropTarget(null);
                       setDragId(null);
                     }}
                     style={{
                       display: "flex", flexDirection: "column", gap: 4, textAlign: "left", cursor: "pointer",
                       padding: "11px 16px", borderRadius: 2, minWidth: 120,
-                      border: armed
-                        ? `1px dashed ${T.marigold}`
-                        : `1px solid ${on ? T.marigold : dragId && droppable ? "rgba(231,164,39,.45)" : "rgba(247,242,230,.22)"}`,
-                      background: armed ? "rgba(231,164,39,.24)" : on ? "rgba(231,164,39,.14)" : "transparent",
-                      transform: armed ? "translateY(-2px)" : "none",
+                      border:  `1px solid ${on ? T.marigold : dragId && droppable ? "rgba(231,164,39,.45)" : "rgba(247,242,230,.22)"}`,
+                      background: on ? "rgba(231,164,39,.14)" : "transparent",
+                      transform: "none",
                     }}
                   >
                     <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: on ? T.marigold : T.paper }}>{b.name}</span>
@@ -1512,7 +1498,7 @@ export default function RecipeBox() {
                         e.dataTransfer.effectAllowed = "move";
                         setDragId(r.id);
                       }}
-                      onDragEnd={() => { dragIdRef.current = null; setDragId(null); setDropTarget(null); }}
+                      onDragEnd={() => { dragIdRef.current = null; setDragId(null); }}
                       style={{
                         position: "absolute", top: 15, right: 10, zIndex: 3, cursor: "grab",
                         padding: "2px 7px", borderRadius: 3, lineHeight: 1,
@@ -1929,7 +1915,7 @@ export default function RecipeBox() {
           style={{
             position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 70,
             background: "rgba(6,30,33,.96)", borderTop: `1px solid rgba(247,242,230,.2)`,
-            padding: "12px 18px", display: "flex", gap: 12, overflowX: "auto",
+            padding: "12px 18px", gap: 12, overflowX: "auto",
           }}
         >
           {timers.map((t) => {
@@ -1943,8 +1929,10 @@ export default function RecipeBox() {
                   background: done ? "rgba(231,164,39,.16)" : "transparent",
                 }}
               >
-                <span className="rb-num" style={{ fontSize: 22, color: done ? T.marigold : T.paper, minWidth: 66 }}>{clock(t.remaining)}</span>
-                <span style={{ font: `400 12.5px/1.35 ${UI}`, color: "rgba(247,242,230,.7)", maxWidth: 190 }}>
+                <div style={{ paddingInline: 8, minWidth: 50 }}>
+                  <span className="rb-num" style={{ fontSize: 22, color: done ? T.marigold : T.paper, minWidth: 66 }}>{clock(t.remaining)}</span>
+                </div>
+                <span style={{ font: `400 12.5px/1.35 ${UI}`, color: "rgba(247,242,230,.7)", paddingInlineEnd: '8px', width: '100%', textJustify: 'right'  }}>
                   {done ? "Time's up — " : ""}{t.label}
                 </span>
                 {!done && (
