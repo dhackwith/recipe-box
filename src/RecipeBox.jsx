@@ -766,6 +766,136 @@ const parseJSON = (raw) => {
   return pool.map(normalize).filter(Boolean);
 };
 
+/* ── Import from a link ───────────────────────────────────────────
+   A page's schema.org Recipe, fetched by functions/api/fetch-recipe.js, turned
+   into the shape the rest of the importer already understands. */
+
+/* Structured data carries markup and entities ("Mom&#39;s", "<p>Whisk</p>").
+   DOMParser reads it as inert text — nothing in it runs. */
+const htmlToText = (s) => {
+  if (s == null) return "";
+  const str = String(s);
+  const text = /[<&]/.test(str) && typeof DOMParser !== "undefined"
+    ? new DOMParser().parseFromString(str, "text/html").body.textContent || ""
+    : str;
+  return text.replace(/\s+/g, " ").trim();
+};
+/* the same, keeping the paragraph breaks an instruction blob is split on */
+const htmlToLines = (s) =>
+  String(s ?? "")
+    .replace(/<\s*(br|\/p|\/li|\/div|\/h\d)\b[^>]*>/gi, "\n")
+    .split(/\n+/)
+    .map(htmlToText)
+    .filter(Boolean);
+
+const looksLikeUrl = (s) => /^https?:\/\/\S+$/i.test(String(s || "").trim());
+
+/* ISO 8601 durations — "PT1H30M", "P0DT45M" — into whole minutes */
+function isoMinutes(v) {
+  const m = String(v || "").match(/^P(?:(\d+)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i);
+  if (!m) return null;
+  const mins = (+m[1] || 0) * 1440 + (+m[2] || 0) * 60 + (+m[3] || 0) + (+m[4] || 0) / 60;
+  return mins > 0 ? Math.round(mins) : null;
+}
+const minutesLabel = (n) => {
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  return [h && `${h} ${h === 1 ? "hour" : "hours"}`, m && `${m} ${m === 1 ? "minute" : "minutes"}`].filter(Boolean).join(" ");
+};
+
+/* Yields arrive as "4", ["4", "4 servings"] or ["2", "2 dozen"]. The longest
+   entry says the most — a bare "2" beside "2 dozen" means two dozen cookies,
+   not two servings — and a bare number standing alone is a serving count. */
+function schemaServings(y) {
+  const list = [].concat(y ?? []).map(htmlToText).filter((v) => /\d/.test(v));
+  if (!list.length) return "";
+  const best = list.reduce((a, b) => (b.length > a.length ? b : a));
+  return /^\d+$/.test(best) ? `Serves ${best}` : best;
+}
+
+/* Instructions come as one blob, a list of strings, HowToSteps, or HowToSections
+   holding HowToSteps. Flatten all of it. A step's name is used as its title only
+   when it says something the text does not — many sites repeat the text there. */
+function schemaSteps(v) {
+  const out = [];
+  const walk = (x) => {
+    if (x == null) return;
+    if (typeof x === "string") { out.push(...htmlToLines(x)); return; }
+    if (Array.isArray(x)) { x.forEach(walk); return; }
+    if (typeof x !== "object") return;
+    if (x.itemListElement) { walk(x.itemListElement); return; }
+    const text = htmlToText(x.text || x.description || x.name || "");
+    if (!text) return;
+    const name = htmlToText(x.name || "");
+    const titled = name && name !== text && name.length <= 60 && !fold(text).startsWith(fold(name).slice(0, 24));
+    out.push(titled ? { title: name, text } : text);
+  };
+  walk(v);
+  return out;
+}
+
+function schemaImage(img, base) {
+  const first = [].concat(img ?? [])[0];
+  const src = typeof first === "string" ? first : first?.url || first?.contentUrl || "";
+  try { return src ? new URL(src, base).href : ""; } catch { return ""; }
+}
+
+/* Sites write nutrition every which way — "2 grams fat", "14.58 g", "253.6
+   milligrams", calories to fourteen decimal places. Keep the number and a
+   standard unit (inferred from the nutrient when a site leaves it off), with
+   no more precision than an estimate deserves. */
+function tidyNutrient(key, v) {
+  const m = String(v ?? "").match(/^\s*(\d+(?:[.,]\d+)?)\s*([a-z]*)/i);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(",", "."));
+  const word = m[2].toLowerCase();
+  const unit = /^(mg|milligrams?)$/.test(word) ? "mg"
+    : /^(g|gr|grams?)$/.test(word) ? "g"
+    : /calorie|energy/i.test(key) ? ""
+    : /sodium|cholesterol/i.test(key) ? "mg"
+    : "g";
+  const shown = unit && n < 10 ? Math.round(n * 10) / 10 : Math.round(n);
+  return unit ? `${shown} ${unit}` : String(shown);
+}
+
+function fromSchemaRecipe(node, pageUrl) {
+  if (!node || typeof node !== "object") return null;
+  const words = (v) =>
+    [].concat(v ?? []).flatMap((x) => String(x).split(",")).map((t) => htmlToText(t).toLowerCase()).filter(Boolean);
+  /* Keywords are written for search engines — author names, "cook school",
+     "flipping" — and every tag becomes a filter chip under the shelf. Use the
+     category and cuisine, and fall back to short keywords only when a page
+     offers neither. */
+  const primary = [...words(node.recipeCategory), ...words(node.recipeCuisine)];
+  const tags = [...new Set(primary.length ? primary : words(node.keywords).filter((k) => k.split(" ").length <= 2))].slice(0, 6);
+  const minutes = isoMinutes(node.totalTime) ?? (((isoMinutes(node.prepTime) || 0) + (isoMinutes(node.cookTime) || 0)) || null);
+  const nutrition = {};
+  if (node.nutrition && typeof node.nutrition === "object") {
+    for (const [k, v] of Object.entries(node.nutrition)) {
+      if (k.startsWith("@") || k === "servingSize") continue;
+      const t = tidyNutrient(k, v);
+      if (t != null) nutrition[k] = t;
+    }
+  }
+  /* The site's author is not family. Made the contributor, they would open a new
+     box on the shelf in a stranger's name — so they are credited in the notes,
+     beside the address the recipe came from. */
+  const by = [].concat(node.author ?? []).map((a) => (typeof a === "string" ? a : a?.name)).filter(Boolean).map(htmlToText);
+  let host = "";
+  try { host = new URL(pageUrl).hostname.replace(/^www\./, ""); } catch { /* keep just the address */ }
+  return normalize({
+    title: htmlToText(node.name || node.headline),
+    description: htmlToText(node.description),
+    servings: schemaServings(node.recipeYield ?? node.yield),
+    time: minutes ? minutesLabel(minutes) : "",
+    tags,
+    ingredients: [].concat(node.recipeIngredient ?? node.ingredients ?? []).map(htmlToText).filter(Boolean),
+    steps: schemaSteps(node.recipeInstructions),
+    nutrition: Object.keys(nutrition).length ? nutrition : null,
+    notes: [`From ${host || "the web"}${by.length ? `, by ${by.join(" and ")}` : ""}.`, pageUrl].join("\n"),
+  });
+}
+
 function parseFile(name, text) {
   const isJSON = /\.json$/i.test(name) || text.trim().startsWith("{") || text.trim().startsWith("[");
   if (isJSON) return parseJSON(text);
@@ -828,6 +958,23 @@ const DEFAULT_AUTHORS = ["Tracey", "Devon", "Haven", "Ashton"];
    label so the same step started from the recipe page and again from cook
    mode counts as one timer, not two identical countdowns. */
 const timerKey = (recipeId, stepIndex) => `${recipeId}:${stepIndex}`;
+
+/* What has gone in and which steps are done, per recipe, on this device only —
+   it is one cook's progress, not the family's. Kept in localStorage so a reload
+   mid-recipe keeps your place, and dropped after half a day so last week's
+   ticks are not waiting the next time you open the recipe. */
+const CROSS_KEY = "rb-crossed";
+const CROSS_TTL = 12 * 60 * 60 * 1000;
+const NO_MARKS = { ing: [], steps: [] };
+const loadCrossed = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CROSS_KEY) || "{}");
+    const now = Date.now();
+    return Object.fromEntries(Object.entries(saved).filter(([, m]) => m && now - m.at < CROSS_TTL));
+  } catch {
+    return {};
+  }
+};
 const UNFILED = "\u0000unfiled";   // sentinel: recipes with no author named
 /* A drag carrying files is an import. Card drags are tracked in a ref instead:
    custom dataTransfer MIME types aren't readable during dragover in every
@@ -909,6 +1056,7 @@ function Servings({ base, factor, setFactor, dark }) {
 const btnPrimary = { background: T.marigold, color: T.inkDeep, border: "none", padding: "12px 22px" };
 const btnGhost = { background: "transparent", color: "rgba(247,242,230,.88)", border: "1px solid rgba(247,242,230,.28)", padding: "11px 20px" };
 const btnQuiet = { background: "transparent", color: "var(--card-muted)", border: `1px solid var(--card-edge)`, padding: "10px 18px" };
+const linkButton = { background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--card-accent)", font: "inherit", textDecoration: "underline", textUnderlineOffset: 2 };
 const sheet = { position: "relative", background: "var(--card-bg)", color: "var(--card-text)", borderRadius: 3, boxShadow: "0 26px 60px -30px rgba(0,0,0,.7)", overflow: "hidden" };
 const ruleTop = { height: 7, background: `linear-gradient(90deg, ${T.marigold} 0 46%, ${T.rust} 46% 62%, ${T.sage} 62% 100%)` };
 
@@ -919,10 +1067,12 @@ const ruleTop = { height: 7, background: `linear-gradient(90deg, ${T.marigold} 0
    its entrance animation), which read as a full-screen flash.
    ══════════════════════════════════════════════════════════════════ */
 function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseServings,
-                      showPantry, setShowPantry, onClose, startTimer, hasTimer, prevStep, nextStep }) {
+                      showPantry, setShowPantry, onClose, startTimer, hasTimer, prevStep, nextStep,
+                      marks, onToggle, onFinish }) {
   const steps = recipe.steps;
   const step = stepParts(steps[stepIndex]);
   const secs = stepDuration(steps[stepIndex]);
+  const done = marks.steps.includes(stepIndex);
   return (
     <div
       style={{
@@ -958,7 +1108,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
             className="rb-focus"
             style={{
               flex: 1, height: 3, border: "none", padding: 0, cursor: "pointer",
-              background: i <= stepIndex ? T.marigold : "rgba(247,242,230,.18)",
+              background: marks.steps.includes(i) ? T.marigold : i === stepIndex ? "rgba(247,242,230,.65)" : "rgba(247,242,230,.18)",
             }}
           />
         ))}
@@ -985,17 +1135,54 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
               {hasTimer(timerKey(recipe.id, stepIndex)) ? `${durLabel(secs)} timer running` : `Start a ${durLabel(secs)} timer`}
             </button>
           )}
+          <button
+            className="rb-focus"
+            aria-pressed={done}
+            onClick={() => onToggle("steps", stepIndex)}
+            style={{
+              display: "flex", alignItems: "center", gap: 9, marginTop: secs ? 16 : 26, padding: "6px 0",
+              background: "none", border: "none", cursor: "pointer", font: `600 13.5px/1 ${UI}`,
+              color: done ? T.marigold : "rgba(247,242,230,.6)",
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 18, height: 18, borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 11,
+                border: `1.5px solid ${done ? T.marigold : "rgba(247,242,230,.45)"}`,
+                background: done ? T.marigold : "transparent", color: T.inkDeep,
+              }}
+            >
+              {done ? "✓" : ""}
+            </span>
+            {done ? "Done — tap to undo" : "Mark this step done"}
+          </button>
         </div>
 
         {showPantry && (
           <div style={{ maxWidth: 780, margin: "34px auto 0", borderTop: "1px solid rgba(247,242,230,.2)", paddingTop: 20 }}>
-            <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: T.paper, margin: "0 0 12px" }}>Ingredients</p>
+            <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: T.paper, margin: "0 0 4px" }}>Ingredients</p>
+            <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(247,242,230,.5)", margin: "0 0 8px" }}>Tap each one as it goes in.</p>
             <ul style={{ listStyle: "none", padding: 0, margin: 0, columns: "220px 2", columnGap: 30 }}>
-              {recipe.ingredients.map((ing, i) => (
-                <li key={i} style={{ font: `400 14.5px/1.5 ${UI}`, color: "rgba(247,242,230,.8)", padding: "7px 0", breakInside: "avoid" }}>
-                  {scaleLine(ing, factor)}
-                </li>
-              ))}
+              {recipe.ingredients.map((ing, i) => {
+                const got = marks.ing.includes(i);
+                return (
+                  <li key={i} style={{ breakInside: "avoid" }}>
+                    <button
+                      className="rb-focus"
+                      aria-pressed={got}
+                      onClick={() => onToggle("ing", i)}
+                      style={{
+                        display: "block", width: "100%", textAlign: "left", padding: "7px 0",
+                        background: "none", border: "none", cursor: "pointer", font: `400 14.5px/1.5 ${UI}`,
+                        color: got ? "rgba(247,242,230,.38)" : "rgba(247,242,230,.8)", textDecoration: got ? "line-through" : "none",
+                      }}
+                    >
+                      {scaleLine(ing, factor)}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
             {recipe.equipment?.length > 0 && (
               <>
@@ -1020,7 +1207,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
           Back
         </button>
         {stepIndex === steps.length - 1 ? (
-          <button className="rb-btn rb-focus" style={{ ...btnPrimary, flex: 2 }} onClick={() => onClose()}>Finish</button>
+          <button className="rb-btn rb-focus" style={{ ...btnPrimary, flex: 2 }} onClick={onFinish}>Finish</button>
         ) : (
           <button className="rb-btn rb-focus" style={{ ...btnPrimary, flex: 2 }} onClick={nextStep}>Next step</button>
         )}
@@ -1046,6 +1233,8 @@ export default function RecipeBox() {
   const [form, setForm] = useState(BLANK);
   const [editingId, setEditingId] = useState(null);
   const [pasteText, setPasteText] = useState("");
+  const [linkText, setLinkText] = useState("");
+  const [linkBusy, setLinkBusy] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [hero, setHero] = useState("");        // full-size photo for the open recipe
   const photoRef = useRef(null);
@@ -1068,6 +1257,7 @@ export default function RecipeBox() {
   const shoppingFrom = useRef("list");
   const [newItem, setNewItem] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [crossed, setCrossed] = useState(loadCrossed);
   const [dragging, setDragging] = useState(false);
   const [factor, setFactor] = useState(1);
   const [cooking, setCooking] = useState(false);
@@ -1174,7 +1364,14 @@ export default function RecipeBox() {
     return () => { try { wakeRef.current?.release(); } catch {} wakeRef.current = null; };
   }, [cooking]);
 
-  const flash = (msg) => { setStatus(msg); setTimeout(() => setStatus(""), 3000); };
+  /* One timer, restarted by each message. With a timer per call, an older one
+     fired partway through a newer message and wiped it early. */
+  const flashTimer = useRef(null);
+  const flash = (msg, ms = 3000) => {
+    setStatus(msg);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setStatus(""), ms);
+  };
   const persist = async (next) => {
     setBox(next);
     flash((await saveBox(next)) ? "Saved" : "Couldn't save — that change is only on this screen");
@@ -1186,6 +1383,9 @@ export default function RecipeBox() {
      being made, so it moves with the scaler exactly as the ingredients do. */
   const servingsMade = baseServings ? Math.max(1, Math.round(baseServings * factor)) : null;
   const toBuy = list.items.filter((i) => !i.checked).length;
+  const marks = (openRecipe && crossed[openRecipe.id]) || NO_MARKS;
+  /* the next step to do — but only once one is done; before that nothing is "current" */
+  const currentStep = openRecipe && marks.steps.length ? openRecipe.steps.findIndex((_, k) => !marks.steps.includes(k)) : -1;
   const allTags = Array.from(new Set(box.recipes.flatMap((r) => r.tags || []))).sort();
   const allAuthors = Array.from(
     new Set([...(box.authors || DEFAULT_AUTHORS), ...box.recipes.map((r) => r.contributor).filter(Boolean)])
@@ -1455,7 +1655,35 @@ export default function RecipeBox() {
   }, [view, cooking]);
 
   /* cooking-mode keyboard */
-  const nextStep = useCallback(() => setStepIndex((i) => Math.min(i + 1, (openRecipe?.steps.length || 1) - 1)), [openRecipe]);
+  useEffect(() => {
+    try { localStorage.setItem(CROSS_KEY, JSON.stringify(crossed)); } catch { /* private mode: ticks just won't outlive a reload */ }
+  }, [crossed]);
+  const marksFor = (id) => crossed[id] || NO_MARKS;
+  const changeMarks = (id, kind, change) =>
+    setCrossed((all) => {
+      const cur = all[id] || NO_MARKS;
+      const next = { ...cur, [kind]: change(cur[kind]), at: Date.now() };
+      const rest = { ...all };
+      if (next.ing.length || next.steps.length) rest[id] = next;
+      else delete rest[id];
+      return rest;
+    });
+  const toggleMark = (id, kind, i) => changeMarks(id, kind, (l) => (l.includes(i) ? l.filter((x) => x !== i) : [...l, i]));
+  const markDone = (id, i) => changeMarks(id, "steps", (l) => (l.includes(i) ? l : [...l, i]));
+  const clearMarks = (id) => setCrossed(({ [id]: _gone, ...rest }) => rest);
+  /* cooking picks up where you left off, or at the top if nothing is done */
+  const firstOpenStep = (r) => {
+    const done = marksFor(r.id).steps;
+    const i = r.steps.findIndex((_, k) => !done.includes(k));
+    return i < 0 ? 0 : i;
+  };
+
+  /* Moving on from a step means it is done — the Next button and the arrow key
+     alike. Jumping about on the progress bar is only looking, and marks nothing. */
+  const nextStep = useCallback(() => {
+    if (openRecipe) markDone(openRecipe.id, stepIndex);
+    setStepIndex(Math.min(stepIndex + 1, (openRecipe?.steps.length || 1) - 1));
+  }, [openRecipe, stepIndex]);
   const prevStep = useCallback(() => setStepIndex((i) => Math.max(i - 1, 0)), []);
   useEffect(() => {
     if (!cooking) return;
@@ -1516,12 +1744,7 @@ export default function RecipeBox() {
     setEditingId(r.id); setView("form");
   };
 
-  const applyPaste = () => {
-    if (!pasteText.trim()) return;
-    let p;
-    try { p = /^[[{]/.test(pasteText.trim()) ? parseJSON(pasteText)[0] : parseMarkdown(pasteText); }
-    catch { p = parseMarkdown(pasteText); }
-    if (!p) return flash("Couldn't make sense of that text");
+  const fillFormFrom = (p) =>
     setForm((f) => ({
       ...f,
       title: p.title || f.title, contributor: p.contributor || f.contributor, description: p.description || f.description,
@@ -1532,7 +1755,59 @@ export default function RecipeBox() {
       stepText: p.steps.length ? p.steps.map(stepLine).join("\n") : f.stepText,
       notes: p.notes || f.notes, nutrition: p.nutrition || f.nutrition,
     }));
+
+  const applyPaste = () => {
+    const text = pasteText.trim();
+    if (!text) return;
+    /* a bare address in the paste box means "go and get it" */
+    if (looksLikeUrl(text)) { setPasteText(""); importFromLink(text); return; }
+    let p;
+    try { p = /^[[{]/.test(text) ? parseJSON(pasteText)[0] : parseMarkdown(pasteText); }
+    catch { p = parseMarkdown(pasteText); }
+    if (!p) return flash("Couldn't make sense of that text");
+    fillFormFrom(p);
     setPasteText("");
+  };
+
+  /* Fills the form rather than saving: a recipe from someone else's site is
+     worth a look before it joins the family box. */
+  const importFromLink = async (raw) => {
+    const url = String(raw || "").trim();
+    if (!looksLikeUrl(url)) return flash("That doesn't look like a web address — it should start with https://", 7000);
+    const ask = (body) =>
+      fetch("/api/fetch-recipe", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin",
+      });
+    setLinkBusy(true);
+    try {
+      const res = await ask({ url });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.recipe) return flash(data.error || `Couldn't fetch that page (${res.status})`, 7000);
+      const from = data.url || url;
+      const p = fromSchemaRecipe(data.recipe, from);
+      if (!p) return flash("That page has a recipe, but not one this could read — try the paste box", 7000);
+      fillFormFrom(p);
+      setLinkText("");
+      /* the photo is optional: a recipe without one is still worth having */
+      const src = schemaImage(data.recipe.image, from);
+      let gotPhoto = false;
+      if (src) {
+        try {
+          const img = await ask({ url: src, kind: "image" });
+          if (img.ok) {
+            const { full, thumb } = await prepPhoto(await img.blob());
+            setForm((f) => ({ ...f, thumb, full, photoTouched: true }));
+            gotPhoto = true;
+          }
+        } catch { /* keep the recipe, skip the photo */ }
+      }
+      const host = new URL(from).hostname.replace(/^www\./, "");
+      flash(`Filled in from ${host}${src && !gotPhoto ? " (the photo wouldn't come through)" : ""} — check it over, then add it`, 5000);
+    } catch {
+      flash("Couldn't reach that page — check the link and your connection", 7000);
+    } finally {
+      setLinkBusy(false);
+    }
   };
 
   const pickPhoto = async (file) => {
@@ -1572,6 +1847,7 @@ export default function RecipeBox() {
       nutrition: cleanNutrition(form.nutrition),
     };
     persist({ ...box, recipes: editingId ? box.recipes.map((r) => (r.id === editingId ? recipe : r)) : [recipe, ...box.recipes] });
+    if (editingId) clearMarks(editingId);   // an edit can reorder lines; old ticks would point at the wrong ones
 
     if (form.photoTouched) {
       (async () => {
@@ -1651,6 +1927,7 @@ export default function RecipeBox() {
       .rb-detail > div + div { margin-top: 30px; }
       /* Never split one ingredient, one step, or the notes block in half. */
       .rb-detail li, .rb-notes, .rb-nutrition { break-inside: avoid; page-break-inside: avoid; }
+      .rb-done, .rb-done * { opacity: 1 !important; text-decoration: none !important; }
       /* Never strand a heading at the foot of a page. */
       h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
       p { orphans: 3; widows: 3; }
@@ -1727,6 +2004,9 @@ export default function RecipeBox() {
           hasTimer={hasTimer}
           prevStep={prevStep}
           nextStep={nextStep}
+          marks={marksFor(openRecipe.id)}
+          onToggle={(kind, i) => toggleMark(openRecipe.id, kind, i)}
+          onFinish={() => { markDone(openRecipe.id, stepIndex); setCooking(false); }}
         />
       )}
 
@@ -2236,7 +2516,7 @@ export default function RecipeBox() {
                 <button
                   className="rb-btn rb-focus"
                   style={btnPrimary}
-                  onClick={() => { setStepIndex(0); setShowPantry(false); setCooking(true); }}
+                  onClick={() => { setStepIndex(firstOpenStep(openRecipe)); setShowPantry(false); setCooking(true); }}
                 >
                   Start cooking
                 </button>
@@ -2252,20 +2532,36 @@ export default function RecipeBox() {
                       {openRecipe.time && <div>{openRecipe.time}</div>}
                     </div>
                   )}
-                  <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 14px", color: "var(--card-text)" }}>Ingredients</h3>
+                  <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 4px", color: "var(--card-text)" }}>Ingredients</h3>
+                  <p className="rb-noprint" style={{ font: `400 12px/1.5 ${UI}`, color: "var(--card-muted)", margin: "0 0 10px" }}>
+                    {marks.ing.length ? (
+                      <>
+                        {marks.ing.length} of {openRecipe.ingredients.length} in ·{" "}
+                        <button type="button" className="rb-focus" style={linkButton} onClick={() => changeMarks(openRecipe.id, "ing", () => [])}>clear</button>
+                      </>
+                    ) : "Tap each one as it goes in."}
+                  </p>
                   <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                     {openRecipe.ingredients.map((ing, i) => {
                       const [qty, rest] = splitQty(scaleLine(ing, factor));
+                      const got = marks.ing.includes(i);
+                      const strike = got ? "line-through" : "none";
                       return (
-                        <li
-                          key={i}
-                          style={{
-                            display: "grid", gridTemplateColumns: qty ? "auto 1fr" : "1fr", gap: 12,
-                            padding: "9px 0", borderBottom: `1px solid var(--card-edge)`, alignItems: "baseline",
-                          }}
-                        >
-                          {qty && <span className="rb-num" style={{ fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap" }}>{qty}</span>}
-                          <span style={{ font: `400 14.5px/1.5 ${UI}`, color: "var(--card-text)" }}>{rest}</span>
+                        <li key={i} style={{ borderBottom: `1px solid var(--card-edge)` }}>
+                          <button
+                            type="button"
+                            className={`rb-focus${got ? " rb-done" : ""}`}
+                            aria-pressed={got}
+                            onClick={() => toggleMark(openRecipe.id, "ing", i)}
+                            style={{
+                              display: "grid", gridTemplateColumns: qty ? "auto 1fr" : "1fr", gap: 12, alignItems: "baseline",
+                              width: "100%", padding: "9px 0", background: "none", border: "none", textAlign: "left", cursor: "pointer",
+                              opacity: got ? 0.45 : 1, transition: "opacity 150ms ease",
+                            }}
+                          >
+                            {qty && <span className="rb-num" style={{ fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap", textDecoration: strike }}>{qty}</span>}
+                            <span style={{ font: `400 14.5px/1.5 ${UI}`, color: "var(--card-text)", textDecoration: strike }}>{rest}</span>
+                          </button>
                         </li>
                       );
                     })}
@@ -2314,14 +2610,47 @@ export default function RecipeBox() {
                 </div>
 
                 <div>
-                  <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 18px", color: "var(--card-text)" }}>Method</h3>
+                  <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 4px", color: "var(--card-text)" }}>Method</h3>
+                  <p className="rb-noprint" style={{ font: `400 12px/1.5 ${UI}`, color: "var(--card-muted)", margin: "0 0 14px" }}>
+                    {marks.steps.length ? (
+                      <>
+                        {marks.steps.length} of {openRecipe.steps.length} done ·{" "}
+                        <button type="button" className="rb-focus" style={linkButton} onClick={() => changeMarks(openRecipe.id, "steps", () => [])}>clear</button>
+                      </>
+                    ) : "Tap a step when it's done."}
+                  </p>
                   <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
                     {openRecipe.steps.map((s, i) => {
                       const { title, text } = stepParts(s);
                       const secs = stepDuration(s);
+                      const done = marks.steps.includes(i);
+                      const current = i === currentStep;
                       return (
-                        <li key={i} style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, marginBottom: 24 }}>
-                          <span className="rb-num" style={{ fontSize: 26, color: "var(--card-edge)", lineHeight: 1.15, textAlign: "right", paddingRight: 4 }}>{i + 1}</span>
+                        <li
+                          key={i}
+                          className={done ? "rb-done" : undefined}
+                          /* the whole step is the target — a kitchen tap is not precise — but not
+                             its timer button, and not while you are selecting text to copy */
+                          onClick={(e) => {
+                            if (e.target.closest("button") || window.getSelection()?.toString()) return;
+                            toggleMark(openRecipe.id, "steps", i);
+                          }}
+                          style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, marginBottom: 24, cursor: "pointer", opacity: done ? 0.45 : 1, transition: "opacity 150ms ease" }}
+                        >
+                          <button
+                            type="button"
+                            className="rb-focus rb-num"
+                            aria-pressed={done}
+                            aria-label={`Step ${i + 1} done`}
+                            onClick={() => toggleMark(openRecipe.id, "steps", i)}
+                            style={{
+                              background: "none", border: "none", padding: "0 4px 0 0", cursor: "pointer", alignSelf: "start",
+                              fontSize: 26, lineHeight: 1.15, textAlign: "right",
+                              color: done || current ? "var(--card-accent)" : "var(--card-edge)",
+                            }}
+                          >
+                            {done ? "✓" : i + 1}
+                          </button>
                           <div style={{ maxWidth: "64ch" }}>
                             {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
                             <p style={{ font: `400 16.5px/1.75 ${DISPLAY}`, color: "var(--card-text)", margin: 0 }}>{scaleText(text, factor)}</p>
@@ -2415,6 +2744,31 @@ export default function RecipeBox() {
 
               {!editingId && (
                 <div style={{ background: "var(--card-lift)", border: `1px solid var(--card-edge)`, padding: "18px 20px", marginBottom: 28 }}>
+                  <p style={{ font: `600 14px/1.4 ${UI}`, color: "var(--card-text)", margin: "0 0 4px" }}>Import from a link</p>
+                  <p style={{ font: `400 13px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>
+                    Paste the address of a recipe page. Most recipe sites publish their recipes in a form this can read; a few refuse outright.
+                  </p>
+                  <form
+                    noValidate
+                    onSubmit={(e) => { e.preventDefault(); importFromLink(linkText); }}
+                    style={{ display: "flex", gap: 10, flexWrap: "wrap" }}
+                  >
+                    <input
+                      type="url"
+                      inputMode="url"
+                      className="rb-focus"
+                      style={{ ...input, flex: "1 1 240px", width: "auto" }}
+                      value={linkText}
+                      onChange={(e) => setLinkText(e.target.value)}
+                      placeholder="https://www.bbcgoodfood.com/recipes/…"
+                      aria-label="Recipe page address"
+                      disabled={linkBusy}
+                    />
+                    <button type="submit" className="rb-btn rb-focus" style={btnQuiet} disabled={linkBusy || !linkText.trim()}>
+                      {linkBusy ? "Fetching…" : "Get recipe"}
+                    </button>
+                  </form>
+                  <div style={{ borderTop: `1px solid var(--card-edge)`, margin: "18px 0 16px" }} />
                   <p style={{ font: `600 14px/1.4 ${UI}`, color: "var(--card-text)", margin: "0 0 4px" }}>Paste a recipe</p>
                   <p style={{ font: `400 13px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>Markdown or JSON both work. Or drag a file anywhere on the page instead.</p>
                   <textarea
