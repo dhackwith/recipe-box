@@ -322,9 +322,11 @@ const scaleServings = (s, factor) => {
 
 /* ══════════════════════════════════════════════════════════════════
    Shopping list
-   One list for the household, under its own key: ticking off milk must not
-   re-save every recipe and photo, and the list is written far more often than
-   the box. Each item keeps the lines that fed it, recipe by recipe, so adding
+   Each person's own list, stored under their Cloudflare Access identity the
+   way their theme is, and apart from the box: ticking off milk must not re-save
+   every recipe and photo. Being one person's, it is only ever written from one
+   person's devices, so two people shopping at once cannot overwrite each
+   other. Each item keeps the lines that fed it, recipe by recipe, so adding
    a recipe again replaces its share instead of doubling it, and taking one off
    removes exactly what it put on.
    ══════════════════════════════════════════════════════════════════ */
@@ -438,17 +440,26 @@ function describeItem(item) {
 const itemRecipes = (item, list) =>
   [...new Set(item.sources.map((src) => list.recipes[src.recipeId]?.title).filter(Boolean))];
 
+/* The list used to be shared by the family. Until someone has a list of their
+   own it starts as a copy of that old family list, so nothing on it vanishes;
+   the first change saves it as theirs. The family list itself is left alone. */
 async function loadList() {
   if (typeof window === "undefined" || !window.storage) return null;
-  try {
-    const res = await window.storage.get(LIST_KEY, true);
-    const data = JSON.parse(res.value);
-    return data && Array.isArray(data.items) ? { items: data.items, recipes: data.recipes || {} } : { ...EMPTY_LIST };
-  } catch (err) {
-    /* A missing key is an empty list. Anything else is a failed read, and must
-       not be mistaken for one — that would wipe the list on screen. */
-    return /not found/i.test(String(err && err.message)) ? { ...EMPTY_LIST } : null;
-  }
+  const read = async (shared) => {
+    try {
+      const res = await window.storage.get(LIST_KEY, shared);
+      const data = JSON.parse(res.value);
+      return data && Array.isArray(data.items) ? { items: data.items, recipes: data.recipes || {} } : { ...EMPTY_LIST };
+    } catch (err) {
+      /* A missing key is "nothing here yet". Anything else is a failed read, and
+         must not be mistaken for an empty list — that would wipe the one on screen. */
+      return /not found/i.test(String(err && err.message)) ? undefined : null;
+    }
+  };
+  const mine = await read(false);
+  if (mine !== undefined) return mine;
+  const family = await read(true);
+  return family === undefined ? { ...EMPTY_LIST } : family;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1663,7 +1674,7 @@ export default function RecipeBox() {
   const writeList = async () => {
     if (listSaving.current) { listDirty.current = true; return; }
     listSaving.current = true;
-    try { await window.storage?.set(LIST_KEY, JSON.stringify(listRef.current), true); }
+    try { await window.storage?.set(LIST_KEY, JSON.stringify(listRef.current), false); }
     catch { flash("Couldn't save the shopping list — it will retry on your next change"); }
     finally {
       listSaving.current = false;
@@ -1691,8 +1702,9 @@ export default function RecipeBox() {
     return () => document.removeEventListener("visibilitychange", flush);
   }, []);
 
-  /* Refetch on the way in so other people's additions show up — unless there
-     are local changes still waiting to be written, which a refetch would undo. */
+  /* Refetch on the way in so changes made on your other devices show up —
+     unless there are local changes still waiting to be written, which a
+     refetch would undo. */
   const openShopping = async () => {
     if (view !== "shopping") shoppingFrom.current = view;
     setConfirmClear(false);
@@ -2631,7 +2643,7 @@ export default function RecipeBox() {
                     : list.items.length
                     ? "Everything is in the basket."
                     : "Nothing on it yet. Open a recipe and add it, or type something below."}
-                  {" "}One list for the whole family — anyone can add to it or tick things off.
+                  {" "}This list is just yours — nobody else sees it.
                 </p>
 
                 <form
@@ -2691,7 +2703,7 @@ export default function RecipeBox() {
                     <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => window.print()}>Print</button>
                     {confirmClear ? (
                       <span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        <span style={{ font: `500 13.5px/1.4 ${UI}`, color: "var(--card-danger)" }}>Empty it for everyone?</span>
+                        <span style={{ font: `500 13.5px/1.4 ${UI}`, color: "var(--card-danger)" }}>Empty your list?</span>
                         <button
                           className="rb-btn rb-focus"
                           style={{ ...btnQuiet, background: "var(--card-danger)", color: T.inkDeep, borderColor: "var(--card-danger)" }}
