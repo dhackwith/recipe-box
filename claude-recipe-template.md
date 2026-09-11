@@ -68,8 +68,19 @@ output will import without touching a single field by hand.
 > - Omit `unit` for countable things and fold the noun into `name` ("3 garlic cloves"
 >   → `amount: 3`, `name: "garlic cloves"`).
 > - Give every ingredient an `id`, and reference it in steps as `{id}`.
-> - Set `timer_seconds` on **every** step that involves waiting, or on none at all.
->   Declaring it on some steps but not others suppresses timers on the rest.
+> - Give `timer_seconds` to **every** step with a definite duration, and not only the
+>   long unattended ones. "Blend for 60 seconds", "whisk 90 seconds", "sear 2 minutes a
+>   side", "knead 5 minutes" and "rest 10 minutes" all earn a button — a cook with wet
+>   hands would far rather tap one than find a clock.
+> - Write the duration into `content` as well. The prose has to read properly on its
+>   own, and the two must agree: 60 seconds in the text, `timer_seconds: 60` beside it.
+> - If a step has a duration, pin it down. "Blend until smooth" helps nobody hold a
+>   blender; "blend for 60 seconds, until no flecks of skin are left" does.
+> - It is all or nothing. Declaring `timer_seconds` on some steps but not others
+>   suppresses the timers the site would otherwise read out of the prose on the rest,
+>   so give the steps that genuinely have no duration `timer_seconds: 0`.
+> - Durations left in the prose alone have to be 20 seconds or longer to be spotted.
+>   An explicit `timer_seconds` has no floor, so declare anything shorter.
 > - `servings` must be a bare number — it drives the serving-size scaler.
 > - List `equipment` for anything beyond a knife and a bowl, including measuring tools.
 > - Work out `nutrition` yourself: take each ingredient at the amount listed, look up
@@ -188,12 +199,15 @@ steps:
     timer_seconds: 900
   - id: "s2"
     title: "Mix dry, then wet"
-    content: "Whisk {cornmeal} and {flour} together. In a second bowl beat {eggs} into
+    content: "Whisk {cornmeal} and {flour} together for 90 seconds — cornmeal clumps, and
+      the lumps you leave here are the lumps you eat. In a second bowl beat {eggs} into
       {buttermilk}, then add {honey} if using."
+    timer_seconds: 90
   - id: "s3"
     title: "Melt and combine"
     content: "Pull the skillet out, melt {butter} in it, and pour most of the butter into
       the wet bowl, leaving a slick behind. Combine wet and dry until just mixed."
+    timer_seconds: 0
   - id: "s4"
     title: "Bake"
     content: "Pour the batter into the hot skillet — it should hiss. Bake until the top
@@ -222,7 +236,7 @@ passable substitute but the crumb will be tighter.
 | `ingredients[]` | `amount` + `unit` + `name`, rendered as fractions (`0.75` → `¾`), pluralized above 1, `optional: true` appends "(optional)" |
 | `steps[].title` | Headline in cooking mode |
 | `steps[].content` | The instruction; `{id}` resolves to the full ingredient |
-| `steps[].timer_seconds` | A one-tap timer button |
+| `steps[].timer_seconds` | A one-tap timer button, at any length — `60` for a blend, `1200` for a bake. `0` means this step has no duration |
 | `nutrition` | The "Nutrition" panel under the ingredients, as an estimated per-serving label. Accepts `saturated_fat`, `saturatedFat` or `saturatedFatContent`; only the rows you supply are drawn |
 | Body prose | Notes, with `#` and `**` stripped |
 | Anything else | Parsed and discarded — `slug`, `scalable` included |
@@ -264,9 +278,10 @@ A Sunday recipe.
 Better on day two.
 ```
 
-Quantities still scale, and durations in the step text ("8 minutes", "2 hours") are
-detected as timers automatically since no `timer_seconds` is declared anywhere. What
-you give up is `{id}` substitution and per-step control over which timers exist.
+Quantities still scale, and durations in the step text ("8 minutes", "2 hours", "45
+seconds") are detected as timers automatically, since no `timer_seconds` is declared
+anywhere — though anything under 20 seconds is passed over. What you give up is `{id}`
+substitution and per-step control over which timers exist.
 
 `nutrition` works here too — it is read from the frontmatter either way, and a partial
 block like the one above is fine.

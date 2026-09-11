@@ -1197,13 +1197,22 @@ function Popover({ trigger, children, align = "left", width = 300, label, onOpen
   );
 }
 
-function Field({ label, hint, children }) {
+/* A field is a <label>, which is what makes its whole block a click target for the
+   one input inside it — right for a text box, wrong for a row of buttons, where it
+   meant that clicking anywhere in the Photo row, even far out to the right of the
+   button, opened the file picker. Fields holding controls rather than a single
+   input pass `group` and get a named <div>, which nothing clicks through. */
+function Field({ label, hint, children, group }) {
+  const Tag = group ? "div" : "label";
   return (
-    <label style={{ display: "block", marginBottom: 20 }}>
+    <Tag
+      {...(group ? { role: "group", "aria-label": label } : {})}
+      style={{ display: "block", marginBottom: 20 }}
+    >
       <span style={{ display: "block", font: `600 13px/1.4 ${UI}`, color: "var(--card-text)", marginBottom: 2 }}>{label}</span>
       {hint && <span style={{ display: "block", font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", marginBottom: 7 }}>{hint}</span>}
       {children}
-    </label>
+    </Tag>
   );
 }
 
@@ -3275,7 +3284,7 @@ export default function RecipeBox() {
                 <input className="rb-focus" style={input} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
               </Field>
 
-              <Field label="Photo" hint="Optional. Resized in your browser before it's saved — originals never leave your device at full size.">
+              <Field label="Photo" group hint="Optional. Resized in your browser before it's saved — originals never leave your device at full size.">
                 <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
                   {form.thumb ? (
                     <img
@@ -3345,7 +3354,7 @@ export default function RecipeBox() {
                   onChange={(e) => setForm({ ...form, equipmentText: e.target.value })} />
               </Field>
 
-              <Field label="Steps" hint={'One per line. Write "Short title: the actual instruction" and the title shows in cooking mode. Any duration you mention becomes a timer.'}>
+              <Field label="Steps" hint={'One per line. Write "Short title: the actual instruction" and the title shows in cooking mode. Any duration you mention becomes a timer — "blend 60 seconds" as readily as "bake 40 minutes".'}>
                 <textarea className="rb-focus" rows={8} style={input} value={form.stepText} onChange={(e) => setForm({ ...form, stepText: e.target.value })} />
               </Field>
 
