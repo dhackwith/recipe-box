@@ -2,6 +2,42 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 /* ?raw inlines the file at build time — the button hands out exactly the
    template that is committed alongside this component. */
 import TEMPLATE_MD from "../claude-recipe-template.md?raw";
+import CHANGELOG_MD from "../CHANGELOG.md?raw";
+
+/* ══════════════════════════════════════════════════════════════════
+   What's new
+   Read out of CHANGELOG.md at build time, so a change and the sentence
+   describing it are committed together and cannot drift apart. A
+   "## 2026-09-11" line opens a dated group and every "- " line beneath it is
+   one change, with an optional "**Headline.**" to start it. Everything else —
+   the note at the top of the file explaining the format — is passed over, so
+   the file still reads as a file.
+   ══════════════════════════════════════════════════════════════════ */
+function parseChangelog(md) {
+  const days = [];
+  for (const line of String(md).split("\n")) {
+    const day = line.match(/^##\s+(\d{4}-\d{2}-\d{2})\s*$/);
+    if (day) { days.push({ date: day[1], changes: [] }); continue; }
+    const change = line.match(/^-\s+(.*\S)\s*$/);
+    if (!change || !days.length) continue;
+    const lead = change[1].match(/^\*\*(.+?)\*\*\s*(.*)$/);
+    days[days.length - 1].changes.push(
+      lead ? { title: lead[1], text: lead[2] } : { title: "", text: change[1] },
+    );
+  }
+  return days.filter((d) => d.changes.length);
+}
+
+const CHANGELOG = parseChangelog(CHANGELOG_MD);
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+  "August", "September", "October", "November", "December"];
+/* Split by hand rather than through Date, which reads a bare YYYY-MM-DD as UTC
+   midnight and would show the day before to anyone west of Greenwich. */
+const prettyDate = (iso) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return MONTHS[m - 1] ? `${MONTHS[m - 1]} ${d}, ${y}` : iso;
+};
 
 /* ══════════════════════════════════════════════════════════════════
    Tokens
@@ -2412,7 +2448,30 @@ export default function RecipeBox() {
               </button>
             )}
           >
-            {(close) => menuPane === "theme" ? (
+            {(close) => menuPane === "news" ? (
+              <>
+                <button className="rb-focus" onClick={() => setMenuPane("main")} style={{ ...menuRow(false), color: "var(--card-accent)", fontWeight: 600, marginBottom: 4 }}>
+                  <span>‹ Back</span>
+                </button>
+                <p style={menuLabel}>What's new</p>
+                {CHANGELOG.map((day) => (
+                  <div key={day.date} style={{ margin: "0 4px 16px" }}>
+                    <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".05em", textTransform: "uppercase", color: "var(--card-accent)", margin: "0 0 7px" }}>
+                      {prettyDate(day.date)}
+                    </p>
+                    {day.changes.map((c, n) => (
+                      <p key={n} style={{ font: `400 12.5px/1.55 ${UI}`, color: "var(--card-muted)", margin: "0 0 8px" }}>
+                        {c.title && <span style={{ color: "var(--card-text)", fontWeight: 600 }}>{c.title} </span>}
+                        {c.text}
+                      </p>
+                    ))}
+                  </div>
+                ))}
+                {!CHANGELOG.length && (
+                  <p style={{ font: `400 12.5px/1.55 ${UI}`, color: "var(--card-muted)", margin: "0 4px" }}>Nothing noted down yet.</p>
+                )}
+              </>
+            ) : menuPane === "theme" ? (
               <>
                 <button className="rb-focus" onClick={() => setMenuPane("main")} style={{ ...menuRow(false), color: "var(--card-accent)", fontWeight: 600, marginBottom: 4 }}>
                   <span>‹ Back</span>
@@ -2453,6 +2512,12 @@ export default function RecipeBox() {
                 <button className="rb-focus" onClick={() => { exportAll(); close(); }} disabled={exporting} style={menuRow(false)}>
                   <span>{exporting ? "Exporting…" : "Export all recipes"}</span>
                   <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>backup</span>
+                </button>
+                <button className="rb-focus" onClick={() => setMenuPane("news")} style={menuRow(false)}>
+                  <span>What's new</span>
+                  <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>
+                    {CHANGELOG.length ? prettyDate(CHANGELOG[0].date) : ""} ›
+                  </span>
                 </button>
               </>
             )}
