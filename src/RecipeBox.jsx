@@ -326,16 +326,17 @@ const scaleServings = (s, factor) => {
 
 /* ══════════════════════════════════════════════════════════════════
    Shopping list
-   One list per device, kept in this browser's localStorage — not in the
-   account and not in KV. A phone and a laptop each have their own, and nothing
-   syncs between them. It also means no server round trip and no save delay:
-   a tick is saved the moment it happens. Each item keeps the lines that fed it,
+   One list per person, following them between their own devices and visible to
+   nobody else. localStorage is still where a change lands first — instantly, so
+   a tick survives a phone locking mid-shop and needs no signal — and the copy
+   in the account is a sync channel layered over that, not the truth.
+   Each item keeps the lines that fed it,
    recipe by recipe, so adding
    a recipe again replaces its share instead of doubling it, and taking one off
    removes exactly what it put on.
    ══════════════════════════════════════════════════════════════════ */
 const LIST_KEY = "rb-shopping-list";
-const EMPTY_LIST = { items: [], recipes: {} };
+const EMPTY_LIST = { items: [], recipes: {}, tombstones: {} };
 
 const UNIT_CANON = {
   cups: "cup", tbsps: "tbsp", tablespoon: "tbsp", tablespoons: "tbsp", tsps: "tsp", teaspoon: "tsp",
@@ -444,15 +445,87 @@ function describeItem(item) {
 const itemRecipes = (item, list) =>
   [...new Set(item.sources.map((src) => list.recipes[src.recipeId]?.title).filter(Boolean))];
 
-/* Lists kept in the account before this — first one for the family, then one
-   per person — are left in KV untouched; a device simply starts empty. */
+const asStoredList = (data) =>
+  data && Array.isArray(data.items)
+    ? { items: data.items, recipes: data.recipes || {}, tombstones: data.tombstones || {} }
+    : null;
+
+/* The family-wide list from the first build is still in KV under its old key,
+   untouched and no longer read. This is only ever the one on this device. */
 function loadList() {
   try {
-    const data = JSON.parse(localStorage.getItem(LIST_KEY) || "null");
-    return data && Array.isArray(data.items) ? { items: data.items, recipes: data.recipes || {} } : { ...EMPTY_LIST };
+    return asStoredList(JSON.parse(localStorage.getItem(LIST_KEY) || "null")) || { ...EMPTY_LIST };
   } catch {
     return { ...EMPTY_LIST };
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Syncing a list between one person's devices
+   The account copy sits under a key the server namespaces to the verified
+   signed-in email, so nobody else can read or write it. Writes are debounced:
+   a shop's worth of ticking costs a couple of them rather than thirty, which is
+   what keeps this inside KV's free allowance.
+
+   Merging is the whole difficulty. The realistic conflict is not two people
+   racing for one item — it is someone adding things at home while someone else
+   ticks things off at the shop. Last-write-wins across the whole list throws
+   one of those away, so instead every item records when it last changed, every
+   deletion leaves a tombstone behind, and the newer fact wins item by item.
+   ══════════════════════════════════════════════════════════════════ */
+const SYNC_KEY = "grocery-list";
+const SYNC_DEBOUNCE = 2000;
+const TOMBSTONE_LIFE = 7 * 24 * 60 * 60 * 1000;   // outlives a weekly shop
+
+/* an item's content, ignoring when it last changed */
+const itemBody = (i) => JSON.stringify({ ...i, updatedAt: undefined });
+
+/* Date whatever a change actually touched and record whatever it removed, so
+   that none of the list operations above have to know that syncing exists. */
+function stamp(prev, next, now = Date.now()) {
+  const before = new Map(prev.items.map((i) => [i.id, i]));
+  const items = next.items.map((i) => {
+    const was = before.get(i.id);
+    return was && i.updatedAt && itemBody(was) === itemBody(i) ? i : { ...i, updatedAt: now };
+  });
+  const alive = new Set(items.map((i) => i.id));
+  const tombstones = { ...prev.tombstones, ...next.tombstones };
+  for (const id of before.keys()) if (!alive.has(id)) tombstones[id] = now;
+  for (const [id, at] of Object.entries(tombstones)) {
+    if (alive.has(id) || now - at > TOMBSTONE_LIFE) delete tombstones[id];
+  }
+  return { ...next, items, tombstones };
+}
+
+/* Two versions of one person's list, reconciled item by item. */
+function mergeLists(mine, theirs) {
+  const tombstones = { ...mine.tombstones };
+  for (const [id, at] of Object.entries(theirs.tombstones)) {
+    tombstones[id] = Math.max(tombstones[id] || 0, at);
+  }
+
+  const byId = new Map();
+  for (const i of [...mine.items, ...theirs.items]) {
+    const held = byId.get(i.id);
+    if (!held || (i.updatedAt || 0) > (held.updatedAt || 0)) byId.set(i.id, i);
+  }
+  /* A deletion only beats the version of the item it deleted. Editing that item
+     afterwards on another device is a deliberate act, and brings it back. */
+  const items = [...byId.values()].filter((i) => !(tombstones[i.id] >= (i.updatedAt || 0)));
+
+  /* Recipe titles are only ever read through the items that came from them. */
+  const live = new Set(items.flatMap((i) => i.sources.map((src) => src.recipeId)));
+  const recipes = Object.fromEntries(
+    Object.entries({ ...theirs.recipes, ...mine.recipes }).filter(([id]) => live.has(id)),
+  );
+
+  /* This device's order is the familiar one; anything new lands underneath. */
+  const order = new Map();
+  mine.items.forEach((i, n) => order.set(i.id, n));
+  theirs.items.forEach((i, n) => { if (!order.has(i.id)) order.set(i.id, mine.items.length + n); });
+  items.sort((x, y) => order.get(x.id) - order.get(y.id));
+
+  return { items, recipes, tombstones };
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1667,14 +1740,87 @@ export default function RecipeBox() {
   };
 
   /* Saved to the device on every change — synchronous, so there is nothing to
-     debounce and nothing that can be lost when a phone locks mid-shop. */
+     debounce and nothing that can be lost when a phone locks mid-shop. The
+     copy in the account follows a couple of seconds behind. */
+  const writeLocal = (l) => {
+    try { localStorage.setItem(LIST_KEY, JSON.stringify(l)); return true; }
+    catch { return false; }
+  };
+
   const updateList = (change) => {
-    const next = change(listRef.current);
+    const next = stamp(listRef.current, change(listRef.current));
     listRef.current = next;
     setList(next);
-    try { localStorage.setItem(LIST_KEY, JSON.stringify(next)); }
-    catch { flash("Couldn't save the shopping list on this device — its storage may be full or switched off", 7000); }
+    if (!writeLocal(next)) flash("Couldn't save the shopping list on this device — its storage may be full or switched off", 7000);
+    queueSync();
   };
+
+  /* ── The same list on this person's other devices ──────────────────
+     One exchange: read what the account holds, fold it together with what is
+     here, write the result back. Reading before writing is what stops a phone
+     that has been asleep in a pocket from wiping out a morning's additions on
+     the laptop. Nothing is written when nothing differs, so a tab left open
+     costs no writes at all. */
+  const syncTimer = useRef(null);
+  const syncing = useRef(false);
+  const syncAgain = useRef(false);
+  const [listSync, setListSync] = useState("unknown");   // unknown | synced | device
+
+  const syncList = useCallback(async () => {
+    /* Changes can outrun a round trip; collapse them into one more pass. */
+    if (syncing.current) { syncAgain.current = true; return; }
+    syncing.current = true;
+    try {
+      let theirs = null;
+      try {
+        theirs = asStoredList(JSON.parse((await window.storage.get(SYNC_KEY)).value));
+      } catch (err) {
+        /* Nothing stored yet is an ordinary first run, not a failure — and it
+           is the moment a list built before any of this gets carried up. */
+        if (!/not found/i.test(String(err && err.message))) throw err;
+      }
+
+      const mine = listRef.current;
+      const merged = theirs ? mergeLists(mine, theirs) : mine;
+      if (JSON.stringify(merged) !== JSON.stringify(mine)) {
+        listRef.current = merged;
+        setList(merged);
+        writeLocal(merged);
+      }
+      if (!theirs || JSON.stringify(merged) !== JSON.stringify(theirs)) {
+        await window.storage.set(SYNC_KEY, JSON.stringify(merged));
+      }
+      setListSync("synced");
+    } catch {
+      /* Offline, or Access would not vouch for us. The device's own copy is
+         untouched, and the next change or the next visit tries again. */
+      setListSync("device");
+    } finally {
+      syncing.current = false;
+      if (syncAgain.current) { syncAgain.current = false; syncList(); }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const queueSync = () => {
+    clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(syncList, SYNC_DEBOUNCE);
+  };
+
+  /* On arrival, and again whenever the tab comes back — waking a phone at the
+     shop is exactly when another device's changes matter. KV answers reads from
+     a ~60s edge cache, so a change made elsewhere can take about a minute to
+     surface no matter how often this asks. */
+  useEffect(() => {
+    syncList();
+    const onWake = () => { if (document.visibilityState === "visible") syncList(); };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+      clearTimeout(syncTimer.current);
+    };
+  }, [syncList]);
 
   /* two tabs on one device share its list, so a change in one shows in the other */
   useEffect(() => {
@@ -2716,7 +2862,11 @@ export default function RecipeBox() {
                     : list.items.length
                     ? "Everything is in the basket."
                     : "Nothing on it yet. Open a recipe and add it, or type something below."}
-                  {" "}This list lives on this device — your phone and your computer each keep their own.
+                  {listSync === "synced"
+                    ? " It follows you between your own devices, and nobody else can see it."
+                    : listSync === "device"
+                    ? " Saved on this device. It couldn't reach your account just now, so it will catch up later."
+                    : ""}
                 </p>
 
                 <form
