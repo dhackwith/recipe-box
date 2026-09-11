@@ -20,6 +20,79 @@ const T = {
   muted: "#6B6450",
 };
 
+/* Colour themes for the page behind the recipe cards. Light and dark mode
+   still decide the cards themselves; a theme sets the backdrop, the text and
+   buttons on it, the accent, and what dark-mode cards are tinted with.
+
+   Hackwith Teal reproduces the original colours exactly. Every other theme was
+   checked for contrast against it: the faint captions (45% opacity) come out
+   at least as readable as the teal's. `k` scales those opacities — dark ink at
+   45% over cream loses far more contrast than cream at 45% over dark teal, so
+   light themes lift their faint text rather than dropping below the rest. */
+const PALETTES = [
+  { id: "teal", name: "Hackwith Teal", soft: "#144043", bg: "#0B2F32", deep: "#061E21", ink: "#F7F2E6",
+    accent: "#E7A427", onAccent: "#061E21", darkCard: "#123B3F", darkLift: "#17494D", darkMuted: "#A3B3A9", k: 1 },
+  { id: "cast-iron", name: "Cast Iron", soft: "#33302D", bg: "#232120", deep: "#141312", ink: "#F2ECE0",
+    accent: "#D9955A", onAccent: "#1A1817", darkCard: "#2F2C2A", darkLift: "#3A3633", k: 1 },
+  { id: "sage", name: "Sage Garden", soft: "#304A38", bg: "#233629", deep: "#16241B", ink: "#F3EFE2",
+    accent: "#E8C872", onAccent: "#1A281F", darkCard: "#2E4535", darkLift: "#37523F", k: 1.12 },
+  { id: "terracotta", name: "Terracotta", soft: "#6E3121", bg: "#5A2417", deep: "#3C170E", ink: "#FBEFE4",
+    accent: "#F2C45A", onAccent: "#34140D", darkCard: "#693023", darkLift: "#77392A", k: 1.12 },
+  { id: "blue-willow", name: "Blue Willow", soft: "#27426B", bg: "#1C3152", deep: "#111F37", ink: "#F3F6FB",
+    accent: "#9CC4F2", onAccent: "#12213A", darkCard: "#243C62", darkLift: "#2C4770", k: 1 },
+  { id: "merlot", name: "Merlot", soft: "#5A2236", bg: "#47192A", deep: "#2C0E19", ink: "#F8ECE8",
+    accent: "#E7AE72", onAccent: "#2B0E18", darkCard: "#552131", darkLift: "#62283A", k: 1 },
+  { id: "butter", name: "Butter", soft: "#F8EDCB", bg: "#F3E4B5", deep: "#E6D194", ink: "#33261A",
+    accent: "#A2371F", onAccent: "#FFF8EC", darkCard: "#3B2F22", darkLift: "#47392A", k: 1.45, grain: 0.04 },
+  { id: "retro-mint", name: "Retro Mint", soft: "#D3EDE2", bg: "#BFE2D3", deep: "#A6D3C0", ink: "#172E29",
+    accent: "#A1222C", onAccent: "#FFF6F1", darkCard: "#1F3B35", darkLift: "#274740", k: 1.45, grain: 0.04 },
+  { id: "farmhouse", name: "Farmhouse", soft: "#F6F4EE", bg: "#EEEAE1", deep: "#DFD9CC", ink: "#262623",
+    accent: "#4C6746", onAccent: "#FBFAF6", darkCard: "#2F312C", darkLift: "#393C36", k: 1.45, grain: 0.035 },
+];
+/* Backgrounds, picked separately from the colours and shown as they are —
+   nothing tints the image. Readability comes from what sits on it instead:
+   buttons, box tiles, search and tags get a near-solid fill of the colour
+   theme's own background, and loose text gets a soft halo in the same colour
+   (see .rb-textured in the stylesheet). The fill is .94: the least that keeps
+   all 72 colour-and-texture pairings at the default teal's contrast over each
+   image's brightest and darkest spots.
+
+   Files live in public/themes and are served with the site, not from KV.
+   Sources — tiles are CC0 from Poly Haven (kitchen_wood, dark_wood,
+   waffle_pique_cotton, rough_linen, gingham_check), re-saved at JPEG 62;
+   photos are from Unsplash under its licence: Slate by Lakshya Soni, Flour
+   Dust by Patrick Fore (cropped to the dusted side), Floured Counter by
+   Benjamin Jauregui. */
+const TEXTURES = [
+  { id: "butcher-block", name: "Butcher Block", src: "/themes/butcher-block.jpg", thumb: "/themes/thumbs/butcher-block.jpg", tile: 512 },
+  { id: "mahogany", name: "Mahogany Board", src: "/themes/mahogany.jpg", thumb: "/themes/thumbs/mahogany.jpg", tile: 512 },
+  { id: "slate", name: "Slate", src: "/themes/slate.webp", thumb: "/themes/thumbs/slate.jpg" },
+  { id: "flour-dust", name: "Flour Dust", src: "/themes/flour-dust.webp", thumb: "/themes/thumbs/flour-dust.jpg" },
+  { id: "tea-towel", name: "Tea Towel", src: "/themes/tea-towel.jpg", thumb: "/themes/thumbs/tea-towel.jpg", tile: 400 },
+  { id: "blue-linen", name: "Blue Linen", src: "/themes/blue-linen.jpg", thumb: "/themes/thumbs/blue-linen.jpg", tile: 420 },
+  { id: "gingham", name: "Gingham", src: "/themes/gingham.jpg", thumb: "/themes/thumbs/gingham.jpg", tile: 360 },
+  { id: "floured-counter", name: "Floured Counter", src: "/themes/floured-counter.webp", thumb: "/themes/thumbs/floured-counter.jpg" },
+];
+const textureById = (id) => TEXTURES.find((t) => t.id === id) || null;
+const localTexture = () => { try { return localStorage.getItem("rb-texture"); } catch { return null; } };
+
+const paletteById = (id) => PALETTES.find((p) => p.id === id) || PALETTES[0];
+/* what the picker shows for a colour theme */
+const swatchFor = (p) =>
+  `radial-gradient(circle at 70% 30%, ${p.accent} 0 27%, transparent 28%), linear-gradient(160deg, ${p.soft}, ${p.deep})`;
+const hexRgb = (h) => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+/* card text blended toward the card, for the muted grey on dark-mode cards */
+const mixHex = (a, b, t) => `rgb(${hexRgb(a).map((v, i) => Math.round(v * t + hexRgb(b)[i] * (1 - t))).join(", ")})`;
+const paletteVars = (p) => ({
+  "--page-soft": p.soft, "--page-bg": p.bg, "--page-deep": p.deep, "--deep-rgb": hexRgb(p.deep).join(", "), "--bg-rgb": hexRgb(p.bg).join(", "),
+  "--on-page": hexRgb(p.ink).join(", "), "--ink-k": String(p.k),
+  "--page-accent": p.accent, "--accent-rgb": hexRgb(p.accent).join(", "), "--on-accent": p.onAccent,
+  "--dark-card-bg": p.darkCard, "--dark-card-lift": p.darkLift, "--dark-card-muted": p.darkMuted || mixHex("#EFE8D6", p.darkCard, 0.64),
+});
+/* Mirrored in localStorage as well as the account, so the page can paint the
+   right colours before the account has answered — see the script in index.html. */
+const localPalette = () => { try { return localStorage.getItem("rb-palette"); } catch { return null; } };
+
 const DISPLAY = "'Fraunces', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif";
 const UI = "'Karla', 'Avenir Next', 'Segoe UI', system-ui, -apple-system, sans-serif";
 const STORAGE_KEY = "recipe-box";
@@ -1018,8 +1091,8 @@ function Servings({ base, factor, setFactor, dark }) {
   if (!base) return null;
   const current = Math.max(1, Math.round(base * factor));
   const set = (n) => setFactor(Math.max(1, n) / base);
-  const fg = dark ? "rgba(247,242,230,.9)" : "var(--card-text)";
-  const line = dark ? "rgba(247,242,230,.3)" : "var(--card-edge)";
+  const fg = dark ? "rgba(var(--on-page), calc(.9 * var(--ink-k)))" : "var(--card-text)";
+  const line = dark ? "rgba(var(--on-page), calc(.3 * var(--ink-k)))" : "var(--card-edge)";
   const btn = {
     width: 34, height: 34, borderRadius: 2, cursor: "pointer", background: "transparent",
     border: `1px solid ${line}`, color: fg, font: `500 18px/1 ${UI}`,
@@ -1034,10 +1107,10 @@ function Servings({ base, factor, setFactor, dark }) {
             onClick={() => setFactor(1)}
             style={{ background: "none", border: "none", cursor: "pointer", whiteSpace: "break-spaces", maxWidth: 50 }}
           >
-            <span style={{ font: `600 12px/1 ${UI}`, color: dark ? "rgba(247,242,230,.6)" : "var(--card-muted)" }}>Reset</span>
+            <span style={{ font: `600 12px/1 ${UI}`, color: dark ? "rgba(var(--on-page), calc(.6 * var(--ink-k)))" : "var(--card-muted)" }}>Reset</span>
           </button>
         ) : (
-          <span style={{ font: `600 12px/1 ${UI}`, color: dark ? "rgba(247,242,230,.6)" : "var(--card-muted)" }}>Servings</span>
+          <span style={{ font: `600 12px/1 ${UI}`, color: dark ? "rgba(var(--on-page), calc(.6 * var(--ink-k)))" : "var(--card-muted)" }}>Servings</span>
         )}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1053,8 +1126,8 @@ function Servings({ base, factor, setFactor, dark }) {
 /* ══════════════════════════════════════════════════════════════════
    Static styles
    ══════════════════════════════════════════════════════════════════ */
-const btnPrimary = { background: T.marigold, color: T.inkDeep, border: "none", padding: "12px 22px" };
-const btnGhost = { background: "transparent", color: "rgba(247,242,230,.88)", border: "1px solid rgba(247,242,230,.28)", padding: "11px 20px" };
+const btnPrimary = { background: "var(--page-accent)", color: "var(--on-accent)", border: "none", padding: "12px 22px" };
+const btnGhost = { background: "transparent", color: "rgba(var(--on-page), calc(.88 * var(--ink-k)))", border: "1px solid rgba(var(--on-page), calc(.28 * var(--ink-k)))", padding: "11px 20px" };
 const btnQuiet = { background: "transparent", color: "var(--card-muted)", border: `1px solid var(--card-edge)`, padding: "10px 18px" };
 const linkButton = { background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--card-accent)", font: "inherit", textDecoration: "underline", textUnderlineOffset: 2 };
 const sheet = { position: "relative", background: "var(--card-bg)", color: "var(--card-text)", borderRadius: 3, boxShadow: "0 26px 60px -30px rgba(0,0,0,.7)", overflow: "hidden" };
@@ -1077,15 +1150,15 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
     <div
       style={{
         position: "fixed", inset: 0, zIndex: 60, display: "flex", flexDirection: "column",
-        background: `radial-gradient(120% 80% at 50% 0%, ${T.inkSoft} 0%, ${T.ink} 50%, ${T.inkDeep} 100%)`,
+        background: `radial-gradient(120% 80% at 50% 0%, var(--page-soft) 0%, var(--page-bg) 50%, var(--page-deep) 100%)`,
       }}
     >
       <Grain opacity={0.06} />
       {/* top bar */}
       <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "18px 22px", flexWrap: "wrap" }}>
         <div>
-          <p style={{ font: `400 17px/1.3 ${DISPLAY}`, color: T.paper, margin: 0 }}>{recipe.title}</p>
-          <p style={{ font: `500 12px/1.4 ${UI}`, color: "rgba(247,242,230,.55)", margin: "2px 0 0" }}>
+          <p style={{ font: `400 17px/1.3 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: 0 }}>{recipe.title}</p>
+          <p style={{ font: `500 12px/1.4 ${UI}`, color: "rgba(var(--on-page), calc(.55 * var(--ink-k)))", margin: "2px 0 0" }}>
             Step {stepIndex + 1} of {steps.length}
           </p>
         </div>
@@ -1108,7 +1181,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
             className="rb-focus"
             style={{
               flex: 1, height: 3, border: "none", padding: 0, cursor: "pointer",
-              background: marks.steps.includes(i) ? T.marigold : i === stepIndex ? "rgba(247,242,230,.65)" : "rgba(247,242,230,.18)",
+              background: marks.steps.includes(i) ? "var(--page-accent)" : i === stepIndex ? "rgba(var(--on-page), calc(.65 * var(--ink-k)))" : "rgba(var(--on-page), calc(.18 * var(--ink-k)))",
             }}
           />
         ))}
@@ -1118,11 +1191,11 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
       <div style={{ position: "relative", flex: 1, overflowY: "auto", padding: "26px 22px 10px" }}>
         <div key={stepIndex} className="rb-step" style={{ maxWidth: 780, margin: "0 auto" }}>
           {step.title && (
-            <h2 style={{ font: `300 clamp(28px, 5vw, 44px)/1.1 ${DISPLAY}`, color: T.paper, margin: "0 0 18px", letterSpacing: "-0.02em" }}>
+            <h2 style={{ font: `300 clamp(28px, 5vw, 44px)/1.1 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "0 0 18px", letterSpacing: "-0.02em" }}>
               {step.title}
             </h2>
           )}
-          <p style={{ font: `400 clamp(17px, 2.4vw, 21px)/1.68 ${DISPLAY}`, color: "rgba(247,242,230,.92)", margin: 0, maxWidth: "56ch" }}>
+          <p style={{ font: `400 clamp(17px, 2.4vw, 21px)/1.68 ${DISPLAY}`, color: "rgba(var(--on-page), calc(.92 * var(--ink-k)))", margin: 0, maxWidth: "56ch" }}>
             {scaleText(step.text, factor)}
           </p>
           {secs && (
@@ -1142,15 +1215,15 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
             style={{
               display: "flex", alignItems: "center", gap: 9, marginTop: secs ? 16 : 26, padding: "6px 0",
               background: "none", border: "none", cursor: "pointer", font: `600 13.5px/1 ${UI}`,
-              color: done ? T.marigold : "rgba(247,242,230,.6)",
+              color: done ? "var(--page-accent)" : "rgba(var(--on-page), calc(.6 * var(--ink-k)))",
             }}
           >
             <span
               aria-hidden
               style={{
                 width: 18, height: 18, borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 11,
-                border: `1.5px solid ${done ? T.marigold : "rgba(247,242,230,.45)"}`,
-                background: done ? T.marigold : "transparent", color: T.inkDeep,
+                border: `1.5px solid ${done ? "var(--page-accent)" : "rgba(var(--on-page), calc(.45 * var(--ink-k)))"}`,
+                background: done ? "var(--page-accent)" : "transparent", color: "var(--on-accent)",
               }}
             >
               {done ? "✓" : ""}
@@ -1160,9 +1233,9 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
         </div>
 
         {showPantry && (
-          <div style={{ maxWidth: 780, margin: "34px auto 0", borderTop: "1px solid rgba(247,242,230,.2)", paddingTop: 20 }}>
-            <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: T.paper, margin: "0 0 4px" }}>Ingredients</p>
-            <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(247,242,230,.5)", margin: "0 0 8px" }}>Tap each one as it goes in.</p>
+          <div style={{ maxWidth: 780, margin: "34px auto 0", borderTop: "1px solid rgba(var(--on-page), calc(.2 * var(--ink-k)))", paddingTop: 20 }}>
+            <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "0 0 4px" }}>Ingredients</p>
+            <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.5 * var(--ink-k)))", margin: "0 0 8px" }}>Tap each one as it goes in.</p>
             <ul style={{ listStyle: "none", padding: 0, margin: 0, columns: "220px 2", columnGap: 30 }}>
               {recipe.ingredients.map((ing, i) => {
                 const got = marks.ing.includes(i);
@@ -1175,7 +1248,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
                       style={{
                         display: "block", width: "100%", textAlign: "left", padding: "7px 0",
                         background: "none", border: "none", cursor: "pointer", font: `400 14.5px/1.5 ${UI}`,
-                        color: got ? "rgba(247,242,230,.38)" : "rgba(247,242,230,.8)", textDecoration: got ? "line-through" : "none",
+                        color: got ? "rgba(var(--on-page), calc(.38 * var(--ink-k)))" : "rgba(var(--on-page), calc(.8 * var(--ink-k)))", textDecoration: got ? "line-through" : "none",
                       }}
                     >
                       {scaleLine(ing, factor)}
@@ -1186,8 +1259,8 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
             </ul>
             {recipe.equipment?.length > 0 && (
               <>
-                <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: T.paper, margin: "22px 0 12px" }}>You'll need</p>
-                <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(247,242,230,.8)", margin: 0 }}>
+                <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "22px 0 12px" }}>You'll need</p>
+                <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.8 * var(--ink-k)))", margin: 0 }}>
                   {recipe.equipment.join(" · ")}
                 </p>
               </>
@@ -1197,7 +1270,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
       </div>
 
       {/* nav */}
-      <div style={{ position: "relative", display: "flex", gap: 12, padding: "14px 22px 22px", borderTop: "1px solid rgba(247,242,230,.14)" }}>
+      <div style={{ position: "relative", display: "flex", gap: 12, padding: "14px 22px 22px", borderTop: "1px solid rgba(var(--on-page), calc(.14 * var(--ink-k)))" }}>
         <button
           className="rb-btn rb-focus"
           style={{ ...btnGhost, flex: 1, opacity: stepIndex === 0 ? 0.4 : 1 }}
@@ -1258,6 +1331,12 @@ export default function RecipeBox() {
   const [newItem, setNewItem] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
   const [crossed, setCrossed] = useState(loadCrossed);
+  const [palette, setPalette] = useState(() => paletteById(localPalette()));
+  const [texture, setTexture] = useState(() => textureById(localTexture()));
+  const textureSave = useRef(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef(null);
+  const paletteSave = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [factor, setFactor] = useState(1);
   const [cooking, setCooking] = useState(false);
@@ -1287,6 +1366,16 @@ export default function RecipeBox() {
         const res = await window.storage?.get("theme", false);
         if (res?.value === "dark" || res?.value === "light") setTheme(res.value);
       } catch {}
+      try {
+        const res = await window.storage?.get("palette", false);
+        if (PALETTES.some((p) => p.id === res?.value)) setPalette(paletteById(res.value));
+      } catch {}
+      try {
+        /* "none" is stored on purpose, so choosing no background sticks too */
+        const res = await window.storage?.get("texture", false);
+        if (res?.value === "none") setTexture(null);
+        else if (textureById(res?.value)) setTexture(textureById(res.value));
+      } catch {}
     })();
   }, []);
 
@@ -1295,6 +1384,58 @@ export default function RecipeBox() {
     setTheme(next);
     try { window.storage?.set("theme", next, false); } catch {}
   };
+
+  /* Personal, like light and dark. Clicking through the swatches to compare
+     should cost one saved write, not one per click, so the save waits a beat. */
+  const choosePalette = (id) => {
+    const p = paletteById(id);
+    setPalette(p);
+    clearTimeout(paletteSave.current);
+    paletteSave.current = setTimeout(() => { window.storage?.set("palette", p.id, false).catch(() => {}); }, 1200);
+  };
+  const chooseTexture = (id) => {
+    const t = textureById(id);
+    setTexture(t);
+    try { localStorage.setItem("rb-texture", t ? t.id : ""); } catch { /* fine */ }
+    clearTimeout(textureSave.current);
+    textureSave.current = setTimeout(() => { window.storage?.set("texture", t ? t.id : "none", false).catch(() => {}); }, 1200);
+  };
+
+  const swatchButton = (key, on, onClick, swatch, label) => (
+    <button
+      key={key}
+      className="rb-focus"
+      aria-pressed={on}
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", gap: 9, padding: "7px 8px", borderRadius: 3, cursor: "pointer", textAlign: "left",
+        border: `1px solid ${on ? "var(--card-accent)" : "var(--card-edge)"}`, background: on ? "var(--card-lift)" : "transparent",
+      }}
+    >
+      <span aria-hidden style={{ flex: "none", width: 26, height: 26, borderRadius: "50%", background: swatch, boxShadow: "inset 0 0 0 1px rgba(0,0,0,.14)" }} />
+      <span style={{ font: `${on ? 600 : 500} 13px/1.25 ${UI}`, color: "var(--card-text)" }}>{label}</span>
+    </button>
+  );
+
+  /* the page around the app — overscroll, the phone's status bar, and the
+     first paint on the next visit — should match the theme too */
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--boot-bg", palette.bg);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", palette.bg);
+    try { localStorage.setItem("rb-palette", palette.id); localStorage.setItem("rb-palette-bg", palette.bg); } catch { /* fine */ }
+  }, [palette]);
+
+  /* the picker closes on a click elsewhere or Escape — and that Escape must not
+     also carry on to the recipe page, where it means "go back" */
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onDown = (e) => { if (!pickerRef.current?.contains(e.target)) setPickerOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); setPickerOpen(false); } };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [pickerOpen]);
 
   /* load */
   useEffect(() => {
@@ -1876,10 +2017,10 @@ export default function RecipeBox() {
       --grain-blend: multiply;
     }
     .rb[data-theme="dark"] {
-      --card-bg: #123B3F;
-      --card-lift: #17494D;
+      --card-bg: var(--dark-card-bg);
+      --card-lift: var(--dark-card-lift);
       --card-text: #EFE8D6;
-      --card-muted: #A3B3A9;
+      --card-muted: var(--dark-card-muted);
       --card-edge: rgba(239,232,214,.26);
       --card-accent: #F0A578;
       --card-danger: #F08A6B;
@@ -1887,8 +2028,19 @@ export default function RecipeBox() {
       --grain-blend: overlay;
     }
     .rb * { box-sizing: border-box; }
-    .rb ::selection { background: ${T.marigold}; color: ${T.inkDeep}; }
-    .rb-focus:focus-visible { outline: 2px solid ${T.marigold}; outline-offset: 3px; }
+    .rb ::selection { background: var(--page-accent); color: var(--on-accent); }
+    .rb-focus:focus-visible { outline: 2px solid var(--page-accent); outline-offset: 3px; }
+    /* On a texture, anything carrying text sits on its own near-solid fill, so
+       the image itself never has to be dimmed. Loose text gets a strip behind
+       each line rather than a glow — a glow cannot hold up against a bold
+       gingham check. The negative margin keeps the text on its column. */
+    .rb-textured .rb-onimg { background-color: rgba(var(--bg-rgb), .94) !important; }
+    .rb-textured .rb-onimg-on { background: linear-gradient(rgba(var(--accent-rgb), .14), rgba(var(--accent-rgb), .14)), rgba(var(--bg-rgb), .94) !important; }
+    .rb-textured .rb-strip {
+      background: rgba(var(--bg-rgb), .94); border-radius: 2px;
+      padding: .08em .3em; margin: 0 -.3em;
+      -webkit-box-decoration-break: clone; box-decoration-break: clone;
+    }
     .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     .rb-detail { display: grid; grid-template-columns: 1fr; gap: 34px; }
@@ -1928,6 +2080,7 @@ export default function RecipeBox() {
       /* Never split one ingredient, one step, or the notes block in half. */
       .rb-detail li, .rb-notes, .rb-nutrition { break-inside: avoid; page-break-inside: avoid; }
       .rb-done, .rb-done * { opacity: 1 !important; text-decoration: none !important; }
+      .rb-backdrop { display: none !important; }
       /* Never strand a heading at the foot of a page. */
       h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
       p { orphans: 3; widows: 3; }
@@ -1937,7 +2090,7 @@ export default function RecipeBox() {
 
     /* ── phones ── */
     @media (max-width: 640px) {
-      .rb-head { padding: 26px 16px 0 !important; }
+      .rb-head { padding: 52px 16px 0 !important; }
       .rb-main { padding: 20px 16px 0 !important; }
       .rb-pad { padding: 24px 18px 30px !important; }
       .rb-grid { grid-template-columns: 1fr; gap: 16px; }
@@ -1964,7 +2117,7 @@ export default function RecipeBox() {
   /* ═══════════════════════════════════════════════════════════════ */
   return (
     <div
-      className="rb"
+      className={texture ? "rb rb-textured" : "rb"}
       data-theme={theme}
       onDragOver={(e) => { if (isFileDrag(e)) { e.preventDefault(); setDragging(true); } }}
       onDragLeave={() => setDragging(false)}
@@ -1975,17 +2128,32 @@ export default function RecipeBox() {
         ingestFiles(e.dataTransfer.files);
       }}
       style={{
-        position: "relative", minHeight: "100vh", color: T.paper,
-        background: `radial-gradient(120% 90% at 50% 0%, ${T.inkSoft} 0%, ${T.ink} 45%, ${T.inkDeep} 100%)`,
+        ...paletteVars(palette),
+        position: "relative", isolation: "isolate", minHeight: "100vh", color: "rgb(var(--on-page))",
+        background: `radial-gradient(120% 90% at 50% 0%, var(--page-soft) 0%, var(--page-bg) 45%, var(--page-deep) 100%)`,
         paddingBottom: timers.length ? 130 : 80,
       }}
     >
       <style>{css}</style>
-      <Grain opacity={0.06} />
+      {texture && (
+        <div
+          aria-hidden
+          className="rb-backdrop"
+          style={{
+            position: "fixed", inset: 0, zIndex: -1, pointerEvents: "none",
+            backgroundImage: `url("${texture.src}")`,
+            backgroundRepeat: texture.tile ? "repeat" : "no-repeat",
+            backgroundSize: texture.tile ? `${texture.tile}px` : "cover",
+            backgroundPosition: "center",
+          }}
+        />
+      )}
+      {/* a real texture makes the speckle redundant */}
+      {!texture && <Grain opacity={palette.grain ?? 0.06} />}
 
       {dragging && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(6,30,33,.88)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
-          <p style={{ font: `400 30px/1.3 ${DISPLAY}`, color: T.marigold, textAlign: "center", padding: 24 }}>Drop .json or .md files to add them</p>
+        <div style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(var(--deep-rgb), .88)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
+          <p style={{ font: `400 30px/1.3 ${DISPLAY}`, color: "var(--page-accent)", textAlign: "center", padding: 24 }}>Drop .json or .md files to add them</p>
         </div>
       )}
 
@@ -2012,33 +2180,82 @@ export default function RecipeBox() {
 
       {/* ─── masthead ─── */}
       <header className="rb-noprint rb-head" style={{ position: "relative", maxWidth: 1120, margin: "0 auto", padding: "52px 26px 0" }}>
-        <button
-          className="rb-btn rb-focus rb-corner"
-          onClick={flipTheme}
-          aria-pressed={theme === "dark"}
-          title="Switch between light and dark mode"
-          style={{
-            position: "absolute", top: 14, right: 26, zIndex: 5,
-            background: "transparent", border: "1px solid rgba(247,242,230,.22)",
-            color: "rgba(247,242,230,.7)", padding: "7px 13px", fontSize: 12.5, fontWeight: 500,
-          }}
-        >
-          {theme === "dark" ? "Light mode" : "Dark mode"}
-        </button>
+        <div ref={pickerRef} className="rb-corner" style={{ position: "absolute", top: 14, right: 26, zIndex: 5, display: "flex", gap: 8 }}>
+          <button
+            className="rb-btn rb-focus rb-onimg"
+            onClick={() => setPickerOpen((o) => !o)}
+            aria-expanded={pickerOpen}
+            aria-haspopup="dialog"
+            title="Change the colour theme"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 7,
+              background: "transparent", border: "1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))",
+              color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))", padding: "7px 13px", fontSize: 12.5, fontWeight: 500,
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 12, height: 12, borderRadius: "50%", flex: "none",
+                background: texture ? `url("${texture.thumb}") center / cover` : `linear-gradient(135deg, ${palette.soft} 0 50%, ${palette.accent} 50% 100%)`,
+                boxShadow: "0 0 0 1px rgba(var(--on-page), calc(.45 * var(--ink-k)))",
+              }}
+            />
+            Theme
+          </button>
+          <button
+            className="rb-btn rb-focus rb-onimg"
+            onClick={flipTheme}
+            aria-pressed={theme === "dark"}
+            title="Switch between light and dark mode"
+            style={{
+              background: "transparent", border: "1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))",
+              color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))", padding: "7px 13px", fontSize: 12.5, fontWeight: 500,
+            }}
+          >
+            {theme === "dark" ? "Light mode" : "Dark mode"}
+          </button>
+
+          {pickerOpen && (
+            <div
+              role="dialog"
+              aria-label="Colour theme"
+              style={{
+                position: "absolute", top: "calc(100% + 8px)", right: 0, width: 312, maxWidth: "calc(100vw - 32px)",
+                background: "var(--card-bg)", color: "var(--card-text)", border: "1px solid var(--card-edge)",
+                borderRadius: 3, padding: "14px 14px 12px", boxShadow: "0 22px 44px -18px rgba(0,0,0,.6)",
+                maxHeight: "min(72vh, 620px)", overflowY: "auto",
+              }}
+            >
+              <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "2px 2px 4px" }}>Theme</p>
+              <p style={{ font: `400 12.5px/1.45 ${UI}`, color: "var(--card-muted)", margin: "0 2px 12px" }}>Just for you — everyone picks their own.</p>
+              <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "0 2px 8px" }}>Colours</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                {PALETTES.map((p) => swatchButton(p.id, p.id === palette.id, () => choosePalette(p.id), swatchFor(p), p.name))}
+              </div>
+              <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "16px 2px 4px" }}>Background</p>
+              <p style={{ font: `400 12.5px/1.45 ${UI}`, color: "var(--card-muted)", margin: "0 2px 8px" }}>Shown behind your colours, as it is.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                {swatchButton("none", !texture, () => chooseTexture(null), swatchFor(palette), "Plain")}
+                {TEXTURES.map((t) => swatchButton(t.id, texture?.id === t.id, () => chooseTexture(t.id), `url("${t.thumb}") center / cover`, t.name))}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 22, alignItems: "flex-end", justifyContent: "space-between" }}>
           <div style={{ minWidth: 260 }}>
-            <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: T.paper }}>
-              {activeBox ? `${activeBox}'s Recipes` : box.name}
+            <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: "rgb(var(--on-page))" }}>
+              <span className="rb-strip">{activeBox ? `${activeBox}'s Recipes` : box.name}</span>
             </h1>
-            <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(247,242,230,.58)", margin: "12px 0 0", maxWidth: "46ch" }}>
-              {activeBox
+            <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.58 * var(--ink-k)))", margin: "12px 0 0", maxWidth: "46ch" }}>
+              <span className="rb-strip">{activeBox
                 ? `${boxCount(activeBox)} ${boxCount(activeBox) === 1 ? "recipe" : "recipes"} from ${activeBox}.`
-                : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}
+                : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}</span>
             </p>
             {activeBox && activeBox !== UNFILED && boxCount(activeBox) === 0 && (
               <button
-                className="rb-btn rb-focus"
+                className="rb-btn rb-focus rb-onimg"
                 onClick={() => removeBox(activeBox)}
                 style={{ ...btnGhost, marginTop: 14, padding: "6px 12px", fontSize: 12.5 }}
               >
@@ -2047,11 +2264,11 @@ export default function RecipeBox() {
             )}
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button className="rb-btn rb-focus" style={btnGhost} onClick={openShopping}>
-              Shopping list{toBuy ? ` (${toBuy})` : ""}
+            <button className="rb-btn rb-focus rb-onimg" style={btnGhost} onClick={openShopping}>
+              <span aria-hidden style={{ marginRight: 7 }}>🛒</span>Shopping list{toBuy ? ` (${toBuy})` : ""}
             </button>
-            <button className="rb-btn rb-focus" style={btnGhost} onClick={() => fileRef.current?.click()}>Import files</button>
-            <button className="rb-btn rb-focus" style={btnGhost} onClick={exportAll} disabled={exporting}>
+            <button className="rb-btn rb-focus rb-onimg" style={btnGhost} onClick={() => fileRef.current?.click()}>Import files</button>
+            <button className="rb-btn rb-focus rb-onimg" style={btnGhost} onClick={exportAll} disabled={exporting}>
               {exporting ? "Exporting…" : "Export all"}
             </button>
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
@@ -2066,12 +2283,12 @@ export default function RecipeBox() {
           onChange={(e) => { ingestFiles(e.target.files); e.target.value = ""; }}
           style={{ display: "none" }}
         />
-        <div style={{ marginTop: 30, borderTop: `1px solid rgba(247,242,230,.22)`, borderBottom: `1px solid rgba(247,242,230,.1)`, height: 4 }} />
+        <div style={{ marginTop: 30, borderTop: `1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))`, borderBottom: `1px solid rgba(var(--on-page), calc(.1 * var(--ink-k)))`, height: 4 }} />
       </header>
 
       <main className="rb-main" style={{ position: "relative", maxWidth: 1120, margin: "0 auto", padding: "30px 26px 0" }}>
-        {status && <p className="rb-noprint" style={{ font: `500 13px/1.4 ${UI}`, color: T.marigold, margin: "0 0 18px" }}>{status}</p>}
-        {loading && <p style={{ font: `400 15px/1.6 ${UI}`, color: "rgba(247,242,230,.7)" }}>Opening the box…</p>}
+        {status && <p className="rb-noprint" style={{ font: `500 13px/1.4 ${UI}`, color: "var(--page-accent)", margin: "0 0 18px" }}><span className="rb-strip">{status}</span></p>}
+        {loading && <p style={{ font: `400 15px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))" }}><span className="rb-strip">Opening the box…</span></p>}
 
         {/* ═══════ LIST ═══════ */}
         {!loading && view === "list" && (
@@ -2086,18 +2303,18 @@ export default function RecipeBox() {
                 return (
                   <button
                     key={b.key ?? "all"}
-                    className={`rb-focus${b.key === null ? " rb-shelf-all" : ""}`}
+                    className={`rb-focus${b.key === null ? " rb-shelf-all" : ""}${on ? " rb-onimg-on" : " rb-onimg"}`}
                     onClick={() => { setActiveBox(b.key); setQuery(""); setTagFilter(null); }}
                     style={{
                       display: "flex", flexDirection: "column", gap: 4, textAlign: "left", cursor: "pointer",
                       padding: "11px 16px", borderRadius: 2, minWidth: 120,
-                      border:  `1px solid ${on ? T.marigold : "rgba(247,242,230,.22)"}`,
-                      background: on ? "rgba(231,164,39,.14)" : "transparent",
+                      border:  `1px solid ${on ? "var(--page-accent)" : "rgba(var(--on-page), calc(.22 * var(--ink-k)))"}`,
+                      background: on ? "rgba(var(--accent-rgb), .14)" : "transparent",
                       transform: "none",
                     }}
                   >
-                    <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: on ? T.marigold : T.paper }}>{b.name}</span>
-                    <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(247,242,230,.45)" }}>
+                    <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: on ? "var(--page-accent)" : "rgb(var(--on-page))" }}>{b.name}</span>
+                    <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(var(--on-page), calc(.45 * var(--ink-k)))" }}>
                       {b.count} {b.count === 1 ? "recipe" : "recipes"}
                     </span>
                   </button>
@@ -2107,7 +2324,7 @@ export default function RecipeBox() {
               {addingBox ? (
                 <input
                   autoFocus
-                  className="rb-new-box"
+                  className="rb-new-box rb-onimg"
                   value={newBoxName}
                   onChange={(e) => setNewBoxName(e.target.value)}
                   onBlur={addBox}
@@ -2119,24 +2336,24 @@ export default function RecipeBox() {
                   aria-label="Name of the person to add"
                   style={{
                     padding: "11px 16px", borderRadius: 2, width: 150, maxWidth: "100%",
-                    border: `1px solid ${T.marigold}`, background: "transparent",
-                    color: T.paper, font: `400 17px/1.2 ${DISPLAY}`, outline: "none",
+                    border: "1px solid var(--page-accent)", background: "transparent",
+                    color: "rgb(var(--on-page))", font: `400 17px/1.2 ${DISPLAY}`, outline: "none",
                   }}
                 />
               ) : (
                 <button
-                  className="rb-focus rb-new-box"
+                  className="rb-focus rb-new-box rb-onimg"
                   onClick={() => setAddingBox(true)}
                   title="Add someone new"
                   aria-label="Add someone new"
                   style={{
                     display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start",
                     textAlign: "left", cursor: "pointer", padding: "11px 16px", borderRadius: 2, minWidth: 120,
-                    border: "1px dashed rgba(247,242,230,.3)", background: "transparent", transform: "none",
+                    border: "1px dashed rgba(var(--on-page), calc(.3 * var(--ink-k)))", background: "transparent", transform: "none",
                   }}
                 >
-                  <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: T.paper }}>+</span>
-                  <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(247,242,230,.45)" }}>
+                  <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))" }}>+</span>
+                  <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(var(--on-page), calc(.45 * var(--ink-k)))" }}>
                     Add someone
                   </span>
                 </button>
@@ -2149,13 +2366,13 @@ export default function RecipeBox() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={SCOPES.find((s2) => s2.id === scope).placeholder}
-                className="rb-focus"
+                className="rb-focus rb-onimg"
                 style={{
                   flex: "1 1 250px", font: `400 15px/1.5 ${UI}`, padding: "12px 15px", borderRadius: 2,
-                  border: `1px solid rgba(247,242,230,.22)`, background: "rgba(247,242,230,.06)", color: T.paper,
+                  border: `1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))`, background: "rgba(var(--on-page), calc(.06 * var(--ink-k)))", color: "rgb(var(--on-page))",
                 }}
               />
-              <div className="rb-scope" style={{ display: "flex", border: `1px solid rgba(247,242,230,.22)`, borderRadius: 2, overflow: "hidden" }}>
+              <div className="rb-scope rb-onimg" style={{ display: "flex", border: `1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))`, borderRadius: 2, overflow: "hidden" }}>
                 {SCOPES.map((s2) => (
                   <button
                     key={s2.id}
@@ -2163,8 +2380,8 @@ export default function RecipeBox() {
                     onClick={() => setScope(s2.id)}
                     style={{
                       font: `500 12.5px/1 ${UI}`, padding: "11px 14px", cursor: "pointer", border: "none",
-                      background: scope === s2.id ? "rgba(247,242,230,.14)" : "transparent",
-                      color: scope === s2.id ? T.marigold : "rgba(247,242,230,.66)",
+                      background: scope === s2.id ? "rgba(var(--on-page), calc(.14 * var(--ink-k)))" : "transparent",
+                      color: scope === s2.id ? "var(--page-accent)" : "rgba(var(--on-page), calc(.66 * var(--ink-k)))",
                     }}
                   >
                     {s2.label}
@@ -2174,8 +2391,8 @@ export default function RecipeBox() {
             </div>
 
             {scope === "ingredient" && (
-              <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(247,242,230,.5)", margin: "0 0 16px" }}>
-                Separate ingredients with commas to find recipes that use all of them — “lime, tequila”.
+              <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.5 * var(--ink-k)))", margin: "0 0 16px" }}>
+                <span className="rb-strip">Separate ingredients with commas to find recipes that use all of them — “lime, tequila”.</span>
               </p>
             )}
 
@@ -2187,12 +2404,12 @@ export default function RecipeBox() {
                     return (
                       <button
                         key={t}
-                        className="rb-focus"
+                        className={on ? "rb-focus" : "rb-focus rb-onimg"}
                         onClick={() => setTagFilter(on ? null : t)}
                         style={{
                           font: `500 12.5px/1 ${UI}`, padding: "8px 13px", borderRadius: 999, cursor: "pointer",
-                          border: `1px solid ${on ? T.marigold : "rgba(247,242,230,.26)"}`,
-                          background: on ? T.marigold : "transparent", color: on ? T.inkDeep : "rgba(247,242,230,.8)",
+                          border: `1px solid ${on ? "var(--page-accent)" : "rgba(var(--on-page), calc(.26 * var(--ink-k)))"}`,
+                          background: on ? "var(--page-accent)" : "transparent", color: on ? "var(--on-accent)" : "rgba(var(--on-page), calc(.8 * var(--ink-k)))",
                         }}
                       >
                         {t}
@@ -2204,9 +2421,9 @@ export default function RecipeBox() {
             </div>
 
             {visible.length === 0 ? (
-              <div style={{ border: `1px dashed rgba(247,242,230,.28)`, borderRadius: 3, padding: "56px 30px", textAlign: "center" }}>
+              <div className="rb-onimg" style={{ border: `1px dashed rgba(var(--on-page), calc(.28 * var(--ink-k)))`, borderRadius: 3, padding: "56px 30px", textAlign: "center" }}>
                 <p style={{ font: `300 26px/1.35 ${DISPLAY}`, margin: "0 0 10px" }}>Nothing in the box yet.</p>
-                <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "rgba(247,242,230,.62)", margin: "0 0 22px" }}>
+                <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "rgba(var(--on-page), calc(.62 * var(--ink-k)))", margin: "0 0 22px" }}>
                   {box.recipes.length === 0
                     ? "Add one by hand, or drag a folder of .md or .json files anywhere on this page."
                     : activeBox && activeBox !== UNFILED && !query && !tagFilter
@@ -2262,9 +2479,9 @@ export default function RecipeBox() {
               </div>
             )}
 
-            <div className="rb-noprint" style={{ marginTop: 50, paddingTop: 24, borderTop: `1px solid rgba(247,242,230,.16)` }}>
-              <p style={{ font: `400 12.5px/1.65 ${UI}`, color: "rgba(247,242,230,.48)", margin: 0, maxWidth: 460 }}>
-                Everyone shares one box. Whoever has the link can add, change, or remove anything in it.
+            <div className="rb-noprint" style={{ marginTop: 50, paddingTop: 24, borderTop: `1px solid rgba(var(--on-page), calc(.16 * var(--ink-k)))` }}>
+              <p style={{ font: `400 12.5px/1.65 ${UI}`, color: "rgba(var(--on-page), calc(.48 * var(--ink-k)))", margin: 0, maxWidth: 460 }}>
+                <span className="rb-strip">Everyone shares one box. Whoever has the link can add, change, or remove anything in it.</span>
               </p>
             </div>
           </>
@@ -2379,7 +2596,7 @@ export default function RecipeBox() {
                   <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
                   {backLabel}
                 </button>
-                <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Shopping list</h2>
+                <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}><span aria-hidden style={{ fontSize: "0.85em", marginRight: 10 }}>🛒</span>Shopping list</h2>
                 <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 22px", maxWidth: "58ch" }}>
                   {needed.length
                     ? `${needed.length} ${needed.length === 1 ? "thing" : "things"} to buy.`
@@ -2435,7 +2652,7 @@ export default function RecipeBox() {
 
                 {got.length > 0 && (
                   <div className="rb-noprint">
-                    <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "26px 0 6px" }}>In the basket</p>
+                    <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "26px 0 6px" }}><span aria-hidden style={{ fontSize: 14, letterSpacing: 0, marginRight: 6 }}>🧺</span>In the basket</p>
                     <ul style={{ listStyle: "none", padding: 0, margin: 0, borderTop: `1px solid var(--card-edge)` }}>{got.map(row)}</ul>
                   </div>
                 )}
@@ -2921,7 +3138,7 @@ export default function RecipeBox() {
           className="rb-noprint rb-tray"
           style={{
             position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 70,
-            background: "rgba(6,30,33,.96)", borderTop: `1px solid rgba(247,242,230,.2)`,
+            background: "rgba(var(--deep-rgb), .96)", borderTop: `1px solid rgba(var(--on-page), calc(.2 * var(--ink-k)))`,
             padding: "12px 18px", gap: 12, overflowX: "auto",
           }}
         >
@@ -2932,14 +3149,14 @@ export default function RecipeBox() {
                 key={t.id}
                 style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", flex: "0 0 auto",
-                  border: `1px solid ${done ? T.marigold : "rgba(247,242,230,.24)"}`, borderRadius: 2,
-                  background: done ? "rgba(231,164,39,.16)" : "transparent",
+                  border: `1px solid ${done ? "var(--page-accent)" : "rgba(var(--on-page), calc(.24 * var(--ink-k)))"}`, borderRadius: 2,
+                  background: done ? "rgba(var(--accent-rgb), .16)" : "transparent",
                 }}
               >
                 <div style={{ paddingInline: 8, minWidth: 50 }}>
-                  <span className="rb-num" style={{ fontSize: 22, color: done ? T.marigold : T.paper, minWidth: 66 }}>{clock(t.remaining)}</span>
+                  <span className="rb-num" style={{ fontSize: 22, color: done ? "var(--page-accent)" : "rgb(var(--on-page))", minWidth: 66 }}>{clock(t.remaining)}</span>
                 </div>
-                <span style={{ font: `400 12.5px/1.35 ${UI}`, color: "rgba(247,242,230,.7)", paddingInlineEnd: '8px', width: '100%', textJustify: 'right'  }}>
+                <span style={{ font: `400 12.5px/1.35 ${UI}`, color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))", paddingInlineEnd: '8px', width: '100%', textJustify: 'right'  }}>
                   {done ? "Time's up — " : ""}{t.label}
                 </span>
                 {!done && (

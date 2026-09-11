@@ -8,8 +8,19 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <style>
-      html, body, #root { margin: 0; padding: 0; min-height: 100%; background: #0B2F32; }
+      html, body, #root { margin: 0; padding: 0; min-height: 100%; background: var(--boot-bg, #0B2F32); }
     </style>
+    <script>
+      /* Paint the chosen colour theme before the app loads. Without this, anyone
+         on a light theme gets a flash of dark teal on every visit. */
+      try {
+        var bg = localStorage.getItem("rb-palette-bg");
+        if (/^#[0-9a-f]{6}$/i.test(bg || "")) {
+          document.documentElement.style.setProperty("--boot-bg", bg);
+          document.querySelector('meta[name="theme-color"]').setAttribute("content", bg);
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
