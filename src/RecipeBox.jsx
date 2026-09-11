@@ -235,6 +235,137 @@ const scaleServings = (s, factor) => {
 };
 
 /* ══════════════════════════════════════════════════════════════════
+   Shopping list
+   One list for the household, under its own key: ticking off milk must not
+   re-save every recipe and photo, and the list is written far more often than
+   the box. Each item keeps the lines that fed it, recipe by recipe, so adding
+   a recipe again replaces its share instead of doubling it, and taking one off
+   removes exactly what it put on.
+   ══════════════════════════════════════════════════════════════════ */
+const LIST_KEY = "grocery-list";
+const EMPTY_LIST = { items: [], recipes: {} };
+
+const UNIT_CANON = {
+  cups: "cup", tbsps: "tbsp", tablespoon: "tbsp", tablespoons: "tbsp", tsps: "tsp", teaspoon: "tsp",
+  teaspoons: "tsp", ounce: "oz", ounces: "oz", lbs: "lb", pound: "lb", pounds: "lb", gram: "g",
+  grams: "g", liter: "l", liters: "l", qt: "quart", quarts: "quart", pt: "pint", pints: "pint",
+};
+const canonUnit = (u) => {
+  const k = u.toLowerCase().replace(/\.$/, "");
+  if (UNIT_CANON[k]) return UNIT_CANON[k];
+  if (k.endsWith("es") && UNITS.has(k.slice(0, -2))) return k.slice(0, -2);
+  if (k.endsWith("s") && UNITS.has(k.slice(0, -1))) return k.slice(0, -1);
+  return k;
+};
+/* abbreviations read the same for one or many */
+const SHORT_UNITS = new Set(["tbsp", "tsp", "oz", "lb", "g", "kg", "ml", "l"]);
+const plural = (w) =>
+  /(s|x|z|ch|sh)$/i.test(w) ? `${w}es` : /[^aeiou]y$/i.test(w) ? `${w.slice(0, -1)}ies` : `${w}s`;
+const singular = (w) =>
+  /ies$/.test(w) ? `${w.slice(0, -3)}y`
+  : /(ch|sh|x|ss|o)es$/.test(w) ? w.slice(0, -2)
+  : /[^s]s$/.test(w) ? w.slice(0, -1)
+  : w;
+const unitLabel = (u, n) => (!u ? "" : SHORT_UNITS.has(u) || n <= 1 ? u : plural(u));
+
+/* Only for matching — "2 large eggs" and "1 large egg" are the same thing to buy. */
+const itemKey = (unit, name) => {
+  const words = fold(name).replace(/\(optional\)/g, "").replace(/\s+/g, " ").trim().split(" ");
+  words[words.length - 1] = singular(words[words.length - 1]);
+  return `${unit || ""}|${words.join(" ")}`;
+};
+
+function parseLine(line) {
+  const [qty, rest] = splitQty(String(line));
+  /* What comes before the first comma is what you shop for: "onion, diced"
+     and "onion, sliced" are the same onion at the store. */
+  const name = clean(String(rest).split(",")[0]) || clean(rest);
+  if (!qty) return { amount: null, unit: null, name, qtyText: null };
+  const um = qty.match(/^(.*?)\s+([A-Za-z]+\.?)$/);
+  const unit = um && UNITS.has(um[2].toLowerCase().replace(/\.$/, "")) ? canonUnit(um[2]) : null;
+  const num = unit ? um[1] : qty;
+  /* a range cannot be added to anything, so it is kept as written */
+  const amount = /[-–]|\bto\b/.test(num) ? null : toNumber(num);
+  return { amount, unit, name, qtyText: amount == null ? qty : null };
+}
+
+function addLine(items, line, recipeId) {
+  const p = parseLine(line);
+  if (!p.name) return;
+  const key = p.qtyText ? `raw|${fold(line)}` : itemKey(p.unit, p.name);
+  const source = { recipeId, amount: p.amount, qtyText: p.qtyText, name: p.name };
+  const hit = items.find((i) => i.key === key);
+  if (!hit) {
+    items.push({
+      id: `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      key, unit: p.unit, checked: false, sources: [source],
+    });
+    return;
+  }
+  hit.sources = [...hit.sources, source];
+  /* more is needed than was ticked off — but "salt" with no amount is still salt */
+  if (p.amount != null || p.qtyText) hit.checked = false;
+}
+
+const withoutRecipe = (list, recipeId) => {
+  const items = list.items
+    .map((i) => ({ ...i, sources: i.sources.filter((src) => src.recipeId !== recipeId) }))
+    .filter((i) => i.sources.length);
+  const { [recipeId]: _gone, ...recipes } = list.recipes;
+  return { items, recipes };
+};
+
+function withRecipe(list, recipe, lines, servings) {
+  const base = withoutRecipe(list, recipe.id);
+  const items = base.items.map((i) => ({ ...i }));
+  for (const line of lines) addLine(items, line, recipe.id);
+  return { items, recipes: { ...base.recipes, [recipe.id]: { title: recipe.title, servings: servings ?? null } } };
+}
+
+function withTyped(list, text) {
+  const items = list.items.map((i) => ({ ...i }));
+  addLine(items, text, null);
+  return { ...list, items };
+}
+
+/* forget recipes whose every item has since been cleared away */
+const prune = (list) => {
+  const live = new Set(list.items.flatMap((i) => i.sources.map((src) => src.recipeId)));
+  return { items: list.items, recipes: Object.fromEntries(Object.entries(list.recipes).filter(([id]) => live.has(id))) };
+};
+
+function describeItem(item) {
+  const counted = item.sources.filter((src) => src.amount != null);
+  const summed = counted.reduce((t, src) => t + src.amount, 0);
+  /* nobody buys half an egg: whole things round up, measured things do not */
+  const total = item.unit ? summed : Math.ceil(summed - 1e-9);
+  const lead = counted.length ? counted.reduce((a, b) => (b.amount > a.amount ? b : a)) : item.sources[0];
+  let name = lead.name;
+  if (!item.unit && total > 1 && !/s$/i.test(name)) name = name.replace(/([A-Za-z]+)$/, (w) => plural(w));
+  const qty = [
+    ...(counted.length ? [`${prettyNumber(total)}${item.unit ? ` ${unitLabel(item.unit, total)}` : ""}`] : []),
+    ...new Set(item.sources.filter((src) => src.qtyText).map((src) => src.qtyText)),
+  ].join(" + ");
+  return { qty, name };
+}
+
+const itemRecipes = (item, list) =>
+  [...new Set(item.sources.map((src) => list.recipes[src.recipeId]?.title).filter(Boolean))];
+
+async function loadList() {
+  if (typeof window === "undefined" || !window.storage) return null;
+  try {
+    const res = await window.storage.get(LIST_KEY, true);
+    const data = JSON.parse(res.value);
+    return data && Array.isArray(data.items) ? { items: data.items, recipes: data.recipes || {} } : { ...EMPTY_LIST };
+  } catch (err) {
+    /* A missing key is an empty list. Anything else is a failed read, and must
+       not be mistaken for one — that would wipe the list on screen. */
+    return /not found/i.test(String(err && err.message)) ? { ...EMPTY_LIST } : null;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
    Steps — titles and timers
    ══════════════════════════════════════════════════════════════════ */
 const DUR_RE = /(\d+(?:\.\d+)?)\s*(?:–|-|to)?\s*(\d+(?:\.\d+)?)?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/i;
@@ -929,6 +1060,14 @@ export default function RecipeBox() {
   const [staged, setStaged] = useState([]);
   const [importErrors, setImportErrors] = useState([]);
   const [exporting, setExporting] = useState(false);
+  const [list, setList] = useState(EMPTY_LIST);
+  const listRef = useRef(EMPTY_LIST);        // the latest list, for writes that fire later
+  const listTimer = useRef(null);
+  const listSaving = useRef(false);
+  const listDirty = useRef(false);
+  const shoppingFrom = useRef("list");
+  const [newItem, setNewItem] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [factor, setFactor] = useState(1);
   const [cooking, setCooking] = useState(false);
@@ -1046,6 +1185,7 @@ export default function RecipeBox() {
   /* Nutrition is stored for one serving. The panel describes the batch actually
      being made, so it moves with the scaler exactly as the ingredients do. */
   const servingsMade = baseServings ? Math.max(1, Math.round(baseServings * factor)) : null;
+  const toBuy = list.items.filter((i) => !i.checked).length;
   const allTags = Array.from(new Set(box.recipes.flatMap((r) => r.tags || []))).sort();
   const allAuthors = Array.from(
     new Set([...(box.authors || DEFAULT_AUTHORS), ...box.recipes.map((r) => r.contributor).filter(Boolean)])
@@ -1147,6 +1287,106 @@ export default function RecipeBox() {
     } finally {
       setExporting(false);
     }
+  };
+
+  /* Writes are debounced and never overlap: KV accepts about one write a second
+     per key, and ticking things off in the store happens faster than that. */
+  const writeList = async () => {
+    if (listSaving.current) { listDirty.current = true; return; }
+    listSaving.current = true;
+    try { await window.storage?.set(LIST_KEY, JSON.stringify(listRef.current), true); }
+    catch { flash("Couldn't save the shopping list — it will retry on your next change"); }
+    finally {
+      listSaving.current = false;
+      if (listDirty.current) { listDirty.current = false; setTimeout(writeList, 1000); }
+    }
+  };
+  const updateList = (change) => {
+    const next = change(listRef.current);
+    listRef.current = next;
+    setList(next);
+    clearTimeout(listTimer.current);
+    listTimer.current = setTimeout(() => { listTimer.current = null; writeList(); }, 800);
+  };
+
+  useEffect(() => {
+    loadList().then((l) => { if (l && !listTimer.current) { listRef.current = l; setList(l); } });
+    /* a phone locked in the checkout queue must not lose the last tick */
+    const flush = () => {
+      if (document.visibilityState !== "hidden" || !listTimer.current) return;
+      clearTimeout(listTimer.current);
+      listTimer.current = null;
+      writeList();
+    };
+    document.addEventListener("visibilitychange", flush);
+    return () => document.removeEventListener("visibilitychange", flush);
+  }, []);
+
+  /* Refetch on the way in so other people's additions show up — unless there
+     are local changes still waiting to be written, which a refetch would undo. */
+  const openShopping = async () => {
+    if (view !== "shopping") shoppingFrom.current = view;
+    setConfirmClear(false);
+    setView("shopping");
+    window.scrollTo(0, 0);
+    if (listTimer.current || listSaving.current) return;
+    const fresh = await loadList();
+    if (!fresh || listTimer.current || listSaving.current) return;
+    listRef.current = fresh;
+    setList(fresh);
+  };
+  const leaveShopping = () => {
+    const back = shoppingFrom.current;
+    setView(back === "detail" && !openRecipe ? "list" : back);
+  };
+
+  const addRecipeToList = (recipe) => {
+    const lines = recipe.ingredients.map((ing) => scaleLine(ing, factor));
+    updateList((l) => withRecipe(l, recipe, lines, servingsMade));
+    flash(`${recipe.title} is on the shopping list`);
+  };
+  const removeRecipeFromList = (id) => updateList((l) => withoutRecipe(l, id));
+  const toggleItem = (id) =>
+    updateList((l) => ({ ...l, items: l.items.map((i) => (i.id === id ? { ...i, checked: !i.checked } : i)) }));
+  const removeItem = (id) => updateList((l) => prune({ ...l, items: l.items.filter((i) => i.id !== id) }));
+  const clearChecked = () => updateList((l) => prune({ ...l, items: l.items.filter((i) => !i.checked) }));
+  const clearAll = () => updateList(() => ({ items: [], recipes: {} }));
+  const addTyped = () => {
+    const text = newItem.trim();
+    if (!text) return;
+    updateList((l) => withTyped(l, text));
+    setNewItem("");
+  };
+
+  /* The button always does something safe: add, update to the servings now on
+     the stepper, or say it is already there. Pressing it twice cannot double
+     the quantities, because a recipe's share is replaced, never stacked. */
+  const listControls = (recipe) => {
+    const entry = list.recipes[recipe.id];
+    const takeOff = (
+      <button className="rb-btn rb-focus" style={{ ...btnQuiet, borderColor: "transparent", padding: "10px 8px" }} onClick={() => removeRecipeFromList(recipe.id)}>
+        Take it off
+      </button>
+    );
+    if (!entry) {
+      return <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => addRecipeToList(recipe)}>Add to shopping list</button>;
+    }
+    if (entry.servings !== (servingsMade ?? null)) {
+      return (
+        <>
+          <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => addRecipeToList(recipe)}>
+            Update list to {servingsMade} {servingsMade === 1 ? "serving" : "servings"}
+          </button>
+          {takeOff}
+        </>
+      );
+    }
+    return (
+      <>
+        <button className="rb-btn rb-focus" style={btnQuiet} onClick={openShopping}>On the shopping list →</button>
+        {takeOff}
+      </>
+    );
   };
 
   const setNutrient = (key, value) =>
@@ -1527,6 +1767,9 @@ export default function RecipeBox() {
             )}
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={openShopping}>
+              Shopping list{toBuy ? ` (${toBuy})` : ""}
+            </button>
             <button className="rb-btn rb-focus" style={btnGhost} onClick={() => fileRef.current?.click()}>Import files</button>
             <button className="rb-btn rb-focus" style={btnGhost} onClick={exportAll} disabled={exporting}>
               {exporting ? "Exporting…" : "Export all"}
@@ -1801,6 +2044,148 @@ export default function RecipeBox() {
         )}
 
         {/* ═══════ DETAIL ═══════ */}
+        {!loading && view === "shopping" && (() => {
+          const needed = list.items.filter((i) => !i.checked);
+          const got = list.items.filter((i) => i.checked);
+          const onList = Object.entries(list.recipes);
+          const backLabel = { detail: "Back to the recipe", form: "Back to editing", import: "Back to the import" }[shoppingFrom.current] || "Back to recipes";
+          const row = (item) => {
+            const { qty, name } = describeItem(item);
+            const from = itemRecipes(item, list);
+            return (
+              <li key={item.id} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "11px 0", borderBottom: `1px solid var(--card-edge)` }}>
+                <input
+                  type="checkbox"
+                  className="rb-focus"
+                  checked={item.checked}
+                  onChange={() => toggleItem(item.id)}
+                  aria-label={`${item.checked ? "Put back" : "Tick off"} ${name}`}
+                  style={{ marginTop: 4, width: 18, height: 18, accentColor: T.rust, flex: "none", cursor: "pointer" }}
+                />
+                <div style={{ flex: 1, minWidth: 0, opacity: item.checked ? 0.5 : 1 }}>
+                  <span style={{ font: `400 15.5px/1.5 ${UI}`, color: "var(--card-text)", textDecoration: item.checked ? "line-through" : "none" }}>
+                    {qty && <><span className="rb-num" style={{ color: "var(--card-accent)", marginRight: 4 }}>{qty}</span>{" "}</>}
+                    {name}
+                  </span>
+                  {from.length > 0 && (
+                    <span style={{ display: "block", font: `400 12px/1.5 ${UI}`, color: "var(--card-muted)" }}>for {from.join(", ")}</span>
+                  )}
+                </div>
+                <button
+                  className="rb-focus rb-noprint"
+                  onClick={() => removeItem(item.id)}
+                  aria-label={`Remove ${name}`}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--card-muted)", font: `400 20px/1 ${UI}`, padding: "0 4px" }}
+                >
+                  ×
+                </button>
+              </li>
+            );
+          };
+          return (
+            <article className="rb-sheet" style={{ ...sheet, maxWidth: 820 }}>
+              <div style={ruleTop} className="rb-noprint" />
+              <Grain card />
+              <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 36px" }}>
+                <button
+                  className="rb-btn rb-focus rb-noprint"
+                  onClick={leaveShopping}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 16,
+                    background: "transparent", border: "none", padding: "4px 0",
+                    color: "var(--card-accent)", font: `600 13.5px/1 ${UI}`,
+                  }}
+                >
+                  <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
+                  {backLabel}
+                </button>
+                <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Shopping list</h2>
+                <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 22px", maxWidth: "58ch" }}>
+                  {needed.length
+                    ? `${needed.length} ${needed.length === 1 ? "thing" : "things"} to buy.`
+                    : list.items.length
+                    ? "Everything is in the basket."
+                    : "Nothing on it yet. Open a recipe and add it, or type something below."}
+                  {" "}One list for the whole family — anyone can add to it or tick things off.
+                </p>
+
+                <form
+                  className="rb-noprint"
+                  onSubmit={(e) => { e.preventDefault(); addTyped(); }}
+                  style={{ display: "flex", gap: 10, margin: "0 0 22px" }}
+                >
+                  <input
+                    className="rb-focus"
+                    style={input}
+                    value={newItem}
+                    onChange={(e) => setNewItem(e.target.value)}
+                    placeholder="Add something — paper towels, 2 lb chicken thighs"
+                    aria-label="Add something to the list"
+                  />
+                  <button type="submit" className="rb-btn rb-focus" style={btnQuiet} disabled={!newItem.trim()}>Add</button>
+                </form>
+
+                {onList.length > 0 && (
+                  <div className="rb-noprint" style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 18px" }}>
+                    {onList.map(([id, r]) => (
+                      <span
+                        key={id}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 4px 4px 12px", borderRadius: 999,
+                          border: `1px solid var(--card-edge)`, background: "var(--card-lift)", font: `500 12.5px/1.3 ${UI}`, color: "var(--card-text)",
+                        }}
+                      >
+                        {r.title}{r.servings ? ` · ${r.servings} ${r.servings === 1 ? "serving" : "servings"}` : ""}
+                        <button
+                          className="rb-focus"
+                          onClick={() => removeRecipeFromList(id)}
+                          aria-label={`Take ${r.title} off the list`}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--card-muted)", font: `400 16px/1 ${UI}`, padding: "0 6px" }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {needed.length > 0 && (
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0, borderTop: `1px solid var(--card-edge)` }}>{needed.map(row)}</ul>
+                )}
+
+                {got.length > 0 && (
+                  <div className="rb-noprint">
+                    <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "26px 0 6px" }}>In the basket</p>
+                    <ul style={{ listStyle: "none", padding: 0, margin: 0, borderTop: `1px solid var(--card-edge)` }}>{got.map(row)}</ul>
+                  </div>
+                )}
+
+                {list.items.length > 0 && (
+                  <div className="rb-noprint rb-actions" style={{ display: "flex", gap: 10, marginTop: 30, flexWrap: "wrap", alignItems: "center" }}>
+                    <button className="rb-btn rb-focus" style={btnQuiet} onClick={clearChecked} disabled={!got.length}>Clear ticked items</button>
+                    <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => window.print()}>Print</button>
+                    {confirmClear ? (
+                      <span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ font: `500 13.5px/1.4 ${UI}`, color: "var(--card-danger)" }}>Empty it for everyone?</span>
+                        <button
+                          className="rb-btn rb-focus"
+                          style={{ ...btnQuiet, background: "var(--card-danger)", color: T.inkDeep, borderColor: "var(--card-danger)" }}
+                          onClick={() => { clearAll(); setConfirmClear(false); }}
+                        >
+                          Empty it
+                        </button>
+                        <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => setConfirmClear(false)}>Keep it</button>
+                      </span>
+                    ) : (
+                      <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => setConfirmClear(true)}>Empty the list</button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </article>
+          );
+        })()}
+
         {!loading && view === "detail" && openRecipe && (
           <article className="rb-sheet" style={sheet}>
             <div style={ruleTop} className="rb-noprint" />
@@ -1856,6 +2241,7 @@ export default function RecipeBox() {
                   Start cooking
                 </button>
                 <Servings base={baseServings} factor={factor} setFactor={setFactor} />
+                {listControls(openRecipe)}
               </div>
 
               <div className="rb-detail">
