@@ -20,42 +20,52 @@ const T = {
   muted: "#6B6450",
 };
 
-/* Colour themes for the page behind the recipe cards. Light and dark mode
-   still decide the cards themselves; a theme sets the backdrop, the text and
-   buttons on it, the accent, and what dark-mode cards are tinted with.
+/* Colour themes, each in a light and a dark version. Light and dark mode pick
+   the version, so the mode reaches everything — the page, its text, the
+   buttons and tiles on it, cooking mode, and the recipe cards (cream in light
+   mode, tinted with the theme in dark).
 
-   Hackwith Teal reproduces the original colours exactly. Every other theme was
-   checked for contrast against it: the faint captions (45% opacity) come out
-   at least as readable as the teal's. `k` scales those opacities — dark ink at
-   45% over cream loses far more contrast than cream at 45% over dark teal, so
-   light themes lift their faint text rather than dropping below the rest. */
+   Hackwith Teal's dark version reproduces the original colours exactly. Every
+   version was checked for contrast against it: faint captions (45% opacity)
+   come out at least as readable as the original teal's. `k` scales those
+   opacities — dark ink at 45% over a pale page loses far more contrast than
+   cream at 45% over a dark one, so light versions lift their faint text. */
 const PALETTES = [
-  { id: "teal", name: "Hackwith Teal", soft: "#144043", bg: "#0B2F32", deep: "#061E21", ink: "#F7F2E6",
-    accent: "#E7A427", onAccent: "#061E21", darkCard: "#123B3F", darkLift: "#17494D", darkMuted: "#A3B3A9", k: 1 },
-  { id: "cast-iron", name: "Cast Iron", soft: "#33302D", bg: "#232120", deep: "#141312", ink: "#F2ECE0",
-    accent: "#D9955A", onAccent: "#1A1817", darkCard: "#2F2C2A", darkLift: "#3A3633", k: 1 },
-  { id: "sage", name: "Sage Garden", soft: "#304A38", bg: "#233629", deep: "#16241B", ink: "#F3EFE2",
-    accent: "#E8C872", onAccent: "#1A281F", darkCard: "#2E4535", darkLift: "#37523F", k: 1.12 },
-  { id: "terracotta", name: "Terracotta", soft: "#6E3121", bg: "#5A2417", deep: "#3C170E", ink: "#FBEFE4",
-    accent: "#F2C45A", onAccent: "#34140D", darkCard: "#693023", darkLift: "#77392A", k: 1.12 },
-  { id: "blue-willow", name: "Blue Willow", soft: "#27426B", bg: "#1C3152", deep: "#111F37", ink: "#F3F6FB",
-    accent: "#9CC4F2", onAccent: "#12213A", darkCard: "#243C62", darkLift: "#2C4770", k: 1 },
-  { id: "merlot", name: "Merlot", soft: "#5A2236", bg: "#47192A", deep: "#2C0E19", ink: "#F8ECE8",
-    accent: "#E7AE72", onAccent: "#2B0E18", darkCard: "#552131", darkLift: "#62283A", k: 1 },
-  { id: "butter", name: "Butter", soft: "#F8EDCB", bg: "#F3E4B5", deep: "#E6D194", ink: "#33261A",
-    accent: "#A2371F", onAccent: "#FFF8EC", darkCard: "#3B2F22", darkLift: "#47392A", k: 1.45, grain: 0.04 },
-  { id: "retro-mint", name: "Retro Mint", soft: "#D3EDE2", bg: "#BFE2D3", deep: "#A6D3C0", ink: "#172E29",
-    accent: "#A1222C", onAccent: "#FFF6F1", darkCard: "#1F3B35", darkLift: "#274740", k: 1.45, grain: 0.04 },
-  { id: "farmhouse", name: "Farmhouse", soft: "#F6F4EE", bg: "#EEEAE1", deep: "#DFD9CC", ink: "#262623",
-    accent: "#4C6746", onAccent: "#FBFAF6", darkCard: "#2F312C", darkLift: "#393C36", k: 1.45, grain: 0.035 },
+  { id: "teal", name: "Hackwith Teal", darkCard: "#123B3F", darkLift: "#17494D", darkMuted: "#A3B3A9",
+    dark: { soft: "#144043", bg: "#0B2F32", deep: "#061E21", ink: "#F7F2E6", accent: "#E7A427", onAccent: "#061E21", k: 1 },
+    light: { soft: "#EAF2F0", bg: "#DCE9E6", deep: "#C8DBD7", ink: "#0B2F32", accent: "#8A5A00", onAccent: "#FFF9EC", k: 1.45, grain: 0.04 } },
+  { id: "cast-iron", name: "Cast Iron", darkCard: "#2F2C2A", darkLift: "#3A3633",
+    dark: { soft: "#33302D", bg: "#232120", deep: "#141312", ink: "#F2ECE0", accent: "#D9955A", onAccent: "#1A1817", k: 1 },
+    light: { soft: "#F3F0EA", bg: "#E8E3DB", deep: "#D7D0C5", ink: "#232120", accent: "#924F1D", onAccent: "#FFF7EE", k: 1.45, grain: 0.04 } },
+  { id: "sage", name: "Sage Garden", darkCard: "#2E4535", darkLift: "#37523F",
+    dark: { soft: "#304A38", bg: "#233629", deep: "#16241B", ink: "#F3EFE2", accent: "#E8C872", onAccent: "#1A281F", k: 1.12 },
+    light: { soft: "#EDF2EA", bg: "#DFE8DC", deep: "#CBD9C6", ink: "#1C3023", accent: "#76590B", onAccent: "#FFF9EA", k: 1.45, grain: 0.04 } },
+  { id: "terracotta", name: "Terracotta", darkCard: "#693023", darkLift: "#77392A",
+    dark: { soft: "#6E3121", bg: "#5A2417", deep: "#3C170E", ink: "#FBEFE4", accent: "#F2C45A", onAccent: "#34140D", k: 1.12 },
+    light: { soft: "#F8EDE5", bg: "#F1DFD3", deep: "#E4C9B8", ink: "#4A1E13", accent: "#983C1B", onAccent: "#FFF6F0", k: 1.45, grain: 0.04 } },
+  { id: "blue-willow", name: "Blue Willow", darkCard: "#243C62", darkLift: "#2C4770",
+    dark: { soft: "#27426B", bg: "#1C3152", deep: "#111F37", ink: "#F3F6FB", accent: "#9CC4F2", onAccent: "#12213A", k: 1.05 },
+    light: { soft: "#EEF3FA", bg: "#DEE8F5", deep: "#C8D8EE", ink: "#13223D", accent: "#2B5591", onAccent: "#F6F9FD", k: 1.45, grain: 0.04 } },
+  { id: "merlot", name: "Merlot", darkCard: "#552131", darkLift: "#62283A",
+    dark: { soft: "#5A2236", bg: "#47192A", deep: "#2C0E19", ink: "#F8ECE8", accent: "#E7AE72", onAccent: "#2B0E18", k: 1.05 },
+    light: { soft: "#F7ECEF", bg: "#EFDEE3", deep: "#E0C7CF", ink: "#3E1422", accent: "#8E4418", onAccent: "#FFF6F0", k: 1.45, grain: 0.04 } },
+  { id: "butter", name: "Butter", darkCard: "#3B2F22", darkLift: "#47392A",
+    dark: { soft: "#3C3122", bg: "#2E2519", deep: "#1C170F", ink: "#F6EAC8", accent: "#F2C96B", onAccent: "#1C170F", k: 1.05 },
+    light: { soft: "#F8EDCB", bg: "#F3E4B5", deep: "#E6D194", ink: "#33261A", accent: "#A2371F", onAccent: "#FFF8EC", k: 1.45, grain: 0.04 } },
+  { id: "retro-mint", name: "Retro Mint", darkCard: "#20403A", darkLift: "#274A43",
+    dark: { soft: "#1F3B35", bg: "#15302A", deep: "#0C1E1A", ink: "#E6F4EE", accent: "#F2939A", onAccent: "#0D1F1B", k: 1 },
+    light: { soft: "#D3EDE2", bg: "#BFE2D3", deep: "#A6D3C0", ink: "#172E29", accent: "#A1222C", onAccent: "#FFF6F1", k: 1.45, grain: 0.04 } },
+  { id: "farmhouse", name: "Farmhouse", darkCard: "#2F312C", darkLift: "#393C36",
+    dark: { soft: "#30322D", bg: "#242622", deep: "#161715", ink: "#EEEAE1", accent: "#A6C39C", onAccent: "#161715", k: 1 },
+    light: { soft: "#F6F4EE", bg: "#EEEAE1", deep: "#DFD9CC", ink: "#262623", accent: "#4C6746", onAccent: "#FBFAF6", k: 1.45, grain: 0.035 } },
 ];
 /* Backgrounds, picked separately from the colours and shown as they are —
    nothing tints the image. Readability comes from what sits on it instead:
    buttons, box tiles, search and tags get a near-solid fill of the colour
    theme's own background, and loose text gets a soft halo in the same colour
-   (see .rb-textured in the stylesheet). The fill is .94: the least that keeps
-   all 72 colour-and-texture pairings at the default teal's contrast over each
-   image's brightest and darkest spots.
+   (see .rb-textured in the stylesheet). The fill is .98: the least that keeps
+   all 144 pairings — every light and dark version against every texture — at
+   the original teal's contrast over each image's brightest and darkest spots.
 
    Files live in public/themes and are served with the site, not from KV.
    Sources — tiles are CC0 from Poly Haven (kitchen_wood, dark_wood,
@@ -78,17 +88,20 @@ const localTexture = () => { try { return localStorage.getItem("rb-texture"); } 
 
 const paletteById = (id) => PALETTES.find((p) => p.id === id) || PALETTES[0];
 /* what the picker shows for a colour theme */
-const swatchFor = (p) =>
-  `radial-gradient(circle at 70% 30%, ${p.accent} 0 27%, transparent 28%), linear-gradient(160deg, ${p.soft}, ${p.deep})`;
+const swatchFor = (p, mode) =>
+  `radial-gradient(circle at 70% 30%, ${p[mode].accent} 0 27%, transparent 28%), linear-gradient(160deg, ${p[mode].soft}, ${p[mode].deep})`;
 const hexRgb = (h) => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
 /* card text blended toward the card, for the muted grey on dark-mode cards */
 const mixHex = (a, b, t) => `rgb(${hexRgb(a).map((v, i) => Math.round(v * t + hexRgb(b)[i] * (1 - t))).join(", ")})`;
-const paletteVars = (p) => ({
-  "--page-soft": p.soft, "--page-bg": p.bg, "--page-deep": p.deep, "--deep-rgb": hexRgb(p.deep).join(", "), "--bg-rgb": hexRgb(p.bg).join(", "),
-  "--on-page": hexRgb(p.ink).join(", "), "--ink-k": String(p.k),
-  "--page-accent": p.accent, "--accent-rgb": hexRgb(p.accent).join(", "), "--on-accent": p.onAccent,
-  "--dark-card-bg": p.darkCard, "--dark-card-lift": p.darkLift, "--dark-card-muted": p.darkMuted || mixHex("#EFE8D6", p.darkCard, 0.64),
-});
+const paletteVars = (p, mode) => {
+  const v = p[mode];
+  return {
+    "--page-soft": v.soft, "--page-bg": v.bg, "--page-deep": v.deep, "--deep-rgb": hexRgb(v.deep).join(", "), "--bg-rgb": hexRgb(v.bg).join(", "),
+    "--on-page": hexRgb(v.ink).join(", "), "--ink-k": String(v.k),
+    "--page-accent": v.accent, "--accent-rgb": hexRgb(v.accent).join(", "), "--on-accent": v.onAccent,
+    "--dark-card-bg": p.darkCard, "--dark-card-lift": p.darkLift, "--dark-card-muted": p.darkMuted || mixHex("#EFE8D6", p.darkCard, 0.64),
+  };
+};
 /* Mirrored in localStorage as well as the account, so the page can paint the
    right colours before the account has answered — see the script in index.html. */
 const localPalette = () => { try { return localStorage.getItem("rb-palette"); } catch { return null; } };
@@ -1302,7 +1315,17 @@ export default function RecipeBox() {
   const [tagFilter, setTagFilter] = useState(null);
   const [activeBox, setActiveBox] = useState(null);   // null = every box
   const [scope, setScope] = useState("all");
-  const [theme, setTheme] = useState("light");
+  /* Mirrored locally, like the colour theme, so the first paint is already in
+     the right mode. With nothing stored, follow the device's own setting. */
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem("rb-mode");
+      if (saved === "dark" || saved === "light") return saved;
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    } catch {
+      return "light";
+    }
+  });
   const [form, setForm] = useState(BLANK);
   const [editingId, setEditingId] = useState(null);
   const [pasteText, setPasteText] = useState("");
@@ -1421,10 +1444,15 @@ export default function RecipeBox() {
      first paint on the next visit — should match the theme too */
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty("--boot-bg", palette.bg);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", palette.bg);
-    try { localStorage.setItem("rb-palette", palette.id); localStorage.setItem("rb-palette-bg", palette.bg); } catch { /* fine */ }
-  }, [palette]);
+    const bg = palette[theme].bg;
+    root.style.setProperty("--boot-bg", bg);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", bg);
+    try {
+      localStorage.setItem("rb-palette", palette.id);
+      localStorage.setItem("rb-palette-bg", bg);
+      localStorage.setItem("rb-mode", theme);
+    } catch { /* fine */ }
+  }, [palette, theme]);
 
   /* the picker closes on a click elsewhere or Escape — and that Escape must not
      also carry on to the recipe page, where it means "go back" */
@@ -2034,10 +2062,10 @@ export default function RecipeBox() {
        the image itself never has to be dimmed. Loose text gets a strip behind
        each line rather than a glow — a glow cannot hold up against a bold
        gingham check. The negative margin keeps the text on its column. */
-    .rb-textured .rb-onimg { background-color: rgba(var(--bg-rgb), .94) !important; }
-    .rb-textured .rb-onimg-on { background: linear-gradient(rgba(var(--accent-rgb), .14), rgba(var(--accent-rgb), .14)), rgba(var(--bg-rgb), .94) !important; }
+    .rb-textured .rb-onimg { background-color: rgba(var(--bg-rgb), .98) !important; }
+    .rb-textured .rb-onimg-on { background: linear-gradient(rgba(var(--accent-rgb), .14), rgba(var(--accent-rgb), .14)), rgba(var(--bg-rgb), .98) !important; }
     .rb-textured .rb-strip {
-      background: rgba(var(--bg-rgb), .94); border-radius: 2px;
+      background: rgba(var(--bg-rgb), .98); border-radius: 2px;
       padding: .08em .3em; margin: 0 -.3em;
       -webkit-box-decoration-break: clone; box-decoration-break: clone;
     }
@@ -2128,7 +2156,7 @@ export default function RecipeBox() {
         ingestFiles(e.dataTransfer.files);
       }}
       style={{
-        ...paletteVars(palette),
+        ...paletteVars(palette, theme),
         position: "relative", isolation: "isolate", minHeight: "100vh", color: "rgb(var(--on-page))",
         background: `radial-gradient(120% 90% at 50% 0%, var(--page-soft) 0%, var(--page-bg) 45%, var(--page-deep) 100%)`,
         paddingBottom: timers.length ? 130 : 80,
@@ -2149,7 +2177,7 @@ export default function RecipeBox() {
         />
       )}
       {/* a real texture makes the speckle redundant */}
-      {!texture && <Grain opacity={palette.grain ?? 0.06} />}
+      {!texture && <Grain opacity={palette[theme].grain ?? 0.06} />}
 
       {dragging && (
         <div style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(var(--deep-rgb), .88)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
@@ -2197,7 +2225,7 @@ export default function RecipeBox() {
               aria-hidden
               style={{
                 width: 12, height: 12, borderRadius: "50%", flex: "none",
-                background: texture ? `url("${texture.thumb}") center / cover` : `linear-gradient(135deg, ${palette.soft} 0 50%, ${palette.accent} 50% 100%)`,
+                background: texture ? `url("${texture.thumb}") center / cover` : `linear-gradient(135deg, ${palette[theme].soft} 0 50%, ${palette[theme].accent} 50% 100%)`,
                 boxShadow: "0 0 0 1px rgba(var(--on-page), calc(.45 * var(--ink-k)))",
               }}
             />
@@ -2231,12 +2259,12 @@ export default function RecipeBox() {
               <p style={{ font: `400 12.5px/1.45 ${UI}`, color: "var(--card-muted)", margin: "0 2px 12px" }}>Just for you — everyone picks their own.</p>
               <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "0 2px 8px" }}>Colours</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                {PALETTES.map((p) => swatchButton(p.id, p.id === palette.id, () => choosePalette(p.id), swatchFor(p), p.name))}
+                {PALETTES.map((p) => swatchButton(p.id, p.id === palette.id, () => choosePalette(p.id), swatchFor(p, theme), p.name))}
               </div>
               <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "16px 2px 4px" }}>Background</p>
               <p style={{ font: `400 12.5px/1.45 ${UI}`, color: "var(--card-muted)", margin: "0 2px 8px" }}>Shown behind your colours, as it is.</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                {swatchButton("none", !texture, () => chooseTexture(null), swatchFor(palette), "Plain")}
+                {swatchButton("none", !texture, () => chooseTexture(null), swatchFor(palette, theme), "Plain")}
                 {TEXTURES.map((t) => swatchButton(t.id, texture?.id === t.id, () => chooseTexture(t.id), `url("${t.thumb}") center / cover`, t.name))}
               </div>
             </div>
