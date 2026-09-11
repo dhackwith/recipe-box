@@ -9,9 +9,10 @@
  *   delete(key, shared) -> { key, deleted, shared }
  *   list(prefix, shared)-> { keys, prefix, shared }
  *
- * "shared" data is the family's single recipe box. Unshared data is scoped to
- * the signed-in person by Cloudflare Access, which is how the light/dark
- * preference stays personal.
+ * "shared" data is the family's single recipe box — the app only ever asks for
+ * that. The server does not reliably learn who is signed in, so it cannot keep
+ * anything per person; personal things (the shopping list, the theme) live in
+ * localStorage instead.
  */
 const API = "/api/storage";
 

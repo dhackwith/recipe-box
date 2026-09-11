@@ -20,6 +20,10 @@ const T = {
   muted: "#6B6450",
 };
 
+/* The site's name, matching its address (thehackwithtable.com). Fixed here
+   rather than read from the saved box, which still carries the old name. */
+const SITE_NAME = "The Hackwith Table";
+
 /* Colour themes, each in a light and a dark version. Light and dark mode pick
    the version, so the mode reaches everything — the page, its text, the
    buttons and tiles on it, cooking mode, and the recipe cards (cream in light
@@ -322,15 +326,15 @@ const scaleServings = (s, factor) => {
 
 /* ══════════════════════════════════════════════════════════════════
    Shopping list
-   Each person's own list, stored under their Cloudflare Access identity the
-   way their theme is, and apart from the box: ticking off milk must not re-save
-   every recipe and photo. Being one person's, it is only ever written from one
-   person's devices, so two people shopping at once cannot overwrite each
-   other. Each item keeps the lines that fed it, recipe by recipe, so adding
+   One list per device, kept in this browser's localStorage — not in the
+   account and not in KV. A phone and a laptop each have their own, and nothing
+   syncs between them. It also means no server round trip and no save delay:
+   a tick is saved the moment it happens. Each item keeps the lines that fed it,
+   recipe by recipe, so adding
    a recipe again replaces its share instead of doubling it, and taking one off
    removes exactly what it put on.
    ══════════════════════════════════════════════════════════════════ */
-const LIST_KEY = "grocery-list";
+const LIST_KEY = "rb-shopping-list";
 const EMPTY_LIST = { items: [], recipes: {} };
 
 const UNIT_CANON = {
@@ -440,26 +444,15 @@ function describeItem(item) {
 const itemRecipes = (item, list) =>
   [...new Set(item.sources.map((src) => list.recipes[src.recipeId]?.title).filter(Boolean))];
 
-/* The list used to be shared by the family. Until someone has a list of their
-   own it starts as a copy of that old family list, so nothing on it vanishes;
-   the first change saves it as theirs. The family list itself is left alone. */
-async function loadList() {
-  if (typeof window === "undefined" || !window.storage) return null;
-  const read = async (shared) => {
-    try {
-      const res = await window.storage.get(LIST_KEY, shared);
-      const data = JSON.parse(res.value);
-      return data && Array.isArray(data.items) ? { items: data.items, recipes: data.recipes || {} } : { ...EMPTY_LIST };
-    } catch (err) {
-      /* A missing key is "nothing here yet". Anything else is a failed read, and
-         must not be mistaken for an empty list — that would wipe the one on screen. */
-      return /not found/i.test(String(err && err.message)) ? undefined : null;
-    }
-  };
-  const mine = await read(false);
-  if (mine !== undefined) return mine;
-  const family = await read(true);
-  return family === undefined ? { ...EMPTY_LIST } : family;
+/* Lists kept in the account before this — first one for the family, then one
+   per person — are left in KV untouched; a device simply starts empty. */
+function loadList() {
+  try {
+    const data = JSON.parse(localStorage.getItem(LIST_KEY) || "null");
+    return data && Array.isArray(data.items) ? { items: data.items, recipes: data.recipes || {} } : { ...EMPTY_LIST };
+  } catch {
+    return { ...EMPTY_LIST };
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1095,6 +1088,42 @@ const Grain = ({ opacity = 0.045, blend = "normal", card = false }) => (
   />
 );
 
+/* A button that opens a panel beneath it. The panel closes on a click anywhere
+   else or on Escape — and that Escape stops here, since on a recipe page it
+   would otherwise also mean "go back". `children` gets a close() to call once
+   a choice is made; choices that people compare, like themes, leave it open. */
+function Popover({ trigger, children, align = "left", width = 300, label, onOpen }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const toggle = () => setOpen((o) => { if (!o && onOpen) onOpen(); return !o; });
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      {trigger({ open, toggle })}
+      {open && (
+        <div
+          role="dialog"
+          aria-label={label}
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", [align]: 0, zIndex: 30, width, maxWidth: "calc(100vw - 32px)",
+            background: "var(--card-bg)", color: "var(--card-text)", border: "1px solid var(--card-edge)", borderRadius: 3,
+            padding: 10, boxShadow: "0 22px 44px -18px rgba(0,0,0,.6)", maxHeight: "min(74vh, 640px)", overflowY: "auto",
+          }}
+        >
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Field({ label, hint, children }) {
   return (
     <label style={{ display: "block", marginBottom: 20 }}>
@@ -1154,6 +1183,19 @@ const btnPrimary = { background: "var(--page-accent)", color: "var(--on-accent)"
 const btnGhost = { background: "transparent", color: "rgba(var(--on-page), calc(.88 * var(--ink-k)))", border: "1px solid rgba(var(--on-page), calc(.28 * var(--ink-k)))", padding: "11px 20px" };
 const btnQuiet = { background: "transparent", color: "var(--card-muted)", border: `1px solid var(--card-edge)`, padding: "10px 18px" };
 const linkButton = { background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--card-accent)", font: "inherit", textDecoration: "underline", textUnderlineOffset: 2 };
+/* rows and headings inside the dropdown panels, which use the card palette */
+const menuRow = (on) => ({
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, width: "100%",
+  padding: "9px 10px", border: "none", borderRadius: 3, cursor: "pointer", textAlign: "left",
+  font: `500 14px/1.3 ${UI}`, background: on ? "var(--card-lift)" : "transparent", color: on ? "var(--card-accent)" : "var(--card-text)",
+});
+const menuLabel = { font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "4px 4px 8px" };
+/* the toolbar buttons on the page, matched to the search box beside them */
+const toolbarButton = {
+  display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 12, minHeight: 50,
+  padding: "8px 14px", borderRadius: 2, cursor: "pointer", textAlign: "left",
+  border: "1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))", background: "rgba(var(--on-page), calc(.06 * var(--ink-k)))",
+};
 const sheet = { position: "relative", background: "var(--card-bg)", color: "var(--card-text)", borderRadius: 3, boxShadow: "0 26px 60px -30px rgba(0,0,0,.7)", overflow: "hidden" };
 const ruleTop = { height: 7, background: `linear-gradient(90deg, ${T.marigold} 0 46%, ${T.rust} 46% 62%, ${T.sage} 62% 100%)` };
 
@@ -1317,7 +1359,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
    App
    ══════════════════════════════════════════════════════════════════ */
 export default function RecipeBox() {
-  const [box, setBox] = useState({ name: "The Hackwith Family Recipe Box", recipes: [] });
+  const [box, setBox] = useState({ name: SITE_NAME, recipes: [] });
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
   const [view, setView] = useState("list");
@@ -1356,21 +1398,15 @@ export default function RecipeBox() {
   const [staged, setStaged] = useState([]);
   const [importErrors, setImportErrors] = useState([]);
   const [exporting, setExporting] = useState(false);
-  const [list, setList] = useState(EMPTY_LIST);
-  const listRef = useRef(EMPTY_LIST);        // the latest list, for writes that fire later
-  const listTimer = useRef(null);
-  const listSaving = useRef(false);
-  const listDirty = useRef(false);
+  const [list, setList] = useState(loadList);
+  const listRef = useRef(list);              // the latest list, so quick successive changes build on each other
   const shoppingFrom = useRef("list");
   const [newItem, setNewItem] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
   const [crossed, setCrossed] = useState(loadCrossed);
   const [palette, setPalette] = useState(() => paletteById(localPalette()));
   const [texture, setTexture] = useState(() => textureById(localTexture()));
-  const textureSave = useRef(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const pickerRef = useRef(null);
-  const paletteSave = useRef(null);
+  const [menuPane, setMenuPane] = useState("main");
   const [dragging, setDragging] = useState(false);
   const [factor, setFactor] = useState(1);
   const [cooking, setCooking] = useState(false);
@@ -1392,47 +1428,17 @@ export default function RecipeBox() {
     return () => link.remove();
   }, []);
 
-  /* the theme is a personal setting: stored unshared, so one person's choice
-     doesn't repaint the box for everyone else */
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await window.storage?.get("theme", false);
-        if (res?.value === "dark" || res?.value === "light") setTheme(res.value);
-      } catch {}
-      try {
-        const res = await window.storage?.get("palette", false);
-        if (PALETTES.some((p) => p.id === res?.value)) setPalette(paletteById(res.value));
-      } catch {}
-      try {
-        /* "none" is stored on purpose, so choosing no background sticks too */
-        const res = await window.storage?.get("texture", false);
-        if (res?.value === "none") setTexture(null);
-        else if (textureById(res?.value)) setTexture(textureById(res.value));
-      } catch {}
-    })();
-  }, []);
-
-  const flipTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    try { window.storage?.set("theme", next, false); } catch {}
-  };
-
-  /* Personal, like light and dark. Clicking through the swatches to compare
-     should cost one saved write, not one per click, so the save waits a beat. */
-  const choosePalette = (id) => {
-    const p = paletteById(id);
-    setPalette(p);
-    clearTimeout(paletteSave.current);
-    paletteSave.current = setTimeout(() => { window.storage?.set("palette", p.id, false).catch(() => {}); }, 1200);
-  };
+  /* Mode, colours and background belong to this device, like the shopping
+     list. The server isn't told who is signed in, so it can't tell one person
+     from another — anything it kept "per person" would be one setting for everyone.
+     The effect below mirrors mode and colours locally; the background is
+     saved here. */
+  const flipTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  const choosePalette = (id) => setPalette(paletteById(id));
   const chooseTexture = (id) => {
     const t = textureById(id);
     setTexture(t);
     try { localStorage.setItem("rb-texture", t ? t.id : ""); } catch { /* fine */ }
-    clearTimeout(textureSave.current);
-    textureSave.current = setTimeout(() => { window.storage?.set("texture", t ? t.id : "none", false).catch(() => {}); }, 1200);
   };
 
   const swatchButton = (key, on, onClick, swatch, label) => (
@@ -1465,22 +1471,13 @@ export default function RecipeBox() {
     } catch { /* fine */ }
   }, [palette, theme]);
 
-  /* the picker closes on a click elsewhere or Escape — and that Escape must not
-     also carry on to the recipe page, where it means "go back" */
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const onDown = (e) => { if (!pickerRef.current?.contains(e.target)) setPickerOpen(false); };
-    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); setPickerOpen(false); } };
-    document.addEventListener("pointerdown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
-  }, [pickerOpen]);
 
   /* load */
   useEffect(() => {
     (async () => {
       const data = await loadBox();
-      const loaded = data && Array.isArray(data.recipes) ? data : { name: "The Hackwith Family Recipe Box", recipes: [SEED] };
+      const loaded = data && Array.isArray(data.recipes) ? data : { name: SITE_NAME, recipes: [SEED] };
+      loaded.name = SITE_NAME;
       /* DEFAULT_AUTHORS seeds a box that has never stored a roster. Unioning it
          in on every load instead would make the four permanent: remove one and
          it reappears on the next visit, which the shelf offers to do. */
@@ -1669,56 +1666,63 @@ export default function RecipeBox() {
     }
   };
 
-  /* Writes are debounced and never overlap: KV accepts about one write a second
-     per key, and ticking things off in the store happens faster than that. */
-  const writeList = async () => {
-    if (listSaving.current) { listDirty.current = true; return; }
-    listSaving.current = true;
-    try { await window.storage?.set(LIST_KEY, JSON.stringify(listRef.current), false); }
-    catch { flash("Couldn't save the shopping list — it will retry on your next change"); }
-    finally {
-      listSaving.current = false;
-      if (listDirty.current) { listDirty.current = false; setTimeout(writeList, 1000); }
-    }
-  };
+  /* Saved to the device on every change — synchronous, so there is nothing to
+     debounce and nothing that can be lost when a phone locks mid-shop. */
   const updateList = (change) => {
     const next = change(listRef.current);
     listRef.current = next;
     setList(next);
-    clearTimeout(listTimer.current);
-    listTimer.current = setTimeout(() => { listTimer.current = null; writeList(); }, 800);
+    try { localStorage.setItem(LIST_KEY, JSON.stringify(next)); }
+    catch { flash("Couldn't save the shopping list on this device — its storage may be full or switched off", 7000); }
   };
 
+  /* two tabs on one device share its list, so a change in one shows in the other */
   useEffect(() => {
-    loadList().then((l) => { if (l && !listTimer.current) { listRef.current = l; setList(l); } });
-    /* a phone locked in the checkout queue must not lose the last tick */
-    const flush = () => {
-      if (document.visibilityState !== "hidden" || !listTimer.current) return;
-      clearTimeout(listTimer.current);
-      listTimer.current = null;
-      writeList();
+    const onStorage = (e) => {
+      if (e.key !== LIST_KEY) return;
+      const l = loadList();
+      listRef.current = l;
+      setList(l);
     };
-    document.addEventListener("visibilitychange", flush);
-    return () => document.removeEventListener("visibilitychange", flush);
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  /* Refetch on the way in so changes made on your other devices show up —
-     unless there are local changes still waiting to be written, which a
-     refetch would undo. */
-  const openShopping = async () => {
+  const openShopping = () => {
     if (view !== "shopping") shoppingFrom.current = view;
     setConfirmClear(false);
     setView("shopping");
     window.scrollTo(0, 0);
-    if (listTimer.current || listSaving.current) return;
-    const fresh = await loadList();
-    if (!fresh || listTimer.current || listSaving.current) return;
-    listRef.current = fresh;
-    setList(fresh);
   };
   const leaveShopping = () => {
     const back = shoppingFrom.current;
     setView(back === "detail" && !openRecipe ? "list" : back);
+  };
+
+  /* Home: back to the list from anywhere. The search, filters and chosen box
+     live outside the views, so they are still set when the list comes back.
+     A half-written recipe or a pending import is not thrown away on one tap. */
+  const [homeArmed, setHomeArmed] = useState(false);
+  const formStartRef = useRef("");
+  useEffect(() => {
+    if (view === "form") formStartRef.current = JSON.stringify(form);
+    setHomeArmed(false);
+  }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!homeArmed) return;
+    const t = setTimeout(() => setHomeArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [homeArmed]);
+  const goHome = () => {
+    const unsaved =
+      (view === "form" && (JSON.stringify(form) !== formStartRef.current || pasteText.trim() !== "" || linkText.trim() !== "")) ||
+      (view === "import" && staged.length > 0);
+    if (unsaved && !homeArmed) { setHomeArmed(true); return; }
+    setHomeArmed(false);
+    setCooking(false);
+    if (view === "import") { setStaged([]); setImportErrors([]); }
+    if (view !== "list") setView("list");
+    window.scrollTo({ top: 0, behavior: view === "list" ? "smooth" : "auto" });
   };
 
   const addRecipeToList = (recipe) => {
@@ -1908,9 +1912,11 @@ export default function RecipeBox() {
 
   /* form */
   const startAdd = () => {
+    listStateRef.current = { query, scope, tagFilter, activeBox };
     const prefill = activeBox && activeBox !== UNFILED ? { ...BLANK, contributor: activeBox } : BLANK;
     setForm(prefill);
     setPasteText("");
+    setLinkText("");
     setEditingId(null);
     setView("form");
   };
@@ -2087,8 +2093,7 @@ export default function RecipeBox() {
     @media (min-width: 760px) { .rb-detail { grid-template-columns: 292px 1fr; gap: 52px; } }
     .rb-card { transition: transform 160ms cubic-bezier(.2,.7,.3,1), box-shadow 160ms ease; }
     .rb-card:active { cursor: grabbing; }
-    .rb-shelf button { transition: transform 120ms ease, border-color 120ms ease, background 120ms ease; }
-    @media (prefers-reduced-motion: reduce) { .rb-shelf button { transition: none; } }
+
     .rb-card:hover, .rb-card:focus-visible { transform: translateY(-3px); box-shadow: 0 14px 30px -14px rgba(0,0,0,.55); }
     @media (prefers-reduced-motion: reduce) { .rb-card { transition: none; } .rb-card:hover { transform: none; } }
     .rb-btn { cursor: pointer; border-radius: 2px; font-family: ${UI}; font-weight: 600; font-size: 14px; letter-spacing: .01em; transition: filter 120ms ease; }
@@ -2134,23 +2139,16 @@ export default function RecipeBox() {
       .rb-main { padding: 20px 16px 0 !important; }
       .rb-pad { padding: 24px 18px 30px !important; }
       .rb-grid { grid-template-columns: 1fr; gap: 16px; }
-      .rb-scope { width: 100%; }
-      .rb-scope button { flex: 1 1 0; padding: 11px 4px !important; }
+
       /* 16px keeps iOS from zooming the viewport on focus */
       .rb input, .rb textarea { font-size: 16px !important; }
       .rb-actions button { flex: 1 1 auto; }
       .rb-corner { top: 8px !important; right: 16px !important; }
-      .rb-shelf { gap: 8px; }
-      .rb-shelf button { flex: 1 1 132px; min-width: 0 !important; padding: 10px 12px !important; }
-      /* Two boxes fit per row at this width. Giving "All recipes" the whole
-         row keeps it first and leaves an even number of author boxes below,
-         so none is left alone on the last row stretched to full width. */
-      .rb-shelf button.rb-shelf-all { flex: 1 1 100%; }
-      .rb-shelf .rb-new-box { flex: 0 0 auto; }
+
       .rb-tray { padding: 10px 12px !important; }
     }
     @media (max-width: 400px) {
-      .rb-scope button { font-size: 11.5px !important; letter-spacing: 0 !important; }
+
     }
   `;
 
@@ -2220,97 +2218,109 @@ export default function RecipeBox() {
 
       {/* ─── masthead ─── */}
       <header className="rb-noprint rb-head" style={{ position: "relative", maxWidth: 1120, margin: "0 auto", padding: "52px 26px 0" }}>
-        <div ref={pickerRef} className="rb-corner" style={{ position: "absolute", top: 14, right: 26, zIndex: 5, display: "flex", gap: 8 }}>
+        <div className="rb-corner" style={{ position: "absolute", top: 14, right: 26, zIndex: 5, display: "flex", gap: 8 }}>
           <button
-            className="rb-btn rb-focus rb-onimg"
-            onClick={() => setPickerOpen((o) => !o)}
-            aria-expanded={pickerOpen}
-            aria-haspopup="dialog"
-            title="Change the colour theme"
+            className={`rb-btn rb-focus${homeArmed ? "" : " rb-onimg"}`}
+            onClick={goHome}
+            aria-current={view === "list" ? "page" : undefined}
+            title={view === "list" ? "Back to the top" : "Back to all the recipes — your search and filters stay as they were"}
             style={{
               display: "inline-flex", alignItems: "center", gap: 7,
-              background: "transparent", border: "1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))",
-              color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))", padding: "7px 13px", fontSize: 12.5, fontWeight: 500,
+              background: homeArmed ? "var(--card-danger)" : "transparent",
+              border: `1px solid ${homeArmed ? "var(--card-danger)" : "rgba(var(--on-page), calc(.22 * var(--ink-k)))"}`,
+              color: homeArmed ? T.inkDeep : "rgba(var(--on-page), calc(.8 * var(--ink-k)))",
+              padding: "7px 13px", fontSize: 12.5, fontWeight: 600,
             }}
           >
-            <span
-              aria-hidden
-              style={{
-                width: 12, height: 12, borderRadius: "50%", flex: "none",
-                background: texture ? `url("${texture.thumb}") center / cover` : `linear-gradient(135deg, ${palette[theme].soft} 0 50%, ${palette[theme].accent} 50% 100%)`,
-                boxShadow: "0 0 0 1px rgba(var(--on-page), calc(.45 * var(--ink-k)))",
-              }}
-            />
-            Theme
+            <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>⌂</span>
+            {homeArmed ? "Discard & go home?" : "Home"}
           </button>
-          <button
-            className="rb-btn rb-focus rb-onimg"
-            onClick={flipTheme}
-            aria-pressed={theme === "dark"}
-            title="Switch between light and dark mode"
-            style={{
-              background: "transparent", border: "1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))",
-              color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))", padding: "7px 13px", fontSize: 12.5, fontWeight: 500,
-            }}
+          <Popover
+            align="right"
+            width={312}
+            label="Menu"
+            onOpen={() => setMenuPane("main")}
+            trigger={({ open, toggle }) => (
+              <button
+                className="rb-btn rb-focus rb-onimg"
+                onClick={toggle}
+                aria-expanded={open}
+                aria-haspopup="dialog"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  background: "transparent", border: "1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))",
+                  color: "rgba(var(--on-page), calc(.8 * var(--ink-k)))", padding: "7px 13px", fontSize: 12.5, fontWeight: 600,
+                }}
+              >
+                <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>☰</span>
+                Menu
+              </button>
+            )}
           >
-            {theme === "dark" ? "Light mode" : "Dark mode"}
-          </button>
-
-          {pickerOpen && (
-            <div
-              role="dialog"
-              aria-label="Colour theme"
-              style={{
-                position: "absolute", top: "calc(100% + 8px)", right: 0, width: 312, maxWidth: "calc(100vw - 32px)",
-                background: "var(--card-bg)", color: "var(--card-text)", border: "1px solid var(--card-edge)",
-                borderRadius: 3, padding: "14px 14px 12px", boxShadow: "0 22px 44px -18px rgba(0,0,0,.6)",
-                maxHeight: "min(72vh, 620px)", overflowY: "auto",
-              }}
-            >
-              <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "2px 2px 4px" }}>Theme</p>
-              <p style={{ font: `400 12.5px/1.45 ${UI}`, color: "var(--card-muted)", margin: "0 2px 12px" }}>Just for you — everyone picks their own.</p>
-              <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "0 2px 8px" }}>Colours</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                {PALETTES.map((p) => swatchButton(p.id, p.id === palette.id, () => choosePalette(p.id), swatchFor(p, theme), p.name))}
-              </div>
-              <p style={{ font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "16px 2px 4px" }}>Background</p>
-              <p style={{ font: `400 12.5px/1.45 ${UI}`, color: "var(--card-muted)", margin: "0 2px 8px" }}>Shown behind your colours, as it is.</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                {swatchButton("none", !texture, () => chooseTexture(null), swatchFor(palette, theme), "Plain")}
-                {TEXTURES.map((t) => swatchButton(t.id, texture?.id === t.id, () => chooseTexture(t.id), `url("${t.thumb}") center / cover`, t.name))}
-              </div>
-            </div>
-          )}
+            {(close) => menuPane === "theme" ? (
+              <>
+                <button className="rb-focus" onClick={() => setMenuPane("main")} style={{ ...menuRow(false), color: "var(--card-accent)", fontWeight: 600, marginBottom: 4 }}>
+                  <span>‹ Back</span>
+                </button>
+                <p style={menuLabel}>Colours</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  {PALETTES.map((p) => swatchButton(p.id, p.id === palette.id, () => choosePalette(p.id), swatchFor(p, theme), p.name))}
+                </div>
+                <p style={{ ...menuLabel, margin: "16px 4px 4px" }}>Background</p>
+                <p style={{ font: `400 12.5px/1.45 ${UI}`, color: "var(--card-muted)", margin: "0 4px 8px" }}>Shown behind your colours, as it is.</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  {swatchButton("none", !texture, () => chooseTexture(null), swatchFor(palette, theme), "Plain")}
+                  {TEXTURES.map((t) => swatchButton(t.id, texture?.id === t.id, () => chooseTexture(t.id), `url("${t.thumb}") center / cover`, t.name))}
+                </div>
+                <p style={{ font: `400 12px/1.45 ${UI}`, color: "var(--card-muted)", margin: "12px 4px 2px" }}>Just for this device — everyone picks their own.</p>
+              </>
+            ) : (
+              <>
+                <button className="rb-focus" onClick={flipTheme} aria-pressed={theme === "dark"} style={menuRow(false)}>
+                  <span>Dark mode</span>
+                  <span aria-hidden style={{ position: "relative", flex: "none", width: 34, height: 20, borderRadius: 999, background: theme === "dark" ? "var(--card-accent)" : "var(--card-edge)" }}>
+                    <span style={{ position: "absolute", top: 3, left: theme === "dark" ? 17 : 3, width: 14, height: 14, borderRadius: "50%", background: "var(--card-bg)", transition: "left 120ms ease" }} />
+                  </span>
+                </button>
+                <button className="rb-focus" onClick={() => setMenuPane("theme")} style={menuRow(false)}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                    <span
+                      aria-hidden
+                      style={{
+                        flex: "none", width: 18, height: 18, borderRadius: "50%", boxShadow: "inset 0 0 0 1px rgba(0,0,0,.15)",
+                        background: texture ? `url("${texture.thumb}") center / cover` : swatchFor(palette, theme),
+                      }}
+                    />
+                    Colours & background
+                  </span>
+                  <span aria-hidden style={{ color: "var(--card-muted)" }}>›</span>
+                </button>
+                <button className="rb-focus" onClick={() => { exportAll(); close(); }} disabled={exporting} style={menuRow(false)}>
+                  <span>{exporting ? "Exporting…" : "Export all recipes"}</span>
+                  <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>backup</span>
+                </button>
+              </>
+            )}
+          </Popover>
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 22, alignItems: "flex-end", justifyContent: "space-between" }}>
           <div style={{ minWidth: 260 }}>
             <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: "rgb(var(--on-page))" }}>
-              <span className="rb-strip">{activeBox ? `${activeBox}'s Recipes` : box.name}</span>
+              <span className="rb-strip">{activeBox ? `${activeBox}'s Recipes` : SITE_NAME}</span>
             </h1>
             <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.58 * var(--ink-k)))", margin: "12px 0 0", maxWidth: "46ch" }}>
               <span className="rb-strip">{activeBox
                 ? `${boxCount(activeBox)} ${boxCount(activeBox) === 1 ? "recipe" : "recipes"} from ${activeBox}.`
                 : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}</span>
             </p>
-            {activeBox && activeBox !== UNFILED && boxCount(activeBox) === 0 && (
-              <button
-                className="rb-btn rb-focus rb-onimg"
-                onClick={() => removeBox(activeBox)}
-                style={{ ...btnGhost, marginTop: 14, padding: "6px 12px", fontSize: 12.5 }}
-              >
-                Remove this box
-              </button>
-            )}
+
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button className="rb-btn rb-focus rb-onimg" style={btnGhost} onClick={openShopping}>
               <span aria-hidden style={{ marginRight: 7 }}>🛒</span>Shopping list{toBuy ? ` (${toBuy})` : ""}
             </button>
-            <button className="rb-btn rb-focus rb-onimg" style={btnGhost} onClick={() => fileRef.current?.click()}>Import files</button>
-            <button className="rb-btn rb-focus rb-onimg" style={btnGhost} onClick={exportAll} disabled={exporting}>
-              {exporting ? "Exporting…" : "Export all"}
-            </button>
+
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
           </div>
         </div>
@@ -2333,132 +2343,195 @@ export default function RecipeBox() {
         {/* ═══════ LIST ═══════ */}
         {!loading && view === "list" && (
           <>
-            <div className="rb-shelf" style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 26 }}>
-              {[
+            {(() => {
+              const shelf = [
                 { key: null, name: "All recipes", count: box.recipes.length },
                 ...allAuthors.map((c) => ({ key: c, name: `${c}'s recipes`, count: boxCount(c) })),
                 ...(unfiled ? [{ key: UNFILED, name: "No author", count: unfiled }] : []),
-              ].map((b) => {
-                const on = activeBox === b.key;              
-                return (
-                  <button
-                    key={b.key ?? "all"}
-                    className={`rb-focus${b.key === null ? " rb-shelf-all" : ""}${on ? " rb-onimg-on" : " rb-onimg"}`}
-                    onClick={() => { setActiveBox(b.key); setQuery(""); setTagFilter(null); }}
-                    style={{
-                      display: "flex", flexDirection: "column", gap: 4, textAlign: "left", cursor: "pointer",
-                      padding: "11px 16px", borderRadius: 2, minWidth: 120,
-                      border:  `1px solid ${on ? "var(--page-accent)" : "rgba(var(--on-page), calc(.22 * var(--ink-k)))"}`,
-                      background: on ? "rgba(var(--accent-rgb), .14)" : "transparent",
-                      transform: "none",
-                    }}
-                  >
-                    <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: on ? "var(--page-accent)" : "rgb(var(--on-page))" }}>{b.name}</span>
-                    <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(var(--on-page), calc(.45 * var(--ink-k)))" }}>
-                      {b.count} {b.count === 1 ? "recipe" : "recipes"}
-                    </span>
-                  </button>
-                );
-              })}
-
-              {addingBox ? (
-                <input
-                  autoFocus
-                  className="rb-new-box rb-onimg"
-                  value={newBoxName}
-                  onChange={(e) => setNewBoxName(e.target.value)}
-                  onBlur={addBox}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.target.blur();
-                    if (e.key === "Escape") { cancelBoxRef.current = true; e.target.blur(); }
-                  }}
-                  placeholder="Name"
-                  aria-label="Name of the person to add"
-                  style={{
-                    padding: "11px 16px", borderRadius: 2, width: 150, maxWidth: "100%",
-                    border: "1px solid var(--page-accent)", background: "transparent",
-                    color: "rgb(var(--on-page))", font: `400 17px/1.2 ${DISPLAY}`, outline: "none",
-                  }}
-                />
-              ) : (
+              ];
+              const current = shelf.find((b) => b.key === activeBox) || shelf[0];
+              const activeFilters = (scope !== "all" ? 1 : 0) + (tagFilter ? 1 : 0);
+              const chip = (key, label, onClear) => (
                 <button
-                  className="rb-focus rb-new-box rb-onimg"
-                  onClick={() => setAddingBox(true)}
-                  title="Add someone new"
-                  aria-label="Add someone new"
+                  key={key}
+                  className="rb-focus rb-onimg"
+                  onClick={onClear}
+                  aria-label={`Remove filter: ${label}`}
                   style={{
-                    display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start",
-                    textAlign: "left", cursor: "pointer", padding: "11px 16px", borderRadius: 2, minWidth: 120,
-                    border: "1px dashed rgba(var(--on-page), calc(.3 * var(--ink-k)))", background: "transparent", transform: "none",
+                    display: "inline-flex", alignItems: "center", gap: 7, font: `500 12.5px/1 ${UI}`, padding: "7px 10px 7px 12px",
+                    borderRadius: 999, cursor: "pointer", border: "1px solid var(--page-accent)",
+                    background: "rgba(var(--accent-rgb), .12)", color: "rgb(var(--on-page))",
                   }}
                 >
-                  <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))" }}>+</span>
-                  <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(var(--on-page), calc(.45 * var(--ink-k)))" }}>
-                    Add someone
-                  </span>
+                  {label}
+                  <span aria-hidden style={{ fontSize: 15, lineHeight: 1, opacity: 0.7 }}>×</span>
                 </button>
-              )}
-            </div>
+              );
+              return (
+                <div style={{ marginBottom: 26 }}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "stretch" }}>
+                    <Popover
+                      width={300}
+                      label="Recipe boxes"
+                      trigger={({ open, toggle }) => (
+                        <button className="rb-focus rb-onimg" onClick={toggle} aria-expanded={open} aria-haspopup="dialog" style={{ ...toolbarButton, maxWidth: "100%" }}>
+                          <span style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start", minWidth: 0 }}>
+                            <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "min(60vw, 340px)" }}>
+                              {current.name}
+                            </span>
+                            <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(var(--on-page), calc(.45 * var(--ink-k)))" }}>
+                              {current.count} {current.count === 1 ? "recipe" : "recipes"}
+                            </span>
+                          </span>
+                          <span aria-hidden style={{ fontSize: 12, color: "rgba(var(--on-page), calc(.6 * var(--ink-k)))" }}>▾</span>
+                        </button>
+                      )}
+                    >
+                      {(close) => (
+                        <>
+                          <p style={menuLabel}>Recipe boxes</p>
+                          {shelf.map((b) => {
+                            const on = activeBox === b.key;
+                            return (
+                              <button
+                                key={b.key ?? "all"}
+                                className="rb-focus"
+                                aria-pressed={on}
+                                onClick={() => { setActiveBox(b.key); setQuery(""); setTagFilter(null); close(); }}
+                                style={menuRow(on)}
+                              >
+                                <span style={{ font: `400 16px/1.25 ${DISPLAY}` }}>{b.name}</span>
+                                <span style={{ font: `500 12px/1 ${UI}`, color: "var(--card-muted)" }}>{b.count}</span>
+                              </button>
+                            );
+                          })}
+                          <div style={{ borderTop: "1px solid var(--card-edge)", margin: "8px 0" }} />
+                          {addingBox ? (
+                            <input
+                              autoFocus
+                              value={newBoxName}
+                              onChange={(e) => setNewBoxName(e.target.value)}
+                              onBlur={addBox}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") e.target.blur();
+                                if (e.key === "Escape") { cancelBoxRef.current = true; e.target.blur(); }
+                              }}
+                              placeholder="Their name, then Enter"
+                              aria-label="Name of the person to add"
+                              className="rb-focus"
+                              style={{ ...input, padding: "9px 10px" }}
+                            />
+                          ) : (
+                            <button className="rb-focus" onClick={() => setAddingBox(true)} style={menuRow(false)}>
+                              <span>+ Add someone</span>
+                            </button>
+                          )}
+                          {activeBox && activeBox !== UNFILED && boxCount(activeBox) === 0 && (
+                            <button className="rb-focus" onClick={() => { removeBox(activeBox); close(); }} style={{ ...menuRow(false), color: "var(--card-danger)" }}>
+                              <span>Remove {activeBox}'s box</span>
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </Popover>
 
+                    <input
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder={SCOPES.find((s2) => s2.id === scope).placeholder}
+                      aria-label="Search recipes"
+                      className="rb-focus rb-onimg"
+                      style={{
+                        flex: "1 1 200px", minWidth: 0, minHeight: 50, font: `400 15px/1.5 ${UI}`, padding: "12px 15px", borderRadius: 2,
+                        border: `1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))`, background: "rgba(var(--on-page), calc(.06 * var(--ink-k)))", color: "rgb(var(--on-page))",
+                      }}
+                    />
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 16 }}>
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={SCOPES.find((s2) => s2.id === scope).placeholder}
-                className="rb-focus rb-onimg"
-                style={{
-                  flex: "1 1 250px", font: `400 15px/1.5 ${UI}`, padding: "12px 15px", borderRadius: 2,
-                  border: `1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))`, background: "rgba(var(--on-page), calc(.06 * var(--ink-k)))", color: "rgb(var(--on-page))",
-                }}
-              />
-              <div className="rb-scope rb-onimg" style={{ display: "flex", border: `1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))`, borderRadius: 2, overflow: "hidden" }}>
-                {SCOPES.map((s2) => (
-                  <button
-                    key={s2.id}
-                    className="rb-focus"
-                    onClick={() => setScope(s2.id)}
-                    style={{
-                      font: `500 12.5px/1 ${UI}`, padding: "11px 14px", cursor: "pointer", border: "none",
-                      background: scope === s2.id ? "rgba(var(--on-page), calc(.14 * var(--ink-k)))" : "transparent",
-                      color: scope === s2.id ? "var(--page-accent)" : "rgba(var(--on-page), calc(.66 * var(--ink-k)))",
-                    }}
-                  >
-                    {s2.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+                    <Popover
+                      align="right"
+                      width={340}
+                      label="Filters"
+                      trigger={({ open, toggle }) => (
+                        <button className="rb-focus rb-onimg" onClick={toggle} aria-expanded={open} aria-haspopup="dialog" style={toolbarButton}>
+                          <span style={{ font: `600 13.5px/1 ${UI}`, color: "rgb(var(--on-page))" }}>Filters</span>
+                          {activeFilters > 0 && (
+                            <span style={{ font: `700 11px/1 ${UI}`, padding: "3px 7px", borderRadius: 999, background: "var(--page-accent)", color: "var(--on-accent)" }}>{activeFilters}</span>
+                          )}
+                          <span aria-hidden style={{ fontSize: 12, color: "rgba(var(--on-page), calc(.6 * var(--ink-k)))" }}>▾</span>
+                        </button>
+                      )}
+                    >
+                      {() => (
+                        <>
+                          <p style={menuLabel}>Search in</p>
+                          <div style={{ display: "flex", border: "1px solid var(--card-edge)", borderRadius: 2, overflow: "hidden", marginBottom: 14 }}>
+                            {SCOPES.map((s2) => (
+                              <button
+                                key={s2.id}
+                                className="rb-focus"
+                                aria-pressed={scope === s2.id}
+                                onClick={() => setScope(s2.id)}
+                                style={{
+                                  flex: "1 1 0", font: `500 12.5px/1 ${UI}`, padding: "10px 4px", cursor: "pointer", border: "none",
+                                  background: scope === s2.id ? "var(--card-lift)" : "transparent",
+                                  color: scope === s2.id ? "var(--card-accent)" : "var(--card-muted)",
+                                }}
+                              >
+                                {s2.label}
+                              </button>
+                            ))}
+                          </div>
+                          {allTags.length > 0 && (
+                            <>
+                              <p style={menuLabel}>Tags</p>
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 2px" }}>
+                                {allTags.map((t) => {
+                                  const on = tagFilter === t;
+                                  return (
+                                    <button
+                                      key={t}
+                                      className="rb-focus"
+                                      aria-pressed={on}
+                                      onClick={() => setTagFilter(on ? null : t)}
+                                      style={{
+                                        font: `500 12.5px/1 ${UI}`, padding: "7px 12px", borderRadius: 999, cursor: "pointer",
+                                        border: `1px solid ${on ? "var(--card-accent)" : "var(--card-edge)"}`,
+                                        background: on ? "var(--card-accent)" : "transparent", color: on ? "var(--card-bg)" : "var(--card-text)",
+                                      }}
+                                    >
+                                      {t}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
+                          {activeFilters > 0 && (
+                            <button className="rb-focus" onClick={() => { setScope("all"); setTagFilter(null); }} style={{ ...linkButton, margin: "14px 4px 2px", fontSize: 13 }}>
+                              Clear filters
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </Popover>
+                  </div>
 
-            {scope === "ingredient" && (
-              <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.5 * var(--ink-k)))", margin: "0 0 16px" }}>
-                <span className="rb-strip">Separate ingredients with commas to find recipes that use all of them — “lime, tequila”.</span>
-              </p>
-            )}
+                  {/* the filters live in a dropdown, so show which are on */}
+                  {activeFilters > 0 && (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                      {scope !== "all" && chip("scope", `Searching ${{ ingredient: "ingredients", author: "authors", equipment: "equipment" }[scope]}`, () => setScope("all"))}
+                      {tagFilter && chip("tag", tagFilter, () => setTagFilter(null))}
+                    </div>
+                  )}
 
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: 30 }}>
-              {allTags.length > 0 && (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {allTags.map((t) => {
-                    const on = tagFilter === t;
-                    return (
-                      <button
-                        key={t}
-                        className={on ? "rb-focus" : "rb-focus rb-onimg"}
-                        onClick={() => setTagFilter(on ? null : t)}
-                        style={{
-                          font: `500 12.5px/1 ${UI}`, padding: "8px 13px", borderRadius: 999, cursor: "pointer",
-                          border: `1px solid ${on ? "var(--page-accent)" : "rgba(var(--on-page), calc(.26 * var(--ink-k)))"}`,
-                          background: on ? "var(--page-accent)" : "transparent", color: on ? "var(--on-accent)" : "rgba(var(--on-page), calc(.8 * var(--ink-k)))",
-                        }}
-                      >
-                        {t}
-                      </button>
-                    );
-                  })}
+                  {scope === "ingredient" && (
+                    <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.5 * var(--ink-k)))", margin: "12px 0 0" }}>
+                      <span className="rb-strip">Separate ingredients with commas to find recipes that use all of them — “lime, tequila”.</span>
+                    </p>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()}
 
             {visible.length === 0 ? (
               <div className="rb-onimg" style={{ border: `1px dashed rgba(var(--on-page), calc(.28 * var(--ink-k)))`, borderRadius: 3, padding: "56px 30px", textAlign: "center" }}>
@@ -2643,7 +2716,7 @@ export default function RecipeBox() {
                     : list.items.length
                     ? "Everything is in the basket."
                     : "Nothing on it yet. Open a recipe and add it, or type something below."}
-                  {" "}This list is just yours — nobody else sees it.
+                  {" "}This list lives on this device — your phone and your computer each keep their own.
                 </p>
 
                 <form
@@ -3027,7 +3100,7 @@ export default function RecipeBox() {
                   </form>
                   <div style={{ borderTop: `1px solid var(--card-edge)`, margin: "18px 0 16px" }} />
                   <p style={{ font: `600 14px/1.4 ${UI}`, color: "var(--card-text)", margin: "0 0 4px" }}>Paste a recipe</p>
-                  <p style={{ font: `400 13px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>Markdown or JSON both work. Or drag a file anywhere on the page instead.</p>
+                  <p style={{ font: `400 13px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>Markdown or JSON both work — paste it below, or{" "}<button type="button" className="rb-focus" style={linkButton} onClick={() => fileRef.current?.click()}>choose a file</button>.</p>
                   <textarea
                     value={pasteText}
                     onChange={(e) => setPasteText(e.target.value)}

@@ -12,9 +12,12 @@
  * within about a minute. The person saving sees their own change at once —
  * the app keeps the authoritative box in memory and does not re-read.
  *
- * Cloudflare Access sits in front of this, so every request that arrives here
- * has already been checked against the allowlist. The identity it forwards is
- * used to namespace personal keys — it is not a second authorisation check.
+ * Cloudflare Access sits in front of the site, so only invited people reach
+ * this. Unshared keys are namespaced by the email header Access forwards —
+ * but that header has not been arriving here, and the old fallback filed
+ * every visitor under one made-up name (which gave the whole family a single
+ * "personal" shopping list). Without an email, unshared keys are now refused.
+ * The app keeps personal things in the browser instead.
  */
 
 const json = (data, status = 200) =>
@@ -24,8 +27,7 @@ const json = (data, status = 200) =>
   });
 
 /* Access puts the signed-in email on every request it lets through. */
-const identity = (request) =>
-  request.headers.get("Cf-Access-Authenticated-User-Email") || "local-dev";
+const identity = (request) => request.headers.get("Cf-Access-Authenticated-User-Email");
 
 const namespaced = (request, key, shared) =>
   shared ? `shared:${key}` : `user:${identity(request)}:${key}`;
@@ -39,6 +41,9 @@ export async function onRequest({ request, env }) {
   const shared = url.searchParams.get("shared") === "true";
   const key = url.searchParams.get("key");
   const prefix = url.searchParams.get("prefix");
+  if (!shared && !identity(request)) {
+    return json({ error: "No one is signed in, so there is nowhere personal to keep this" }, 403);
+  }
 
   try {
     if (request.method === "GET" && prefix !== null) {
