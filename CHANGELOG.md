@@ -7,6 +7,7 @@ leave the plumbing out unless they would notice it.
 
 ## 2026-09-12
 
+- **Today.** A place to log what you have eaten from the box — breakfast, lunch, dinner and snacks — with the calories and macros adding up as you go. Give it your height, weight, age and how much you move and it will estimate what a day needs. All of it stays on the device you enter it on: not in the shared box, and not on a server.
 - **Lately.** The bottom of the recipes page now shows the newest things anyone has said or cooked, across the whole box, with the most recent given the most room. Tap one to open the recipe it is about.
 
 ## 2026-09-11

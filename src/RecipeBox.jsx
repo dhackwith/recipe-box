@@ -3,6 +3,10 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
    template that is committed alongside this component. */
 import TEMPLATE_MD from "../claude-recipe-template.md?raw";
 import CHANGELOG_MD from "../CHANGELOG.md?raw";
+import {
+  dailyTargets, bmi, ACTIVITY, GOALS,
+  lbToKg, kgToLb, feetInchesToCm, cmToFeetInches,
+} from "./body.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -378,6 +382,89 @@ const scaleServings = (s, factor) => {
   return String(s).replace(/\d+/, String(Math.max(1, Math.round(n * factor))));
 };
 
+/* ══════════════════════════════════════════════════════════════════
+   The day
+   What was eaten, and roughly what a day needs. Both live in this browser and
+   nowhere else. That is the whole point rather than a shortcut: the recipe box
+   is shared with the family, the shopping list is private to a person, and
+   somebody's weight and what they ate is a third thing again. Keeping it on the
+   device means there is no copy of it on a server to leak, and nothing for the
+   family to stumble into. The cost is that it does not follow you between a
+   phone and a laptop, which is a trade worth making by default.
+   ══════════════════════════════════════════════════════════════════ */
+const DAY_KEY = "rb-day-log";
+const BODY_KEY = "rb-body";
+const DAY_HISTORY = 45;                      // days kept before the oldest are dropped
+
+const MEALS = [
+  { id: "breakfast", label: "Breakfast" },
+  { id: "lunch", label: "Lunch" },
+  { id: "dinner", label: "Dinner" },
+  { id: "snacks", label: "Snacks" },
+];
+
+/* Local, not UTC: a day ends when the person says it does, not at midnight in
+   Greenwich. new Date().toISOString() would roll over an evening early for
+   anybody west of it. */
+const dayId = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+const emptyDay = () => ({ breakfast: [], lunch: [], dinner: [], snacks: [] });
+
+/* Named for the store rather than for localStorage: the shopping list already
+   has its own writeLocal inside the component, and a two-argument helper of the
+   same name is shadowed by it — which quietly wrote the string "rb-body" over
+   somebody's shopping list before this was caught. */
+const readStore = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch { return fallback; }
+};
+const writeStore = (key, value) => {
+  try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
+};
+
+/* Only the last few weeks are kept. A log nobody prunes is a blob that grows
+   until localStorage refuses it, and the refusal lands on whoever is logging
+   dinner that evening. */
+const pruneDays = (log) => {
+  const keep = Object.keys(log).sort().slice(-DAY_HISTORY);
+  return Object.fromEntries(keep.map((k) => [k, log[k]]));
+};
+
+/* Nutrition is written per serving, so a portion is simply a multiplier. The
+   stored values are strings carrying their units — "18 g", "410 mg" — and only
+   the number in front is wanted here. */
+const numOf = (v) => {
+  const m = String(v ?? "").match(/(\d+(?:[.,]\d+)?)/);
+  return m ? parseFloat(m[1].replace(",", ".")) : 0;
+};
+
+const MACROS = [
+  { key: "calories", label: "Calories", unit: "", target: "calories" },
+  { key: "protein", label: "Protein", unit: "g", target: "protein" },
+  { key: "carbs", label: "Carbs", unit: "g", target: "carbs" },
+  { key: "fat", label: "Fat", unit: "g", target: "fat" },
+];
+
+/* What a day's entries add up to. An entry whose recipe has gone, or whose
+   recipe never carried nutrition, contributes nothing rather than breaking the
+   sum — and the view says which ones those are. */
+function dayTotals(day, recipes) {
+  const totals = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+  let unknown = 0;
+  for (const meal of MEALS) {
+    for (const entry of day[meal.id] || []) {
+      const recipe = recipes.find((r) => r.id === entry.recipeId);
+      const n = recipe && recipe.nutrition;
+      if (!n || !n.calories) { unknown += 1; continue; }
+      for (const k of Object.keys(totals)) totals[k] += numOf(n[k]) * entry.servings;
+    }
+  }
+  for (const k of Object.keys(totals)) totals[k] = Math.round(totals[k]);
+  return { ...totals, unknown };
+}
 /* ══════════════════════════════════════════════════════════════════
    Shopping list
    One list per person, following them between their own devices and visible to
@@ -2183,6 +2270,91 @@ export default function RecipeBox() {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  /* ── The day ──────────────────────────────────────────────────────── */
+  const [dayLog, setDayLog] = useState(() => readStore(DAY_KEY, {}));
+  const [today, setToday] = useState(dayId);
+  const [body, setBody] = useState(() => readStore(BODY_KEY, null));
+  const [editingBody, setEditingBody] = useState(false);
+  const [bodyDraft, setBodyDraft] = useState(null);
+  const [addTo, setAddTo] = useState(null);          // which meal is being added to
+  const [addPick, setAddPick] = useState("");
+  const [addServings, setAddServings] = useState("1");
+
+  /* A tab left open overnight should be showing the new day by the time
+     somebody comes back to it, not still totalling yesterday's dinner. */
+  useEffect(() => {
+    const check = () => setToday(dayId());
+    const id = setInterval(check, 60000);
+    document.addEventListener("visibilitychange", check);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", check); };
+  }, []);
+
+  const day = dayLog[today] || emptyDay();
+  const targets = body ? dailyTargets(body) : null;
+  const shape = body ? bmi(body) : null;
+  const totals = dayTotals(day, box.recipes);
+
+  const saveDay = (next) => {
+    const log = pruneDays({ ...dayLog, [today]: next });
+    setDayLog(log);
+    if (!writeStore(DAY_KEY, log)) flash("Couldn't save today on this device — its storage may be full or switched off", 7000);
+  };
+
+  const logEntry = (meal) => {
+    const recipe = box.recipes.find((r) => r.id === addPick);
+    const servings = Math.max(0.25, Math.min(20, parseFloat(addServings) || 1));
+    if (!recipe) return;
+    saveDay({
+      ...day,
+      [meal]: [...(day[meal] || []), { id: `d-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, recipeId: recipe.id, servings }],
+    });
+    setAddTo(null);
+    setAddPick("");
+    setAddServings("1");
+  };
+
+  const dropEntry = (meal, id) =>
+    saveDay({ ...day, [meal]: (day[meal] || []).filter((e) => e.id !== id) });
+
+  /* The form is filled in the units people think in and stored in the ones the
+     formulas use, so the conversion happens at these two edges only. */
+  const startBody = () => {
+    const h = body ? cmToFeetInches(body.cm) : { feet: "", inches: "" };
+    setBodyDraft({
+      sex: body?.sex ?? "",
+      feet: String(h.feet ?? ""),
+      inches: String(h.inches ?? ""),
+      pounds: body ? String(Math.round(kgToLb(body.kg))) : "",
+      age: body ? String(body.age) : "",
+      activity: body?.activity ?? "light",
+      goal: body?.goal ?? "maintain",
+    });
+    setEditingBody(true);
+  };
+
+  const commitBody = () => {
+    const d = bodyDraft || {};
+    const cm = feetInchesToCm(d.feet, d.inches);
+    const kg = lbToKg(d.pounds);
+    const age = parseInt(d.age, 10) || 0;
+    if (!(cm > 0) || !(kg > 0) || !(age > 0)) {
+      flash("Height, weight and age are all needed before a day can be estimated", 5000);
+      return;
+    }
+    saveBody({ sex: d.sex, cm, kg, age, activity: d.activity, goal: d.goal });
+  };
+
+  const saveBody = (next) => {
+    setBody(next);
+    writeStore(BODY_KEY, next);
+    setEditingBody(false);
+  };
+
+  const openToday = () => {
+    if (view !== "today") shoppingFrom.current = view;
+    setView("today");
+    window.scrollTo(0, 0);
+  };
   const openShopping = () => {
     if (view !== "shopping") shoppingFrom.current = view;
     setConfirmClear(false);
@@ -2631,7 +2803,37 @@ export default function RecipeBox() {
     .rb-lately-text { display: block; margin-top: 5px; font: 400 14.5px/1.65 ${PROSE}; color: rgba(var(--on-page), calc(.88 * var(--ink-k))); }
     .rb-lately-lead .rb-lately-text { font-size: 17px; line-height: 1.7; }
     .rb-lately-lead .rb-lately-open { padding-top: 0; padding-bottom: 16px; }
-    .rb-lately-open:hover .rb-lately-what { text-decoration: underline; text-underline-offset: 2px; }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
+    .rb-lately-open:hover .rb-lately-what { text-decoration: underline; text-underline-offset: 2px; }    /* The day's tally: four figures across the top, each with how far through
+       its target the day has got. Over the target turns the bar, rather than
+       letting it run past the end where it would say nothing. */
+    .rb-tally { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); background: var(--card-edge); border: 1px solid var(--card-edge); border-radius: 2px; overflow: hidden; }
+    .rb-tally-cell { background: var(--card-bg); padding: 12px 14px; }
+    .rb-tally-label { font: 600 9.5px/1 ${UI}; letter-spacing: .12em; text-transform: uppercase; color: var(--card-muted); margin: 0 0 6px; }
+    .rb-tally-value { font: 400 20px/1 ${DISPLAY}; color: var(--card-text); margin: 0; }
+    .rb-tally-of { font: 400 12px/1 ${UI}; color: var(--card-muted); }
+    .rb-tally-bar { display: block; height: 3px; margin-top: 9px; background: var(--card-edge); border-radius: 999px; overflow: hidden; }
+    .rb-tally-bar > span { display: block; height: 100%; }
+
+    .rb-meal { padding: 16px 0; border-bottom: 1px solid var(--card-edge); }
+    .rb-meal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .rb-meal-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    .rb-meal-empty { font: 400 13.5px/1.6 ${UI}; color: var(--card-muted); margin: 8px 0 0; }
+    .rb-meal-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .rb-meal-list li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .rb-meal-name { font: 400 15px/1.4 ${PROSE}; color: var(--card-text); }
+    .rb-meal-serves { font: 400 12.5px/1.4 ${UI}; color: var(--card-muted); }
+    .rb-meal-list .rb-entry-x { margin-left: auto; }
+
+    .rb-body-panel { margin-top: 30px; padding-top: 24px; border-top: 2px solid var(--card-text); }
+    .rb-body-figures { display: flex; flex-wrap: wrap; gap: 0; margin: 0 0 14px; padding: 0; border: 1px solid var(--card-edge); border-radius: 2px; }
+    .rb-body-figures > div { flex: 1 1 110px; padding: 11px 14px; border-right: 1px solid var(--card-edge); }
+    .rb-body-figures > div:last-child { border-right: 0; }
+    .rb-body-figures dt { font: 600 9.5px/1 ${UI}; letter-spacing: .12em; text-transform: uppercase; color: var(--card-muted); margin: 0 0 6px; }
+    .rb-body-figures dd { font: 400 17px/1 ${DISPLAY}; margin: 0; color: var(--card-text); }
+    .rb-body-form { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; }
+    .rb-body-form label { display: block; }
+    .rb-body-form label > span:first-child { display: block; font: 600 12px/1.4 ${UI}; color: var(--card-text); margin-bottom: 5px; }
+    .rb-body-note { grid-column: 1 / -1; font: 400 12px/1.6 ${UI}; color: var(--card-muted); margin: 0; max-width: 62ch; }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     /* Title, who wrote it, what it is, what you can do, then the photograph —
        the order every recipe site puts them in. The actions sit between rules
@@ -2922,6 +3124,10 @@ export default function RecipeBox() {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button className="rb-btn rb-focus" style={btnGhost} onClick={openShopping}>
               <span aria-hidden style={{ marginRight: 7 }}>🛒</span>Shopping list{toBuy ? ` (${toBuy})` : ""}
+            </button>
+
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={openToday}>
+              <span aria-hidden style={{ marginRight: 7 }}>◷</span>Today{totals.calories ? ` (${totals.calories})` : ""}
             </button>
 
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
@@ -3276,6 +3482,246 @@ export default function RecipeBox() {
         )}
 
         {/* ═══════ DETAIL ═══════ */}
+        {!loading && view === "today" && (
+          <article className="rb-sheet" style={{ ...sheet, maxWidth: 860 }}>
+            <Grain card />
+            <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 36px" }}>
+              <button
+                className="rb-btn rb-focus rb-noprint"
+                onClick={leaveShopping}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 16,
+                  background: "transparent", border: "none", padding: "4px 0",
+                  color: "var(--card-accent)", font: `600 13.5px/1 ${UI}`,
+                }}
+              >
+                <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
+                Back to recipes
+              </button>
+
+              <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Today</h2>
+              <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 22px", maxWidth: "60ch" }}>
+                What you have eaten from the box today, and roughly what it came to.
+                Kept on this device only — not in the shared box, and not on anybody's server.
+              </p>
+
+              {/* ── the tally ── */}
+              <div className="rb-tally">
+                {MACROS.map((m) => {
+                  const have = totals[m.key];
+                  const want = targets ? targets[m.target] : null;
+                  const share = want ? Math.min(100, Math.round((have / want) * 100)) : 0;
+                  return (
+                    <div key={m.key} className="rb-tally-cell">
+                      <p className="rb-tally-label">{m.label}</p>
+                      <p className="rb-tally-value rb-num">
+                        {have}{m.unit}
+                        {want ? <span className="rb-tally-of"> of {want}{m.unit}</span> : null}
+                      </p>
+                      {want ? (
+                        <span className="rb-tally-bar" aria-hidden>
+                          <span style={{ width: `${share}%`, background: have > want ? "var(--card-danger)" : "var(--card-accent)" }} />
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {totals.unknown > 0 && (
+                <p style={{ font: `400 12.5px/1.6 ${UI}`, color: "var(--card-muted)", margin: "10px 0 0" }}>
+                  {totals.unknown} {totals.unknown === 1 ? "thing is" : "things are"} not counted — the recipe carries no nutrition.
+                </p>
+              )}
+
+              {/* ── the meals ── */}
+              <div style={{ marginTop: 30 }}>
+                {MEALS.map((meal) => {
+                  const entries = day[meal.id] || [];
+                  return (
+                    <section key={meal.id} className="rb-meal">
+                      <div className="rb-meal-head">
+                        <h3 style={{ font: `400 19px/1.2 ${DISPLAY}`, margin: 0, color: "var(--card-text)" }}>{meal.label}</h3>
+                        <button
+                          className="rb-btn rb-focus"
+                          style={{ ...btnQuiet, padding: "6px 12px", fontSize: 12.5 }}
+                          onClick={() => { setAddTo(addTo === meal.id ? null : meal.id); setAddPick(""); setAddServings("1"); }}
+                        >
+                          {addTo === meal.id ? "Cancel" : "Add"}
+                        </button>
+                      </div>
+
+                      {addTo === meal.id && (
+                        <div className="rb-meal-add">
+                          <select
+                            className="rb-focus"
+                            value={addPick}
+                            onChange={(e) => setAddPick(e.target.value)}
+                            aria-label={`Which recipe for ${meal.label.toLowerCase()}`}
+                            style={{ ...input, flex: "1 1 220px", padding: "9px 10px" }}
+                          >
+                            <option value="">Pick a recipe…</option>
+                            {box.recipes.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.title}{r.nutrition?.calories ? ` — ${numOf(r.nutrition.calories)} cal a serving` : " — no nutrition"}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            className="rb-focus"
+                            type="number"
+                            min="0.25"
+                            max="20"
+                            step="0.25"
+                            value={addServings}
+                            onChange={(e) => setAddServings(e.target.value)}
+                            aria-label="How many servings"
+                            style={{ ...input, width: 92, padding: "9px 10px" }}
+                          />
+                          <button className="rb-btn rb-focus" style={{ ...btnPrimary, padding: "10px 16px" }} onClick={() => logEntry(meal.id)} disabled={!addPick}>
+                            Add
+                          </button>
+                        </div>
+                      )}
+
+                      {entries.length === 0 ? (
+                        <p className="rb-meal-empty">Nothing yet.</p>
+                      ) : (
+                        <ul className="rb-meal-list">
+                          {entries.map((e) => {
+                            const r = box.recipes.find((x) => x.id === e.recipeId);
+                            const cal = r?.nutrition?.calories ? Math.round(numOf(r.nutrition.calories) * e.servings) : null;
+                            return (
+                              <li key={e.id}>
+                                <span className="rb-meal-name">{r ? r.title : "a recipe since removed"}</span>
+                                <span className="rb-meal-serves">
+                                  {e.servings === 1 ? "1 serving" : `${e.servings} servings`}
+                                  {cal == null ? " · not counted" : ` · ${cal} cal`}
+                                </span>
+                                <button
+                                  className="rb-focus rb-entry-x"
+                                  onClick={() => dropEntry(meal.id, e.id)}
+                                  aria-label={`Take ${r ? r.title : "this"} off ${meal.label.toLowerCase()}`}
+                                >
+                                  Remove
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+
+              {/* ── the estimate ── */}
+              <section className="rb-body-panel">
+                <h3 style={{ font: `400 19px/1.2 ${DISPLAY}`, margin: "0 0 4px", color: "var(--card-text)" }}>What a day needs</h3>
+                <p style={{ font: `400 12.5px/1.6 ${UI}`, color: "var(--card-muted)", margin: "0 0 16px", maxWidth: "62ch" }}>
+                  An estimate from height, weight, age and how much you move. Two people with
+                  identical numbers can differ by several hundred calories a day, so treat it as
+                  a starting point rather than an instruction — and as nothing at all if a doctor
+                  has told you otherwise.
+                </p>
+
+                {!editingBody && targets && (
+                  <>
+                    <dl className="rb-body-figures">
+                      <div><dt>Resting</dt><dd className="rb-num">{targets.rest}</dd></div>
+                      <div><dt>With movement</dt><dd className="rb-num">{targets.burn}</dd></div>
+                      <div><dt>Aiming at</dt><dd className="rb-num">{targets.calories}</dd></div>
+                      {shape && <div><dt>BMI</dt><dd className="rb-num">{shape.value}</dd></div>}
+                    </dl>
+                    {shape && (
+                      <p style={{ font: `400 12.5px/1.6 ${UI}`, color: "var(--card-muted)", margin: "0 0 14px", maxWidth: "62ch" }}>
+                        That BMI is {shape.band}. It compares weight to height and nothing else —
+                        it cannot tell muscle from fat, and it reads differently across builds. One
+                        number among several, not a verdict.
+                      </p>
+                    )}
+                    <button className="rb-btn rb-focus" style={{ ...btnQuiet, padding: "8px 14px", fontSize: 12.5 }} onClick={startBody}>
+                      Change these
+                    </button>
+                  </>
+                )}
+
+                {!editingBody && !targets && (
+                  <button className="rb-btn rb-focus" style={btnPrimary} onClick={startBody}>
+                    Work out a daily target
+                  </button>
+                )}
+
+                {editingBody && bodyDraft && (
+                  <div className="rb-body-form">
+                    <label>
+                      <span>Height</span>
+                      <span style={{ display: "flex", gap: 8 }}>
+                        <input className="rb-focus" type="number" min="0" max="8" value={bodyDraft.feet}
+                          onChange={(e) => setBodyDraft({ ...bodyDraft, feet: e.target.value })}
+                          aria-label="Height in feet" placeholder="ft" style={{ ...input, padding: "9px 10px" }} />
+                        <input className="rb-focus" type="number" min="0" max="11" value={bodyDraft.inches}
+                          onChange={(e) => setBodyDraft({ ...bodyDraft, inches: e.target.value })}
+                          aria-label="Height in inches" placeholder="in" style={{ ...input, padding: "9px 10px" }} />
+                      </span>
+                    </label>
+                    <label>
+                      <span>Weight</span>
+                      <input className="rb-focus" type="number" min="0" value={bodyDraft.pounds}
+                        onChange={(e) => setBodyDraft({ ...bodyDraft, pounds: e.target.value })}
+                        aria-label="Weight in pounds" placeholder="lb" style={{ ...input, padding: "9px 10px" }} />
+                    </label>
+                    <label>
+                      <span>Age</span>
+                      <input className="rb-focus" type="number" min="1" max="120" value={bodyDraft.age}
+                        onChange={(e) => setBodyDraft({ ...bodyDraft, age: e.target.value })}
+                        aria-label="Age in years" placeholder="years" style={{ ...input, padding: "9px 10px" }} />
+                    </label>
+                    <label>
+                      <span>Sex</span>
+                      <select className="rb-focus" value={bodyDraft.sex} onChange={(e) => setBodyDraft({ ...bodyDraft, sex: e.target.value })}
+                        aria-label="Sex, as the formula uses it" style={{ ...input, padding: "9px 10px" }}>
+                        <option value="female">Female</option>
+                        <option value="male">Male</option>
+                        <option value="">Rather not say</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Movement</span>
+                      <select className="rb-focus" value={bodyDraft.activity} onChange={(e) => setBodyDraft({ ...bodyDraft, activity: e.target.value })}
+                        aria-label="How much you move" style={{ ...input, padding: "9px 10px" }}>
+                        {ACTIVITY.map((a) => <option key={a.id} value={a.id}>{a.label} — {a.note}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Aim</span>
+                      <select className="rb-focus" value={bodyDraft.goal} onChange={(e) => setBodyDraft({ ...bodyDraft, goal: e.target.value })}
+                        aria-label="What you are aiming at" style={{ ...input, padding: "9px 10px" }}>
+                        {GOALS.map((g) => <option key={g.id} value={g.id}>{g.label}{g.note ? ` — ${g.note}` : ""}</option>)}
+                      </select>
+                    </label>
+
+                    <p className="rb-body-note">
+                      Sex is here because the equation carries a term for it and nothing else would
+                      be honest. Rather not say gives the midpoint of the two it knows.
+                    </p>
+
+                    <div style={{ display: "flex", gap: 10, gridColumn: "1 / -1" }}>
+                      <button className="rb-btn rb-focus" style={btnPrimary} onClick={commitBody}>Save</button>
+                      <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => setEditingBody(false)}>Cancel</button>
+                      {body && (
+                        <button className="rb-btn rb-focus" style={{ ...btnQuiet, marginLeft: "auto", color: "var(--card-danger)" }}
+                          onClick={() => { setBody(null); writeStore(BODY_KEY, null); setEditingBody(false); }}>
+                          Forget these
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
+            </div>
+          </article>
+        )}
         {!loading && view === "shopping" && (() => {
           const needed = list.items.filter((i) => !i.checked);
           const got = list.items.filter((i) => i.checked);
