@@ -3426,15 +3426,20 @@ export default function RecipeBox() {
        its target the day has got. Over the target turns the bar, rather than
        letting it run past the end where it would say nothing. */
     /* A photograph on a made-it. Shown at a size the page can spare, opening to
-       whatever the picture really is. */
-    .rb-shot {
+       whatever the picture really is.
+
+       NOT .rb-shot: that is already the photo frame on a recipe tile, further
+       down this stylesheet, and naming this the same thing leaked a 220px
+       max-width onto every tile in the box — which is how the grid on a phone
+       ended up half the width of its column. */
+    .rb-madeshot {
       display: block; margin: 9px 0 0; padding: 0; border: 1px solid var(--card-edge);
       border-radius: 2px; background: var(--card-bg); cursor: zoom-in; overflow: hidden; line-height: 0;
       max-width: 220px;
     }
-    .rb-shot:disabled { cursor: default; }
-    .rb-shot img { display: block; width: 100%; height: auto; }
-    .rb-shot:hover:not(:disabled) { border-color: var(--card-accent); }
+    .rb-madeshot:disabled { cursor: default; }
+    .rb-madeshot img { display: block; width: 100%; height: auto; }
+    .rb-madeshot:hover:not(:disabled) { border-color: var(--card-accent); }
 
     .rb-shotpick { display: flex; gap: 12px; align-items: flex-start; margin-top: 12px; }
     .rb-shotpick img { width: 92px; height: 92px; object-fit: cover; border: 1px solid var(--card-edge); border-radius: 2px; }
@@ -4164,7 +4169,7 @@ export default function RecipeBox() {
                   {lately.map((e, i) => {
                     const r = box.recipes.find((x) => x.id === e.recipe);
                     return (
-                      <li key={e.id} className={i === 0 ? "rb-lately-lead" : "rb-lately-row"}>
+                      <li key={e.id} className={i === 0 ? "rb-lately-lead" : undefined}>
                         <button
                           type="button"
                           className="rb-focus rb-lately-open"
@@ -5289,7 +5294,7 @@ export default function RecipeBox() {
                         {e.shot && (
                           <button
                             type="button"
-                            className="rb-shot rb-focus"
+                            className="rb-madeshot rb-focus"
                             onClick={() => e.hasPhoto && setLightbox(e)}
                             aria-label={`See ${e.name}'s photo full size`}
                             disabled={!e.hasPhoto}
