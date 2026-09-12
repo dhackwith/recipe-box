@@ -386,13 +386,14 @@ const scaleServings = (s, factor) => {
    The daily nutrition tracker
    Called "the day" throughout the code, which is what it holds: one date's
    meals and the figures they add up to.
-   What was eaten, and roughly what a day needs. Both live in this browser and
-   nowhere else. That is the whole point rather than a shortcut: the recipe box
-   is shared with the family, the shopping list is private to a person, and
-   somebody's weight and what they ate is a third thing again. Keeping it on the
-   device means there is no copy of it on a server to leak, and nothing for the
-   family to stumble into. The cost is that it does not follow you between a
-   phone and a laptop, which is a trade worth making by default.
+   What was eaten, and roughly what a day needs. It follows a person between
+   their own devices, under a key the server namespaces to the verified email —
+   so the family cannot read it, the same way they cannot read each other's
+   shopping lists. It is not device-only: there is a copy on the server, which is
+   the price of logging breakfast on a phone and lunch on a laptop.
+
+   The device is still written first and instantly. The account is a sync channel
+   over the top, debounced, and folded in on read rather than overwritten.
    ══════════════════════════════════════════════════════════════════ */
 const DAY_KEY = "rb-day-log";
 const BODY_KEY = "rb-body";
@@ -427,12 +428,69 @@ const writeStore = (key, value) => {
   try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
 };
 
+/* What is stored: the days themselves, and the ids of entries somebody has
+   taken off. The tombstones exist for the same reason the shopping list has
+   them — without them, a removal on a phone is undone the moment a laptop that
+   still remembers the entry syncs. */
+const emptyLog = () => ({ days: {}, removed: {} });
+
+/* A log written before any of this was the bare days object. */
+const asLog = (raw) => {
+  if (!raw || typeof raw !== "object") return emptyLog();
+  if (raw.days && typeof raw.days === "object") return { days: raw.days, removed: raw.removed || {} };
+  return { days: raw, removed: {} };
+};
+
 /* Only the last few weeks are kept. A log nobody prunes is a blob that grows
    until localStorage refuses it, and the refusal lands on whoever is logging
-   dinner that evening. */
+   dinner that evening. Tombstones go when the day they belong to would have. */
 const pruneDays = (log) => {
-  const keep = Object.keys(log).sort().slice(-DAY_HISTORY);
-  return Object.fromEntries(keep.map((k) => [k, log[k]]));
+  const keep = Object.keys(log.days).sort().slice(-DAY_HISTORY);
+  const cutoff = Date.now() - DAY_HISTORY * 86400000;
+  return {
+    days: Object.fromEntries(keep.map((k) => [k, log.days[k]])),
+    removed: Object.fromEntries(Object.entries(log.removed || {}).filter(([, at]) => at > cutoff)),
+  };
+};
+
+/* Two devices, one person, one day. Entries are never edited once added — they
+   are added or taken off — so there is no "whose version is newer" to settle
+   per entry, only whether an id is still there at all. That makes this simpler
+   than the shopping list's merge: union by id, minus anything removed.
+
+   Entry ids begin with a base-36 timestamp, so sorting by id puts a day back in
+   the order things were eaten no matter which device recorded which. */
+function mergeLogs(mine, theirs) {
+  const removed = { ...mine.removed };
+  for (const [id, at] of Object.entries(theirs.removed || {})) {
+    removed[id] = Math.max(removed[id] || 0, at);
+  }
+
+  const days = {};
+  for (const date of new Set([...Object.keys(mine.days), ...Object.keys(theirs.days)])) {
+    const out = emptyDay();
+    for (const meal of MEALS) {
+      const byId = new Map();
+      for (const e of [...(mine.days[date]?.[meal.id] || []), ...(theirs.days[date]?.[meal.id] || [])]) {
+        if (e && e.id && !byId.has(e.id)) byId.set(e.id, e);
+      }
+      out[meal.id] = [...byId.values()]
+        .filter((e) => !removed[e.id])
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    }
+    days[date] = out;
+  }
+  return pruneDays({ days, removed });
+}
+
+/* The profile is one small object that only its owner edits, so there is
+   nothing to merge — the later of the two simply wins. It carries when it was
+   last touched so that "later" means later in time rather than whichever device
+   happened to sync second. */
+const newerBody = (mine, theirs) => {
+  if (!mine) return theirs || null;
+  if (!theirs) return mine;
+  return (theirs.at || 0) > (mine.at || 0) ? theirs : mine;
 };
 
 /* Nutrition is written per serving, so a portion is simply a multiplier. The
@@ -2294,7 +2352,10 @@ export default function RecipeBox() {
   }, []);
 
   /* ── The day ──────────────────────────────────────────────────────── */
-  const [dayLog, setDayLog] = useState(() => readStore(DAY_KEY, {}));
+  const [dayLog, setDayLog] = useState(() => asLog(readStore(DAY_KEY, null)));
+  const [daySync, setDaySync] = useState("unknown");   // unknown | synced | device
+  const logRef = useRef(null);
+  const bodyRef = useRef(null);
   const [today, setToday] = useState(dayId);
   const [body, setBody] = useState(() => readStore(BODY_KEY, null));
   const [editingBody, setEditingBody] = useState(false);
@@ -2312,15 +2373,22 @@ export default function RecipeBox() {
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", check); };
   }, []);
 
-  const day = dayLog[today] || emptyDay();
+  logRef.current = dayLog;
+  bodyRef.current = body;
+
+  const day = dayLog.days[today] || emptyDay();
   const targets = body ? dailyTargets(body) : null;
   const shape = body ? bmi(body) : null;
   const totals = dayTotals(day, box.recipes);
 
-  const saveDay = (next) => {
-    const log = pruneDays({ ...dayLog, [today]: next });
+  const saveDay = (next, removedIds = []) => {
+    const removed = { ...dayLog.removed };
+    for (const id of removedIds) removed[id] = Date.now();
+    const log = pruneDays({ days: { ...dayLog.days, [today]: next }, removed });
+    logRef.current = log;
     setDayLog(log);
     if (!writeStore(DAY_KEY, log)) flash("Couldn't save today on this device — its storage may be full or switched off", 7000);
+    queueDaySync();
   };
 
   const logEntry = (meal) => {
@@ -2336,8 +2404,10 @@ export default function RecipeBox() {
     setAddServings("1");
   };
 
+  /* The id is remembered as removed, not merely dropped: another device still
+     holding the entry would otherwise put it back at the next sync. */
   const dropEntry = (meal, id) =>
-    saveDay({ ...day, [meal]: (day[meal] || []).filter((e) => e.id !== id) });
+    saveDay({ ...day, [meal]: (day[meal] || []).filter((e) => e.id !== id) }, [id]);
 
   /* The form is filled in the units people think in and stored in the ones the
      formulas use, so the conversion happens at these two edges only. */
@@ -2368,11 +2438,85 @@ export default function RecipeBox() {
   };
 
   const saveBody = (next) => {
-    setBody(next);
-    writeStore(BODY_KEY, next);
+    const stamped = next ? { ...next, at: Date.now() } : null;
+    bodyRef.current = stamped;
+    setBody(stamped);
+    writeStore(BODY_KEY, stamped);
     setEditingBody(false);
+    queueDaySync();
   };
 
+  /* ── The same day on this person's other devices ───────────────────
+     Kept under a key the server namespaces to the verified email, so it is
+     readable by its owner and by nobody else in the family. Same shape of sync
+     as the shopping list: the device writes first and instantly, the account
+     follows a couple of seconds behind, and a read is folded in rather than
+     overwritten so a phone waking up cannot undo a laptop's lunch. */
+  const DAY_SYNC = "day-log";
+  const BODY_SYNC = "body";
+  const daySyncTimer = useRef(null);
+  const daySyncing = useRef(false);
+  const daySyncAgain = useRef(false);
+
+  const syncDay = useCallback(async () => {
+    if (daySyncing.current) { daySyncAgain.current = true; return; }
+    daySyncing.current = true;
+    try {
+      let theirLog = null;
+      let theirBody = null;
+      try { theirLog = asLog(JSON.parse((await window.storage.get(DAY_SYNC)).value)); }
+      catch (err) { if (!/not found/i.test(String(err && err.message))) throw err; }
+      try { theirBody = JSON.parse((await window.storage.get(BODY_SYNC)).value); }
+      catch (err) { if (!/not found/i.test(String(err && err.message))) throw err; }
+
+      const mineLog = logRef.current;
+      const mergedLog = theirLog ? mergeLogs(mineLog, theirLog) : mineLog;
+      if (JSON.stringify(mergedLog) !== JSON.stringify(mineLog)) {
+        logRef.current = mergedLog;
+        setDayLog(mergedLog);
+        writeStore(DAY_KEY, mergedLog);
+      }
+      if (!theirLog || JSON.stringify(mergedLog) !== JSON.stringify(theirLog)) {
+        await window.storage.set(DAY_SYNC, JSON.stringify(mergedLog));
+      }
+
+      const mineBody = bodyRef.current;
+      const mergedBody = newerBody(mineBody, theirBody);
+      if (JSON.stringify(mergedBody) !== JSON.stringify(mineBody)) {
+        bodyRef.current = mergedBody;
+        setBody(mergedBody);
+        writeStore(BODY_KEY, mergedBody);
+      }
+      if (JSON.stringify(mergedBody) !== JSON.stringify(theirBody)) {
+        await window.storage.set(BODY_SYNC, JSON.stringify(mergedBody));
+      }
+      setDaySync("synced");
+    } catch {
+      /* Offline, or Access could not vouch for us. What is on the device is
+         untouched and the next change or visit tries again. */
+      setDaySync("device");
+    } finally {
+      daySyncing.current = false;
+      if (daySyncAgain.current) { daySyncAgain.current = false; syncDay(); }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const queueDaySync = () => {
+    clearTimeout(daySyncTimer.current);
+    daySyncTimer.current = setTimeout(syncDay, 2000);
+  };
+
+  useEffect(() => {
+    syncDay();
+    const onWake = () => { if (document.visibilityState === "visible") syncDay(); };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+      clearTimeout(daySyncTimer.current);
+    };
+  }, [syncDay]);
   const openToday = () => {
     if (view !== "today") shoppingFrom.current = view;
     setView("today");
@@ -3525,7 +3669,11 @@ export default function RecipeBox() {
               <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Daily nutrition tracker</h2>
               <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 22px", maxWidth: "60ch" }}>
                 What you have eaten from the box today, and roughly what it came to.
-                Kept on this device only — not in the shared box, and not on anybody's server.
+                {daySync === "synced"
+                  ? " It follows you between your own devices, and nobody else in the family can see it."
+                  : daySync === "device"
+                  ? " Saved on this device. It couldn't reach your account just now, so it will catch up later."
+                  : ""}
               </p>
 
               {/* ── the tally ── */}
@@ -3734,7 +3882,7 @@ export default function RecipeBox() {
                       <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => setEditingBody(false)}>Cancel</button>
                       {body && (
                         <button className="rb-btn rb-focus" style={{ ...btnQuiet, marginLeft: "auto", color: "var(--card-danger)" }}
-                          onClick={() => { setBody(null); writeStore(BODY_KEY, null); setEditingBody(false); }}>
+                          onClick={() => saveBody(null)}>
                           Forget these
                         </button>
                       )}

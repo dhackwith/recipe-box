@@ -15,9 +15,9 @@ const a = src.indexOf("const DAY_KEY =");
 const b = src.indexOf("/* ══", a);
 if (a < 0 || b < 0) throw new Error("could not find the day model — has RecipeBox.jsx moved on?");
 
-const { dayTotals, dayId, pruneDays, emptyDay, numOf, MEALS } = await import(
-  "data:text/javascript," + encodeURIComponent(
-    src.slice(a, b) + "\nexport { dayTotals, dayId, pruneDays, emptyDay, numOf, MEALS };")
+const EXPORTS = "export { dayTotals, dayId, pruneDays, emptyDay, emptyLog, asLog, mergeLogs, newerBody, numOf, MEALS };";
+const { dayTotals, dayId, pruneDays, emptyDay, emptyLog, asLog, mergeLogs, newerBody, numOf, MEALS } = await import(
+  "data:text/javascript," + encodeURIComponent(src.slice(a, b) + EXPORTS)
 );
 
 let pass = 0, fail = 0;
@@ -80,15 +80,46 @@ const early = new Date(2026, 0, 5, 0, 10);
 is("zero-padded", dayId(early), "2026-01-05");
 
 console.log("\n— the log does not grow forever —");
-const long = {};
-for (let i = 1; i <= 60; i++) long[`2026-01-${String(i).padStart(2, "0")}`] = emptyDay();
+const long = emptyLog();
+for (let i = 1; i <= 60; i++) long.days[`2026-01-${String(i).padStart(2, "0")}`] = emptyDay();
 const pruned = pruneDays(long);
-is("only the last 45 days are kept", Object.keys(pruned).length, 45);
-is("...and they are the most recent ones", Object.keys(pruned)[0], "2026-01-16");
-is("a short log is left alone", Object.keys(pruneDays({ "2026-01-01": emptyDay() })).length, 1);
+is("only the last 45 days are kept", Object.keys(pruned.days).length, 45);
+is("...and they are the most recent ones", Object.keys(pruned.days)[0], "2026-01-16");
+is("tombstones go when their day would have",
+  Object.keys(pruneDays({ days: {}, removed: { old: Date.now() - 90 * 86400000, fresh: Date.now() } }).removed), ["fresh"]);
 
-console.log("\n— the meals themselves —");
-is("four of them, in the order of a day", MEALS.map((m) => m.id), ["breakfast", "lunch", "dinner", "snacks"]);
+is("a log written before any of this is read as one", asLog({ "2026-01-01": emptyDay() }).days["2026-01-01"].breakfast, []);
+is("...and gains somewhere to record removals", asLog({ "2026-01-01": emptyDay() }).removed, {});
+is("nothing at all is an empty log", asLog(null), { days: {}, removed: {} });
+
+const entry = (id, recipeId) => ({ id, recipeId, servings: 1 });
+const oneDay = (meal, entries, removed = {}) => ({ days: { "2026-09-12": { ...emptyDay(), [meal]: entries } }, removed });
+
+const both = mergeLogs(oneDay("breakfast", [entry("d-a1", "oats")]), oneDay("lunch", [entry("d-b2", "chili")]));
+is("each device's meal survives the other",
+  [both.days["2026-09-12"].breakfast.length, both.days["2026-09-12"].lunch.length], [1, 1]);
+is("two entries in the same meal both keep",
+  mergeLogs(oneDay("dinner", [entry("d-a1", "x")]), oneDay("dinner", [entry("d-b2", "y")]))
+    .days["2026-09-12"].dinner.map((e) => e.id), ["d-a1", "d-b2"]);
+is("...in the order they were logged, whichever device did it",
+  mergeLogs(oneDay("dinner", [entry("d-b2", "x")]), oneDay("dinner", [entry("d-a1", "y")]))
+    .days["2026-09-12"].dinner.map((e) => e.id), ["d-a1", "d-b2"]);
+is("the same entry from both sides appears once",
+  mergeLogs(oneDay("breakfast", [entry("d-a1", "oats")]), oneDay("breakfast", [entry("d-a1", "oats")]))
+    .days["2026-09-12"].breakfast.length, 1);
+
+const gone = oneDay("breakfast", [], { "d-a1": Date.now() });
+const kept = oneDay("breakfast", [entry("d-a1", "oats")]);
+is("a device that still remembers a removed entry does not put it back",
+  mergeLogs(gone, kept).days["2026-09-12"].breakfast, []);
+is("...whichever way round they meet", mergeLogs(kept, gone).days["2026-09-12"].breakfast, []);
+is("the tombstone is carried forward", Object.keys(mergeLogs(kept, gone).removed), ["d-a1"]);
+
+is("the newer profile wins", newerBody({ kg: 80, at: 1 }, { kg: 82, at: 2 }).kg, 82);
+is("...whichever side it is on", newerBody({ kg: 80, at: 3 }, { kg: 82, at: 2 }).kg, 80);
+is("one side missing", newerBody(null, { kg: 82, at: 2 }).kg, 82);
+is("the other side missing", newerBody({ kg: 80, at: 1 }, null).kg, 80);
+is("neither", newerBody(null, null), null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
