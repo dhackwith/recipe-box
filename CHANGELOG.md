@@ -7,6 +7,7 @@ leave the plumbing out unless they would notice it.
 
 ## 2026-09-11
 
+- **A new look.** The site is lighter, and photographs lead. A recipe in the box is now its picture with the name underneath, and a recipe page puts the title, who it came from and what it is above the photo, with the serving, time and step counts in a row beneath it.
 - **New lettering.** Titles are set in Jost, the words you read while cooking in Radley, and the buttons in Inter — the arrangement Bon Appétit uses, picked after looking at what a dozen recipe sites actually serve.
 - **A note of what's new.** This list. The menu keeps a dated record of what changed, and a dot appears beside Menu when there is something here you have not read yet.
 - **Your shopping list follows you.** Build a list on the computer and it is waiting on your phone at the shop. It is yours alone — nobody else in the family can see or change it, and ticking something off still works with no signal.

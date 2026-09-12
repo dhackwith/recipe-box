@@ -85,31 +85,31 @@ const SITE_NAME = "The Hackwith Table";
 const PALETTES = [
   { id: "teal", name: "Hackwith Teal", darkCard: "#123B3F", darkLift: "#17494D", darkMuted: "#A3B3A9",
     dark: { soft: "#144043", bg: "#0B2F32", deep: "#061E21", ink: "#F7F2E6", accent: "#E7A427", onAccent: "#061E21", k: 1 },
-    light: { soft: "#EAF2F0", bg: "#DCE9E6", deep: "#C8DBD7", ink: "#0B2F32", accent: "#8A5A00", onAccent: "#FFF9EC", k: 1.45, grain: 0.04 } },
+    light: { soft: "#FFFFFF", bg: "#FAFAF8", deep: "#E9E7E1", ink: "#17201F", accent: "#0E5054", onAccent: "#FFF9EC", k: 1.45, grain: 0.04 } },
   { id: "cast-iron", name: "Cast Iron", darkCard: "#2F2C2A", darkLift: "#3A3633",
     dark: { soft: "#33302D", bg: "#232120", deep: "#141312", ink: "#F2ECE0", accent: "#D9955A", onAccent: "#1A1817", k: 1 },
-    light: { soft: "#F3F0EA", bg: "#E8E3DB", deep: "#D7D0C5", ink: "#232120", accent: "#924F1D", onAccent: "#FFF7EE", k: 1.45, grain: 0.04 } },
+    light: { soft: "#FFFFFF", bg: "#FAF9F6", deep: "#E9E5DE", ink: "#201E1C", accent: "#8A4A1B", onAccent: "#FFF7EE", k: 1.45, grain: 0.04 } },
   { id: "sage", name: "Sage Garden", darkCard: "#2E4535", darkLift: "#37523F",
     dark: { soft: "#304A38", bg: "#233629", deep: "#16241B", ink: "#F3EFE2", accent: "#E8C872", onAccent: "#1A281F", k: 1.12 },
-    light: { soft: "#EDF2EA", bg: "#DFE8DC", deep: "#CBD9C6", ink: "#1C3023", accent: "#76590B", onAccent: "#FFF9EA", k: 1.45, grain: 0.04 } },
+    light: { soft: "#FFFFFF", bg: "#FAFBF8", deep: "#E7EAE3", ink: "#1B211B", accent: "#4F6B22", onAccent: "#FFF9EA", k: 1.45, grain: 0.04 } },
   { id: "terracotta", name: "Terracotta", darkCard: "#693023", darkLift: "#77392A",
     dark: { soft: "#6E3121", bg: "#5A2417", deep: "#3C170E", ink: "#FBEFE4", accent: "#F2C45A", onAccent: "#34140D", k: 1.12 },
-    light: { soft: "#F8EDE5", bg: "#F1DFD3", deep: "#E4C9B8", ink: "#4A1E13", accent: "#983C1B", onAccent: "#FFF6F0", k: 1.45, grain: 0.04 } },
+    light: { soft: "#FFFFFF", bg: "#FDFAF8", deep: "#EFE5DE", ink: "#241A16", accent: "#A3441D", onAccent: "#FFF6F0", k: 1.45, grain: 0.04 } },
   { id: "blue-willow", name: "Blue Willow", darkCard: "#243C62", darkLift: "#2C4770",
     dark: { soft: "#27426B", bg: "#1C3152", deep: "#111F37", ink: "#F3F6FB", accent: "#9CC4F2", onAccent: "#12213A", k: 1.05 },
-    light: { soft: "#EEF3FA", bg: "#DEE8F5", deep: "#C8D8EE", ink: "#13223D", accent: "#2B5591", onAccent: "#F6F9FD", k: 1.45, grain: 0.04 } },
+    light: { soft: "#FFFFFF", bg: "#F9FAFC", deep: "#E6EAF1", ink: "#171C25", accent: "#24527F", onAccent: "#F6F9FD", k: 1.45, grain: 0.04 } },
   { id: "merlot", name: "Merlot", darkCard: "#552131", darkLift: "#62283A",
     dark: { soft: "#5A2236", bg: "#47192A", deep: "#2C0E19", ink: "#F8ECE8", accent: "#E7AE72", onAccent: "#2B0E18", k: 1.05 },
-    light: { soft: "#F7ECEF", bg: "#EFDEE3", deep: "#E0C7CF", ink: "#3E1422", accent: "#8E4418", onAccent: "#FFF6F0", k: 1.45, grain: 0.04 } },
+    light: { soft: "#FFFFFF", bg: "#FCF9FA", deep: "#EDE3E6", ink: "#2A1620", accent: "#8E4418", onAccent: "#FFF6F0", k: 1.45, grain: 0.04 } },
   { id: "butter", name: "Butter", darkCard: "#3B2F22", darkLift: "#47392A",
     dark: { soft: "#3C3122", bg: "#2E2519", deep: "#1C170F", ink: "#F6EAC8", accent: "#F2C96B", onAccent: "#1C170F", k: 1.05 },
-    light: { soft: "#F8EDCB", bg: "#F3E4B5", deep: "#E6D194", ink: "#33261A", accent: "#A2371F", onAccent: "#FFF8EC", k: 1.45, grain: 0.04 } },
+    light: { soft: "#FFFFFF", bg: "#FDFBF4", deep: "#EFE8D6", ink: "#2A2318", accent: "#A2371F", onAccent: "#FFF8EC", k: 1.45, grain: 0.04 } },
   { id: "retro-mint", name: "Retro Mint", darkCard: "#20403A", darkLift: "#274A43",
     dark: { soft: "#1F3B35", bg: "#15302A", deep: "#0C1E1A", ink: "#E6F4EE", accent: "#F2939A", onAccent: "#0D1F1B", k: 1 },
-    light: { soft: "#D3EDE2", bg: "#BFE2D3", deep: "#A6D3C0", ink: "#172E29", accent: "#A1222C", onAccent: "#FFF6F1", k: 1.45, grain: 0.04 } },
+    light: { soft: "#FFFFFF", bg: "#F7FBF9", deep: "#E2EDE7", ink: "#16221F", accent: "#A1222C", onAccent: "#FFF6F1", k: 1.45, grain: 0.04 } },
   { id: "farmhouse", name: "Farmhouse", darkCard: "#2F312C", darkLift: "#393C36",
     dark: { soft: "#30322D", bg: "#242622", deep: "#161715", ink: "#EEEAE1", accent: "#A6C39C", onAccent: "#161715", k: 1 },
-    light: { soft: "#F6F4EE", bg: "#EEEAE1", deep: "#DFD9CC", ink: "#262623", accent: "#4C6746", onAccent: "#FBFAF6", k: 1.45, grain: 0.035 } },
+    light: { soft: "#FFFFFF", bg: "#FAF9F5", deep: "#E8E5DC", ink: "#232320", accent: "#4C6746", onAccent: "#FBFAF6", k: 1.45, grain: 0.035 } },
 ];
 /* Backgrounds, picked separately from the colours and shown as they are —
    nothing tints the image. Readability comes from what sits on it instead:
@@ -375,6 +375,10 @@ const servingsCount = (s) => {
   const m = String(s || "").match(/\d+/);
   return m ? parseInt(m[0], 10) : null;
 };
+/* A stats row labels the figure, so "Serves 6" would read "Serves / Serves 6".
+   Authors write it both ways and the template does not force either. */
+const servesOnly = (s, factor) => String(scaleServings(s, factor)).replace(/^\s*serves\s+/i, "").trim();
+
 const scaleServings = (s, factor) => {
   const n = servingsCount(s);
   if (!n) return s;
@@ -1335,8 +1339,10 @@ const toolbarButton = {
   padding: "8px 14px", borderRadius: 2, cursor: "pointer", textAlign: "left",
   border: "1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))", background: "rgba(var(--on-page), calc(.06 * var(--ink-k)))",
 };
-const sheet = { position: "relative", background: "var(--card-bg)", color: "var(--card-text)", borderRadius: 3, boxShadow: "0 26px 60px -30px rgba(0,0,0,.7)", overflow: "hidden" };
-const ruleTop = { height: 7, background: `linear-gradient(90deg, ${T.marigold} 0 46%, ${T.rust} 46% 62%, ${T.sage} 62% 100%)` };
+const sheet = {
+  position: "relative", background: "var(--card-bg)", color: "var(--card-text)",
+  borderRadius: 3, border: "1px solid var(--card-edge)", overflow: "hidden",
+};
 
 /* ══════════════════════════════════════════════════════════════════
    Cooking mode — defined at module scope on purpose. Declaring it inside
@@ -2271,14 +2277,14 @@ export default function RecipeBox() {
   /* styles */
   const css = `
     .rb {
-      --card-bg: ${T.paper};
-      --card-lift: ${T.paperLift};
-      --card-text: ${T.text};
-      --card-muted: ${T.muted};
-      --card-edge: ${T.edge};
-      --card-accent: ${T.rust};
+      --card-bg: #FFFFFF;
+      --card-lift: #FAF9F6;
+      --card-text: #1A1917;
+      --card-muted: #6B675F;
+      --card-edge: #E4E0D8;
+      --card-accent: var(--page-accent);
       --card-danger: ${T.rust};
-      --grain-op: 0.035;
+      --grain-op: 0.022;
       --grain-blend: multiply;
     }
     .rb[data-theme="dark"] {
@@ -2308,8 +2314,28 @@ export default function RecipeBox() {
     }
     .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    /* Title, who wrote it, what it is, what you can do, then the photograph —
+       the order every recipe site puts them in. The actions sit between rules
+       so they read as a bar rather than as loose buttons. */
+    .rb-actbar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 15px 0; border-top: 1px solid var(--card-edge); border-bottom: 1px solid var(--card-edge); margin-bottom: 26px; }
+    .rb-hero { margin: 0 0 24px; border-radius: 2px; overflow: hidden; border: 1px solid var(--card-edge); }
+    .rb-hero img { display: block; width: 100%; height: auto; max-height: 520px; object-fit: cover; }
+    .rb-stats { display: flex; flex-wrap: wrap; margin: 0 0 30px; padding: 0; border: 1px solid var(--card-edge); border-radius: 2px; }
+    .rb-stats > div { flex: 1 1 116px; padding: 11px 15px; border-right: 1px solid var(--card-edge); }
+    .rb-stats > div:last-child { border-right: 0; }
+    .rb-stats dt { font: 600 9.5px/1 ${UI}; letter-spacing: .12em; text-transform: uppercase; color: var(--card-muted); margin: 0 0 6px; }
+    .rb-stats dd { font: 400 16px/1 ${DISPLAY}; margin: 0; color: var(--card-text); }
     .rb-detail { display: grid; grid-template-columns: 1fr; gap: 34px; }
     @media (min-width: 760px) { .rb-detail { grid-template-columns: 292px 1fr; gap: 52px; } }
+    /* A tile is a photograph with its name under it — no card, no border, no
+       shadow. Lifting every recipe off the page flattened the hierarchy; the
+       picture is the thing that should catch the eye. */
+    .rb-tile { display: block; cursor: pointer; background: none; border: 0; padding: 0; text-align: left; }
+    .rb-shot { position: relative; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 2px; background: var(--card-lift); border: 1px solid var(--card-edge); display: grid; place-items: center; }
+    .rb-shot img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 220ms cubic-bezier(.2,.7,.3,1); }
+    .rb-tile:hover .rb-shot img, .rb-tile:focus-visible .rb-shot img { transform: scale(1.035); }
+    .rb-noshot { font: 500 10px/1 ${UI}; letter-spacing: .13em; text-transform: uppercase; color: var(--card-muted); }
+    @media (prefers-reduced-motion: reduce) { .rb-shot img { transition: none; } .rb-tile:hover .rb-shot img { transform: none; } }
     .rb-card { transition: transform 160ms cubic-bezier(.2,.7,.3,1), box-shadow 160ms ease; }
     .rb-card:active { cursor: grabbing; }
 
@@ -2806,39 +2832,22 @@ export default function RecipeBox() {
                     role="button"
                     onClick={() => openCard(r.id)}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(r.id); } }}
-                    className="rb-card rb-focus"
-                    style={{
-                      ...sheet, display: "flex", flexDirection: "column",
-                      cursor: "pointer",
-                    }}
+                    className="rb-tile rb-focus"
                   >
-                    <div style={ruleTop} />
-                    {(r.thumb || r.imageUrl) && (
-                      <div
-                        style={{
-                          display: "flex", justifyContent: "center", alignItems: "center",
-                          height: 168, borderBottom: `1px solid var(--card-edge)`,
-                        }}
-                      >
-                        <img
-                          src={r.thumb || r.imageUrl}
-                          alt=""
-                          loading="lazy"
-                          style={{ display: "block", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%" }}
-                        />
-                      </div>
-                    )}
-                    <Grain card />
-                    <div style={{ position: "relative", padding: "22px 24px 20px", display: "flex", flexDirection: "column", gap: 9, flex: 1 }}>
-                      <h3 style={{ font: `400 24px/1.18 ${DISPLAY}`, color: "var(--card-text)", margin: 0, letterSpacing: "-0.01em" }}>{r.title}</h3>
-                      {r.contributor && <p style={{ font: `italic 400 14.5px/1.4 ${PROSE}`, color: "var(--card-accent)", margin: 0 }}>from {r.contributor}'s kitchen</p>}
-                      {r.description && <p className="rb-clamp" style={{ font: `400 14px/1.65 ${UI}`, color: "var(--card-muted)", margin: 0 }}>{r.description}</p>}
-                      <div style={{ marginTop: "auto", paddingTop: 14, borderTop: `1px solid var(--card-edge)`, font: `400 12.5px/1.4 ${UI}`, color: "var(--card-muted)", display: "flex", gap: 16, flexWrap: "wrap" }}>
-                        <span>{r.ingredients.length} ingredients</span>
-                        <span>{r.steps.length} steps</span>
-                        {r.time && <span>{r.time}</span>}
-                      </div>
+                    <div className="rb-shot">
+                      {(r.thumb || r.imageUrl)
+                        ? <img src={r.thumb || r.imageUrl} alt="" loading="lazy" />
+                        : <span className="rb-noshot">no photo yet</span>}
                     </div>
+                    <h3 style={{ font: `400 20px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "12px 0 2px", letterSpacing: "-0.01em" }}>{r.title}</h3>
+                    {r.contributor && (
+                      <p style={{ font: `italic 400 13.5px/1.4 ${PROSE}`, color: "var(--page-accent)", margin: 0 }}>from {r.contributor}'s kitchen</p>
+                    )}
+                    <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.6 * var(--ink-k)))", margin: "7px 0 0", display: "flex", gap: 13, flexWrap: "wrap" }}>
+                      <span>{r.steps.length} steps</span>
+                      <span>{r.ingredients.length} ingredients</span>
+                      {r.time && <span>{r.time}</span>}
+                    </p>
                   </article>
                 ))}
               </div>
@@ -2855,7 +2864,6 @@ export default function RecipeBox() {
         {/* ═══════ IMPORT REVIEW ═══════ */}
         {!loading && view === "import" && (
           <div style={{ ...sheet, maxWidth: 820 }}>
-            <div style={ruleTop} />
             <Grain card />
             <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 34px" }}>
               <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Review before adding</h2>
@@ -2946,7 +2954,6 @@ export default function RecipeBox() {
           };
           return (
             <article className="rb-sheet" style={{ ...sheet, maxWidth: 820 }}>
-              <div style={ruleTop} className="rb-noprint" />
               <Grain card />
               <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 36px" }}>
                 <button
@@ -3054,24 +3061,6 @@ export default function RecipeBox() {
 
         {!loading && view === "detail" && openRecipe && (
           <article className="rb-sheet" style={sheet}>
-            <div style={ruleTop} className="rb-noprint" />
-            {hero && (
-              <div
-                style={{
-                  display: "flex", justifyContent: "center",
-                  borderBottom: `1px solid var(--card-edge)`,
-                }}
-              >
-                <img
-                  src={hero}
-                  alt={openRecipe.title}
-                  style={{
-                    display: "block", width: "auto", height: "auto",
-                    maxWidth: "100%", maxHeight: 460,
-                  }}
-                />
-              </div>
-            )}
             <Grain card />
             <div className="rb-pad" style={{ position: "relative", padding: "38px 34px 42px" }}>
               <button
@@ -3098,7 +3087,7 @@ export default function RecipeBox() {
                 </p>
               )}
 
-              <div className="rb-noprint" style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 30 }}>
+              <div className="rb-noprint rb-actbar">
                 <button
                   className="rb-btn rb-focus"
                   style={btnPrimary}
@@ -3110,14 +3099,23 @@ export default function RecipeBox() {
                 {listControls(openRecipe)}
               </div>
 
+              {hero && (
+                <div className="rb-hero">
+                  <img src={hero} alt={openRecipe.title} />
+                </div>
+              )}
+
+              <dl className="rb-stats">
+                {openRecipe.servings && (
+                  <div><dt>Serves</dt><dd className="rb-num">{servesOnly(openRecipe.servings, factor)}</dd></div>
+                )}
+                {openRecipe.time && <div><dt>Time</dt><dd>{openRecipe.time}</dd></div>}
+                <div><dt>Ingredients</dt><dd className="rb-num">{openRecipe.ingredients.length}</dd></div>
+                <div><dt>Steps</dt><dd className="rb-num">{openRecipe.steps.length}</dd></div>
+              </dl>
+
               <div className="rb-detail">
                 <div>
-                  {(openRecipe.servings || openRecipe.time) && (
-                    <div style={{ font: `400 13px/1.8 ${UI}`, color: "var(--card-muted)", paddingBottom: 15, marginBottom: 18, borderBottom: `2px solid var(--card-text)` }}>
-                      {openRecipe.servings && <div>{scaleServings(openRecipe.servings, factor)}</div>}
-                      {openRecipe.time && <div>{openRecipe.time}</div>}
-                    </div>
-                  )}
                   <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 4px", color: "var(--card-text)" }}>Ingredients</h3>
                   <p className="rb-noprint" style={{ font: `400 12px/1.5 ${UI}`, color: "var(--card-muted)", margin: "0 0 10px" }}>
                     {marks.ing.length ? (
@@ -3323,7 +3321,6 @@ export default function RecipeBox() {
         {/* ═══════ FORM ═══════ */}
         {!loading && view === "form" && (
           <div style={{ ...sheet, maxWidth: 820 }}>
-            <div style={ruleTop} />
             <Grain card />
             <div className="rb-pad" style={{ position: "relative", padding: "34px 32px 38px" }}>
               <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 24px", color: "var(--card-text)" }}>{editingId ? "Edit recipe" : "Add a recipe"}</h2>
