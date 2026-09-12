@@ -508,14 +508,25 @@ const MACROS = [
   { key: "fat", label: "Fat", unit: "g", target: "fat" },
 ];
 
-/* What a day's entries add up to. An entry whose recipe has gone, or whose
-   recipe never carried nutrition, contributes nothing rather than breaking the
-   sum — and the view says which ones those are. */
+/* What a day's entries add up to.
+
+   Two kinds of entry. One names a recipe and its figures are read from the box,
+   so editing the recipe corrects every day it appears in. The other carries its
+   own numbers, because it came from somewhere that is not ours — a reading
+   taken at a moment, which should not change afterwards because a database was
+   edited.
+
+   An entry that can be counted by neither route adds nothing rather than
+   breaking the sum, and the view says how many of those there are. */
 function dayTotals(day, recipes) {
   const totals = { calories: 0, protein: 0, carbs: 0, fat: 0 };
   let unknown = 0;
   for (const meal of MEALS) {
     for (const entry of day[meal.id] || []) {
+      if (entry.per && entry.per.calories) {
+        for (const k of Object.keys(totals)) totals[k] += numOf(entry.per[k]) * entry.servings;
+        continue;
+      }
       const recipe = recipes.find((r) => r.id === entry.recipeId);
       const n = recipe && recipe.nutrition;
       if (!n || !n.calories) { unknown += 1; continue; }
@@ -2391,6 +2402,87 @@ export default function RecipeBox() {
     queueDaySync();
   };
 
+  /* Three ways into a meal: something from the box, something looked up, or
+     numbers typed straight off a wrapper. The third exists because the second
+     will not always have what somebody ate — a named item from a named chain is
+     where any food database is thinnest, and the chains publish the figures
+     themselves. */
+  const [addMode, setAddMode] = useState("box");
+  const [foodQuery, setFoodQuery] = useState("");
+  const [foodResults, setFoodResults] = useState(null);
+  const [foodBusy, setFoodBusy] = useState(false);
+  const [foodError, setFoodError] = useState("");
+  const [foodPick, setFoodPick] = useState(null);
+  const [byHand, setByHand] = useState({ name: "", calories: "", protein: "", carbs: "", fat: "" });
+
+  const resetAdd = () => {
+    setAddTo(null);
+    setAddPick("");
+    setAddServings("1");
+    setFoodQuery("");
+    setFoodResults(null);
+    setFoodError("");
+    setFoodPick(null);
+    setByHand({ name: "", calories: "", protein: "", carbs: "", fat: "" });
+  };
+
+  const searchFoods = async () => {
+    const q = foodQuery.trim();
+    if (q.length < 2) return;
+    setFoodBusy(true);
+    setFoodError("");
+    setFoodPick(null);
+    try {
+      const res = await fetch(`/api/food?q=${encodeURIComponent(q)}`, { credentials: "same-origin" });
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+      if (!res.ok) throw new Error((data && data.error) || `Couldn't search (${res.status})`);
+      if (data === null) throw new Error("Food search isn't available here — this needs the deployed site");
+      setFoodResults(data.results || []);
+    } catch (err) {
+      setFoodResults([]);
+      setFoodError(String(err.message || err));
+    } finally {
+      setFoodBusy(false);
+    }
+  };
+
+  /* Whatever is added, the numbers are written onto the entry rather than looked
+     up later. A recipe is ours and can be read again; a food from elsewhere is a
+     reading taken at a moment, and the day it was eaten should not change
+     because a database was edited afterwards. */
+  const addFromFood = (meal, food, servings) => {
+    saveDay({
+      ...day,
+      [meal]: [...(day[meal] || []), {
+        id: `d-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        food: { name: food.name, brand: food.brand || null, portion: food.portion },
+        per: food.per,
+        servings,
+      }],
+    });
+    resetAdd();
+  };
+
+  const addByHand = (meal) => {
+    const name = byHand.name.trim();
+    const calories = Math.max(0, parseFloat(byHand.calories) || 0);
+    if (!name || !calories) {
+      flash("A name and a calorie figure are the least it needs", 5000);
+      return;
+    }
+    addFromFood(meal, {
+      name,
+      brand: null,
+      portion: "as entered",
+      per: {
+        calories: Math.round(calories),
+        protein: Math.round(parseFloat(byHand.protein) || 0),
+        carbs: Math.round(parseFloat(byHand.carbs) || 0),
+        fat: Math.round(parseFloat(byHand.fat) || 0),
+      },
+    }, Math.max(0.25, Math.min(20, parseFloat(addServings) || 1)));
+  };
   const logEntry = (meal) => {
     const recipe = box.recipes.find((r) => r.id === addPick);
     const servings = Math.max(0.25, Math.min(20, parseFloat(addServings) || 1));
@@ -2399,9 +2491,7 @@ export default function RecipeBox() {
       ...day,
       [meal]: [...(day[meal] || []), { id: `d-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, recipeId: recipe.id, servings }],
     });
-    setAddTo(null);
-    setAddPick("");
-    setAddServings("1");
+    resetAdd();
   };
 
   /* The id is remembered as removed, not merely dropped: another device still
@@ -2983,7 +3073,19 @@ export default function RecipeBox() {
 
     .rb-meal { padding: 16px 0; border-bottom: 1px solid var(--card-edge); }
     .rb-meal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .rb-meal-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    .rb-meal-add { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+    .rb-add-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .rb-add-modes { display: flex; gap: 6px; flex-wrap: wrap; }
+    .rb-add-mode { font: 600 11.5px/1 ${UI}; padding: 7px 11px; border-radius: 999px; cursor: pointer; background: transparent; color: var(--card-muted); border: 1px solid var(--card-edge); }
+    .rb-add-mode[aria-pressed="true"] { background: var(--card-accent); border-color: var(--card-accent); color: var(--on-accent); }
+    .rb-add-note { font: 400 12px/1.55 ${UI}; color: var(--card-muted); margin: 0; max-width: 60ch; }
+    .rb-food-results { list-style: none; margin: 0; padding: 0; max-height: 250px; overflow-y: auto; border: 1px solid var(--card-edge); border-radius: 2px; }
+    .rb-food-hit { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--card-edge); padding: 9px 12px; cursor: pointer; }
+    .rb-food-results li:last-child .rb-food-hit { border-bottom: 0; }
+    .rb-food-hit:hover, .rb-food-hit[aria-pressed="true"] { background: var(--card-lift); }
+    .rb-food-hit[aria-pressed="true"] { box-shadow: inset 3px 0 0 var(--card-accent); }
+    .rb-food-name { display: block; font: 400 14px/1.4 ${PROSE}; color: var(--card-text); }
+    .rb-food-meta { display: block; font: 400 11.5px/1.4 ${UI}; color: var(--card-muted); margin-top: 2px; }
     .rb-meal-empty { font: 400 13.5px/1.6 ${UI}; color: var(--card-muted); margin: 8px 0 0; }
     .rb-meal-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .rb-meal-list li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -3716,7 +3818,7 @@ export default function RecipeBox() {
                         <button
                           className="rb-btn rb-focus"
                           style={{ ...btnQuiet, padding: "6px 12px", fontSize: 12.5 }}
-                          onClick={() => { setAddTo(addTo === meal.id ? null : meal.id); setAddPick(""); setAddServings("1"); }}
+                          onClick={() => { const open = addTo === meal.id; resetAdd(); if (!open) setAddTo(meal.id); }}
                         >
                           {addTo === meal.id ? "Cancel" : "Add"}
                         </button>
@@ -3724,34 +3826,156 @@ export default function RecipeBox() {
 
                       {addTo === meal.id && (
                         <div className="rb-meal-add">
-                          <select
-                            className="rb-focus"
-                            value={addPick}
-                            onChange={(e) => setAddPick(e.target.value)}
-                            aria-label={`Which recipe for ${meal.label.toLowerCase()}`}
-                            style={{ ...input, flex: "1 1 220px", padding: "9px 10px" }}
-                          >
-                            <option value="">Pick a recipe…</option>
-                            {box.recipes.map((r) => (
-                              <option key={r.id} value={r.id}>
-                                {r.title}{r.nutrition?.calories ? ` — ${numOf(r.nutrition.calories)} cal a serving` : " — no nutrition"}
-                              </option>
+                          <div className="rb-add-modes" role="group" aria-label="Where this came from">
+                            {[["box", "From the box"], ["search", "Look it up"], ["hand", "Type it in"]].map(([id, label]) => (
+                              <button
+                                key={id}
+                                type="button"
+                                className="rb-focus rb-add-mode"
+                                aria-pressed={addMode === id}
+                                onClick={() => setAddMode(id)}
+                              >
+                                {label}
+                              </button>
                             ))}
-                          </select>
-                          <input
-                            className="rb-focus"
-                            type="number"
-                            min="0.25"
-                            max="20"
-                            step="0.25"
-                            value={addServings}
-                            onChange={(e) => setAddServings(e.target.value)}
-                            aria-label="How many servings"
-                            style={{ ...input, width: 92, padding: "9px 10px" }}
-                          />
-                          <button className="rb-btn rb-focus" style={{ ...btnPrimary, padding: "10px 16px" }} onClick={() => logEntry(meal.id)} disabled={!addPick}>
-                            Add
-                          </button>
+                          </div>
+
+                          {addMode === "box" && (
+                            <div className="rb-add-row">
+                              <select
+                                className="rb-focus"
+                                value={addPick}
+                                onChange={(e) => setAddPick(e.target.value)}
+                                aria-label={`Which recipe for ${meal.label.toLowerCase()}`}
+                                style={{ ...input, flex: "1 1 220px", padding: "9px 10px" }}
+                              >
+                                <option value="">Pick a recipe…</option>
+                                {box.recipes.map((r) => (
+                                  <option key={r.id} value={r.id}>
+                                    {r.title}{r.nutrition?.calories ? ` — ${numOf(r.nutrition.calories)} cal a serving` : " — no nutrition"}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                className="rb-focus" type="number" min="0.25" max="20" step="0.25"
+                                value={addServings} onChange={(e) => setAddServings(e.target.value)}
+                                aria-label="How many servings" style={{ ...input, width: 92, padding: "9px 10px" }}
+                              />
+                              <button className="rb-btn rb-focus" style={{ ...btnPrimary, padding: "10px 16px" }} onClick={() => logEntry(meal.id)} disabled={!addPick}>
+                                Add
+                              </button>
+                            </div>
+                          )}
+
+                          {addMode === "search" && (
+                            <>
+                              <form
+                                className="rb-add-row"
+                                onSubmit={(e) => { e.preventDefault(); searchFoods(); }}
+                              >
+                                <input
+                                  className="rb-focus"
+                                  value={foodQuery}
+                                  onChange={(e) => setFoodQuery(e.target.value)}
+                                  placeholder="celery, peanut butter, cheeseburger…"
+                                  aria-label="Search for a food"
+                                  style={{ ...input, flex: "1 1 220px", padding: "9px 10px" }}
+                                />
+                                <button className="rb-btn rb-focus" style={{ ...btnPrimary, padding: "10px 16px" }} disabled={foodBusy || foodQuery.trim().length < 2}>
+                                  {foodBusy ? "Looking…" : "Search"}
+                                </button>
+                              </form>
+
+                              {foodError && <p className="rb-add-note" style={{ color: "var(--card-danger)" }}>{foodError}</p>}
+                              {foodResults !== null && foodResults.length === 0 && !foodError && (
+                                <p className="rb-add-note">Nothing found. Try fewer words, or type the numbers in.</p>
+                              )}
+
+                              {foodResults !== null && foodResults.length > 0 && (
+                                <ul className="rb-food-results">
+                                  {foodResults.map((f) => (
+                                    <li key={f.id}>
+                                      <button
+                                        type="button"
+                                        className="rb-focus rb-food-hit"
+                                        aria-pressed={foodPick?.id === f.id}
+                                        onClick={() => setFoodPick(f)}
+                                      >
+                                        <span className="rb-food-name">{f.name}</span>
+                                        <span className="rb-food-meta">
+                                          {f.brand ? `${f.brand} · ` : ""}{f.per.calories} cal per {f.portion}
+                                        </span>
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+
+                              {foodPick && (
+                                <div className="rb-add-row">
+                                  <span className="rb-add-note" style={{ flex: "1 1 160px", margin: 0 }}>
+                                    How many × {foodPick.portion}?
+                                  </span>
+                                  <input
+                                    className="rb-focus" type="number" min="0.25" max="20" step="0.25"
+                                    value={addServings} onChange={(e) => setAddServings(e.target.value)}
+                                    aria-label="How many portions" style={{ ...input, width: 92, padding: "9px 10px" }}
+                                  />
+                                  <button
+                                    className="rb-btn rb-focus" style={{ ...btnPrimary, padding: "10px 16px" }}
+                                    onClick={() => addFromFood(meal.id, foodPick, Math.max(0.25, Math.min(20, parseFloat(addServings) || 1)))}
+                                  >
+                                    Add
+                                  </button>
+                                </div>
+                              )}
+
+                              <p className="rb-add-note">
+                                Food figures come from USDA FoodData Central, which is public domain.
+                              </p>
+                            </>
+                          )}
+
+                          {addMode === "hand" && (
+                            <>
+                              <div className="rb-add-row">
+                                <input
+                                  className="rb-focus" value={byHand.name}
+                                  onChange={(e) => setByHand({ ...byHand, name: e.target.value })}
+                                  placeholder="What was it?" aria-label="What was it"
+                                  style={{ ...input, flex: "1 1 200px", padding: "9px 10px" }}
+                                />
+                                <input
+                                  className="rb-focus" type="number" min="0" value={byHand.calories}
+                                  onChange={(e) => setByHand({ ...byHand, calories: e.target.value })}
+                                  placeholder="cal" aria-label="Calories"
+                                  style={{ ...input, width: 92, padding: "9px 10px" }}
+                                />
+                              </div>
+                              <div className="rb-add-row">
+                                {[["protein", "protein g"], ["carbs", "carbs g"], ["fat", "fat g"]].map(([k, label]) => (
+                                  <input
+                                    key={k} className="rb-focus" type="number" min="0" value={byHand[k]}
+                                    onChange={(e) => setByHand({ ...byHand, [k]: e.target.value })}
+                                    placeholder={label} aria-label={label}
+                                    style={{ ...input, width: 104, padding: "9px 10px" }}
+                                  />
+                                ))}
+                                <input
+                                  className="rb-focus" type="number" min="0.25" max="20" step="0.25"
+                                  value={addServings} onChange={(e) => setAddServings(e.target.value)}
+                                  aria-label="How many portions" style={{ ...input, width: 92, padding: "9px 10px" }}
+                                />
+                                <button className="rb-btn rb-focus" style={{ ...btnPrimary, padding: "10px 16px" }} onClick={() => addByHand(meal.id)}>
+                                  Add
+                                </button>
+                              </div>
+                              <p className="rb-add-note">
+                                Straight off the packet or the chain's own nutrition page. Only a name and
+                                a calorie figure are needed; the macros are worth having if you have them.
+                              </p>
+                            </>
+                          )}
                         </div>
                       )}
 
@@ -3760,19 +3984,22 @@ export default function RecipeBox() {
                       ) : (
                         <ul className="rb-meal-list">
                           {entries.map((e) => {
-                            const r = box.recipes.find((x) => x.id === e.recipeId);
-                            const cal = r?.nutrition?.calories ? Math.round(numOf(r.nutrition.calories) * e.servings) : null;
+                            const r = e.per ? null : box.recipes.find((x) => x.id === e.recipeId);
+                            const label = e.per ? e.food?.name || "something" : r ? r.title : "a recipe since removed";
+                            const per = e.per?.calories ?? (r?.nutrition?.calories ? numOf(r.nutrition.calories) : null);
+                            const cal = per == null ? null : Math.round(per * e.servings);
+                            const portion = e.per ? e.food?.portion || "portion" : "serving";
                             return (
                               <li key={e.id}>
-                                <span className="rb-meal-name">{r ? r.title : "a recipe since removed"}</span>
+                                <span className="rb-meal-name">{label}</span>
                                 <span className="rb-meal-serves">
-                                  {e.servings === 1 ? "1 serving" : `${e.servings} servings`}
+                                  {e.servings === 1 ? `1 × ${portion}` : `${e.servings} × ${portion}`}
                                   {cal == null ? " · not counted" : ` · ${cal} cal`}
                                 </span>
                                 <button
                                   className="rb-focus rb-entry-x"
                                   onClick={() => dropEntry(meal.id, e.id)}
-                                  aria-label={`Take ${r ? r.title : "this"} off ${meal.label.toLowerCase()}`}
+                                  aria-label={`Take ${label} off ${meal.label.toLowerCase()}`}
                                 >
                                   Remove
                                 </button>

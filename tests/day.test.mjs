@@ -92,6 +92,23 @@ is("a log written before any of this is read as one", asLog({ "2026-01-01": empt
 is("...and gains somewhere to record removals", asLog({ "2026-01-01": emptyDay() }).removed, {});
 is("nothing at all is an empty log", asLog(null), { days: {}, removed: {} });
 
+const food = (id, calories, servings = 1) => ({
+  id, servings, food: { name: "Celery, raw", portion: "100 g" },
+  per: { calories, protein: 1, carbs: 3, fat: 0 },
+});
+const mixed = dayTotals({
+  ...emptyDay(),
+  breakfast: [{ id: "r1", recipeId: "oats", servings: 1 }],
+  snacks: [food("f1", 14, 2), food("f2", 190)],
+}, recipes);
+is("a food carries its own numbers", mixed.calories, 320 + 14 * 2 + 190);
+is("...and its macros, multiplied by the portion", mixed.protein, 12 + 1 * 2 + 1);
+is("nothing about it is uncounted", mixed.unknown, 0);
+is("a food with no calories is still uncounted",
+  dayTotals({ ...emptyDay(), snacks: [{ id: "f3", servings: 1, per: { calories: 0 }, food: { name: "x" } }] }, recipes).unknown, 1);
+is("a food needs no recipe to exist",
+  dayTotals({ ...emptyDay(), lunch: [food("f4", 250)] }, []).calories, 250);
+
 const entry = (id, recipeId) => ({ id, recipeId, servings: 1 });
 const oneDay = (meal, entries, removed = {}) => ({ days: { "2026-09-12": { ...emptyDay(), [meal]: entries } }, removed });
 
