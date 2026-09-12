@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Show what it actually looked like.** A note or an "I made this" can now carry a photo. It appears with what you wrote, on the recipe and in the recent posts at the foot of the box, and tapping one opens it full size. Pictures are shrunk on your own device before they are sent, so posting one from a phone is quick and costs the site almost nothing.
 - **Plan the week's cooking, then shop for it in one go.** A new meal plan lays the week out Monday to Sunday, and you can drop any recipe from the box onto a day at the servings you mean to cook. When the week looks right, one button puts everything it needs on your shopping list — a recipe planned twice is bought once, at the total. The plan is yours alone and follows you between your own devices.
 - **Look back over the past month.** The nutrition tracker now has arrows and a calendar beside the date, so you can step back through the last 31 days and see what you ate and what it came to on any of them. You can add to an earlier day too, for the dinner you meant to log and didn't. Only your own days are there; nobody else can see them.
 - **Food search stops dropping out.** Looking a food up sometimes failed with a gateway error, and trying again would usually work. The public food database it asks is occasionally unreliable, so a search that fails that way now quietly tries once more before giving up. Searches also come back with the closest handful of matches rather than a long list, and anything looked up recently answers straight away.

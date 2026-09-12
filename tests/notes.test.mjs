@@ -152,5 +152,83 @@ const deep = await call("GET", "?recent=1", devon);
 is("past a thousand entries, the newest is still found", deep.data.entries[0]?.text, "the one that matters");
 is("...and named correctly", deep.data.entries[0]?.name, "Ashton Hackwith");
 
+/* ── Photographs on a made-it ──────────────────────────────────────────
+   Two things carry the weight here. The full-size picture must stay out of
+   every listing, because the feed reads a dozen entries at once and a dozen
+   photographs is the difference between a page and a download. And what comes
+   in must be checked, because it is stored and later handed back for a browser
+   to render — a string that says "image" and is not one is the whole attack. */
+
+/* Valid base64, so the endpoint can really decode it on the way back out. */
+const JPEG = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+const BIG = "data:image/jpeg;base64," + "A".repeat(120000);
+
+const rawCall = async (query, token) =>
+  onRequest({
+    env,
+    request: new Request(`https://thehackwithtable.com/api/notes${query}`, {
+      headers: token ? { "Cf-Access-Jwt-Assertion": token } : {},
+    }),
+  });
+
+console.log("\n— a made-it with a picture —");
+const withPic = await call("POST", "", devon, { recipe: "stew", kind: "made", shot: JPEG, photo: JPEG });
+is("it is accepted", withPic.status, 201);
+is("the entry says it has one", withPic.data?.entry?.hasPhoto, true);
+is("...and carries the small version back", withPic.data?.entry?.shot, JPEG);
+
+const picId = withPic.data.entry.id;
+is("the full-size one is a key of its own", kv.has(picId.replace("note:", "shot:")), true);
+is("...and is not inside the entry", JSON.parse(kv.get(picId)).photo, undefined);
+
+console.log("\n— what a listing carries —");
+const withShots = await call("GET", "?recipe=stew", devon);
+const picEntry = withShots.data.entries.find((e) => e.id === picId);
+is("the small version comes with the listing", picEntry.shot, JPEG);
+is("...and so does the fact there is a bigger one", picEntry.hasPhoto, true);
+is("the full-size picture does not", picEntry.photo, undefined);
+is("nor does it reach the feed", (await call("GET", "?recent=6", devon)).data.entries.every((e) => e.photo === undefined), true);
+is("but the feed does get a thumbnail", (await call("GET", "?recent=6", devon)).data.entries.find((e) => e.id === picId)?.shot, JPEG);
+
+console.log("\n— fetching one full size —");
+const shown = await rawCall(`?photo=${encodeURIComponent(picId)}`, devon);
+is("it answers", shown.status, 200);
+is("...as a picture rather than as JSON", shown.headers.get("content-type"), "image/jpeg");
+is("...that a browser may keep, and keep to itself",
+  /private/.test(shown.headers.get("cache-control") || "") && /immutable/.test(shown.headers.get("cache-control") || ""), true);
+is("...and the bytes are the picture", new Uint8Array(await shown.arrayBuffer())[0], 0xff);
+
+is("a stranger cannot fetch one", (await rawCall(`?photo=${encodeURIComponent(picId)}`, null)).status, 403);
+is("an id that is not a note is refused", (await call("GET", "?photo=shot:stew:whatever", devon)).status, 400);
+is("a picture that was never there", (await call("GET", "?photo=note:stew:nothing", devon)).status, 404);
+
+console.log("\n— what will not be stored —");
+const keysBefore = kv.size;
+const refuse = async (label, body) => {
+  const r = await call("POST", "", devon, { recipe: "stew", kind: "made", ...body });
+  is(label, r.status, 400);
+};
+await refuse("a page dressed as a picture", { shot: "data:text/html;base64,PHNjcmlwdD4=", photo: JPEG });
+await refuse("an SVG, which is a document that can carry script", { shot: "data:image/svg+xml;base64,PHN2Zz4=", photo: JPEG });
+await refuse("a bare script", { shot: "javascript:alert(1)", photo: JPEG });
+await refuse("a thumbnail too big to ride inside every listing", { shot: BIG, photo: JPEG });
+await refuse("a thumbnail with no full-size picture behind it", { shot: JPEG });
+await refuse("a full-size picture with no thumbnail", { photo: JPEG });
+is("and none of that was written anywhere", kv.size, keysBefore);
+
+console.log("\n— a note that is only a photograph —");
+const justPic = await call("POST", "", devon, { recipe: "stew", kind: "note", text: "", shot: JPEG, photo: JPEG });
+is("a picture is something to say", justPic.status, 201);
+is("a note with neither words nor picture is still a mistake",
+  (await call("POST", "", devon, { recipe: "stew", kind: "note", text: "" })).status, 400);
+
+console.log("\n— taking one down —");
+const shotKey = picId.replace("note:", "shot:");
+is("the picture is there to begin with", kv.has(shotKey), true);
+await call("DELETE", `?id=${encodeURIComponent(picId)}`, devon);
+is("the entry goes", kv.has(picId), false);
+is("...and the picture goes with it, rather than sitting unreachable in the account",
+  kv.has(shotKey), false);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

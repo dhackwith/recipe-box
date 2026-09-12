@@ -210,6 +210,21 @@ async function shrink(source, maxDim, quality) {
   return canvas.toDataURL("image/jpeg", quality);
 }
 
+/* A made-it picture is cut smaller than a recipe's, and deliberately so. This
+   thumbnail travels inside every listing — a dozen of them arrive together in
+   the feed — where a recipe's preview is fetched one at a time. 360px still
+   covers the gallery tile on a 2x screen. */
+const SHOT_MAX_DIM = 360;
+const SHOT_Q = 0.62;
+
+async function prepShot(file) {
+  const bmp = await loadBitmap(file);
+  const full = await shrink(bmp, FULL_MAX, 0.78);
+  const shot = await shrink(bmp, SHOT_MAX_DIM, SHOT_Q);
+  bmp.close?.();
+  return { full, shot };
+}
+
 async function prepPhoto(file) {
   const bmp = await loadBitmap(file);
   const full = await shrink(bmp, FULL_MAX, 0.78);
@@ -2243,6 +2258,9 @@ export default function RecipeBox() {
   const [noteText, setNoteText] = useState("");
   const [notesBusy, setNotesBusy] = useState(false);
   const [notesError, setNotesError] = useState("");
+  const [notePhoto, setNotePhoto] = useState(null);   // { full, shot } waiting to be posted
+  const [photoBusyNote, setPhotoBusyNote] = useState(false);
+  const [lightbox, setLightbox] = useState(null);     // the entry being looked at full size
 
   useEffect(() => {
     if (!openId) { setNotes(null); setNotesError(""); return; }
@@ -2250,6 +2268,7 @@ export default function RecipeBox() {
     setNotes(null);
     setNoteText("");
     setNotesError("");
+    setNotePhoto(null);
     (async () => {
       try {
         const data = await notesCall("GET", `?recipe=${encodeURIComponent(openId)}`);
@@ -2267,15 +2286,38 @@ export default function RecipeBox() {
     return () => { cancelled = true; };
   }, [openId]);
 
+  /* Shrinking happens here, in the browser, before anything is sent. A phone
+     photograph is several megabytes of picture nobody needs at that size, and
+     sending it whole would spend the account's storage and the family's
+     patience on detail no screen here will show. */
+  const chooseNotePhoto = async (file) => {
+    if (!file) return;
+    setPhotoBusyNote(true);
+    setNotesError("");
+    try {
+      setNotePhoto(await prepShot(file));
+    } catch {
+      setNotesError("That file didn't look like a photo");
+    } finally {
+      setPhotoBusyNote(false);
+    }
+  };
+
   const addEntry = async (kind) => {
     const text = kind === "note" ? noteText.trim() : "";
-    if (kind === "note" && !text) return;
+    if (kind === "note" && !text && !notePhoto) return;
     setNotesBusy(true);
     setNotesError("");
     try {
-      const { entry } = await notesCall("POST", "", { recipe: openId, kind, text });
+      const { entry } = await notesCall("POST", "", {
+        recipe: openId,
+        kind,
+        text,
+        ...(notePhoto ? { shot: notePhoto.shot, photo: notePhoto.full } : {}),
+      });
       setNotes((list) => [...(list || []), entry]);
       if (kind === "note") setNoteText("");
+      setNotePhoto(null);
       flash(kind === "made" ? "Added to the log" : "Note added");
     } catch (err) {
       setNotesError(String(err.message || err));
@@ -2542,6 +2584,13 @@ export default function RecipeBox() {
      a month. Kept apart from `today` deliberately: `today` is what the calendar
      says and must stay that way for the rollover below to mean anything. */
   const [viewDay, setViewDay] = useState(today);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (ev) => { if (ev.key === "Escape") setLightbox(null); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [lightbox]);
 
   /* A tab left open overnight should be showing the new day by the time
      somebody comes back to it, not still totalling yesterday's dinner. */
@@ -3362,11 +3411,55 @@ export default function RecipeBox() {
     .rb-lately-name { font-weight: 600; color: rgb(var(--on-page)); }
     .rb-lately-what { color: var(--page-accent); font-weight: 600; }
     .rb-lately-text { display: block; margin-top: 5px; font: 400 14.5px/1.65 ${PROSE}; color: rgba(var(--on-page), calc(.88 * var(--ink-k))); }
+    /* The feed's own copy of a photograph. Tapping it opens the recipe rather
+       than the picture: the row is one target, and somebody who has just seen
+       what it looked like wants the thing that made it. */
+    .rb-lately-shot { display: block; margin-top: 8px; line-height: 0; }
+    .rb-lately-shot img {
+      display: block; width: 100%; max-width: 200px; height: auto; border-radius: 2px;
+      border: 1px solid rgba(var(--on-page), calc(.16 * var(--ink-k)));
+    }
+    .rb-lately-lead .rb-lately-shot img { max-width: 320px; }
     .rb-lately-lead .rb-lately-text { font-size: 17px; line-height: 1.7; }
     .rb-lately-lead .rb-lately-open { padding-top: 0; padding-bottom: 16px; }
     .rb-lately-open:hover .rb-lately-what { text-decoration: underline; text-underline-offset: 2px; }    /* The day's tally: four figures across the top, each with how far through
        its target the day has got. Over the target turns the bar, rather than
        letting it run past the end where it would say nothing. */
+    /* A photograph on a made-it. Shown at a size the page can spare, opening to
+       whatever the picture really is. */
+    .rb-shot {
+      display: block; margin: 9px 0 0; padding: 0; border: 1px solid var(--card-edge);
+      border-radius: 2px; background: var(--card-bg); cursor: zoom-in; overflow: hidden; line-height: 0;
+      max-width: 220px;
+    }
+    .rb-shot:disabled { cursor: default; }
+    .rb-shot img { display: block; width: 100%; height: auto; }
+    .rb-shot:hover:not(:disabled) { border-color: var(--card-accent); }
+
+    .rb-shotpick { display: flex; gap: 12px; align-items: flex-start; margin-top: 12px; }
+    .rb-shotpick img { width: 92px; height: 92px; object-fit: cover; border: 1px solid var(--card-edge); border-radius: 2px; }
+    .rb-shotpick-note { margin: 0 0 8px; font: 400 12.5px/1.5 ${UI}; color: var(--card-muted); }
+    /* Sized to its own words. A label that stretches turns the gap beside it
+       into a file picker, which is the bug the recipe photo button already had. */
+    .rb-shotbtn { display: inline-flex; align-items: center; width: auto; flex: none; }
+
+    .rb-lightbox {
+      position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 12px; padding: 24px;
+      background: rgba(10, 10, 12, .92); cursor: zoom-out;
+    }
+    .rb-lightbox img {
+      max-width: min(100%, 1200px); max-height: calc(100vh - 120px);
+      object-fit: contain; cursor: default; border-radius: 2px;
+    }
+    .rb-lightbox-who { margin: 0; font: 400 13px/1.5 ${UI}; color: rgba(255, 255, 255, .8); }
+    .rb-lightbox-x {
+      position: absolute; top: 14px; right: 16px; width: 40px; height: 40px;
+      border: 1px solid rgba(255, 255, 255, .3); border-radius: 2px; background: transparent;
+      color: #fff; font: 400 22px/1 ${UI}; cursor: pointer;
+    }
+    .rb-lightbox-x:hover { border-color: #fff; }
+
     /* The week. Seven columns where there is room, and a single column of days
        on a phone — a 7-wide grid on a 375px screen gives each day 40 pixels,
        which is not a column, it is a stripe. */
@@ -4088,6 +4181,7 @@ export default function RecipeBox() {
                             <span>{whenLabel(e.at)}</span>
                           </span>
                           {e.kind === "note" && e.text && <span className="rb-lately-text">{e.text}</span>}
+                          {e.shot && <span className="rb-lately-shot"><img src={e.shot} alt="" loading="lazy" /></span>}
                         </button>
                       </li>
                     );
@@ -5192,6 +5286,17 @@ export default function RecipeBox() {
                           )}
                         </p>
                         {e.kind === "note" && e.text && <p className="rb-entry-text">{e.text}</p>}
+                        {e.shot && (
+                          <button
+                            type="button"
+                            className="rb-shot rb-focus"
+                            onClick={() => e.hasPhoto && setLightbox(e)}
+                            aria-label={`See ${e.name}'s photo full size`}
+                            disabled={!e.hasPhoto}
+                          >
+                            <img src={e.shot} alt={`Cooked by ${e.name}`} loading="lazy" />
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -5212,13 +5317,39 @@ export default function RecipeBox() {
                     aria-label="Add a note"
                     style={{ ...input, resize: "vertical", font: `400 14.5px/1.6 ${UI}` }}
                   />
+                  {notePhoto && (
+                    <div className="rb-shotpick">
+                      <img src={notePhoto.shot} alt="The photo you picked" />
+                      <div>
+                        <p className="rb-shotpick-note">This goes on whichever you post next.</p>
+                        <button type="button" className="rb-btn rb-focus" style={{ ...btnQuiet, padding: "6px 12px", fontSize: 12.5 }} onClick={() => setNotePhoto(null)}>
+                          Remove photo
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
-                    <button className="rb-btn rb-focus" style={btnPrimary} onClick={() => addEntry("note")} disabled={notesBusy || !noteText.trim()}>
+                    <button className="rb-btn rb-focus" style={btnPrimary} onClick={() => addEntry("note")} disabled={notesBusy || (!noteText.trim() && !notePhoto)}>
                       Add note
                     </button>
                     <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => addEntry("made")} disabled={notesBusy}>
                       I made this
                     </button>
+                    {/* A label wrapping a hidden input, sized to the words
+                        inside it — the same shape as the recipe photo button,
+                        which had to be fixed once for exactly this reason: a
+                        stretched label makes the empty space beside it open a
+                        file picker. */}
+                    <label className="rb-btn rb-focus rb-shotbtn" style={{ ...btnQuiet, cursor: "pointer" }}>
+                      {photoBusyNote ? "Working…" : notePhoto ? "Change photo" : "Add a photo"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        hidden
+                        onChange={(ev) => { chooseNotePhoto(ev.target.files?.[0]); ev.target.value = ""; }}
+                      />
+                    </label>
                     {/* Not a choice any more: the name comes from the roster in
                         shared/access.js, against the address Access verified. */}
                     <span style={{ font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", marginLeft: "auto" }}>
@@ -5462,6 +5593,34 @@ export default function RecipeBox() {
           </div>
         )}
       </main>
+
+      {/* ═══════ A PHOTO, FULL SIZE ═══════ */}
+      {lightbox && (
+        <div
+          className="rb-lightbox rb-noprint"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Photo from ${lightbox.name}`}
+          onClick={() => setLightbox(null)}
+        >
+          {/* The full-size picture is a plain address rather than something
+              fetched and held in memory, so the browser does the loading, the
+              caching and the decoding, and the small version already on screen
+              stands in until it arrives. */}
+          <img
+            src={`${NOTES_API}?photo=${encodeURIComponent(lightbox.id)}`}
+            alt={`Cooked by ${lightbox.name}`}
+            onClick={(ev) => ev.stopPropagation()}
+          />
+          <p className="rb-lightbox-who">
+            {lightbox.name}
+            {lightbox.at ? ` · ${whenLabel(lightbox.at)}` : ""}
+          </p>
+          <button type="button" className="rb-lightbox-x rb-focus" onClick={() => setLightbox(null)} aria-label="Close the photo">
+            ×
+          </button>
+        </div>
+      )}
 
       {/* ═══════ TIMER TRAY ═══════ */}
       {ringing && <div className="rb-flash rb-noprint" aria-hidden />}
