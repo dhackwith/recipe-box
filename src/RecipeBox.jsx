@@ -206,17 +206,6 @@ async function shrink(source, maxDim, quality) {
   return canvas.toDataURL("image/jpeg", quality);
 }
 
-/* Load a data URL back into something canvas will draw. Only ever called with
-   a data: URL from our own storage, so the canvas is never tainted and
-   toDataURL keeps working — a remote photo would poison it. */
-const imageFromSrc = (src) =>
-  new Promise((res, rej) => {
-    const img = new Image();
-    img.onload = () => res(img);
-    img.onerror = () => rej(new Error("could not read that photo"));
-    img.src = src;
-  });
-
 async function prepPhoto(file) {
   const bmp = await loadBitmap(file);
   const full = await shrink(bmp, FULL_MAX, 0.78);
@@ -1710,52 +1699,6 @@ export default function RecipeBox() {
     flash((await saveBox(next)) ? "Saved" : "Couldn't save — that change is only on this screen");
   };
 
-  /* Photos uploaded before the previews were enlarged still carry the old
-     300px cut, and no amount of new code re-cuts them on its own. The full-size
-     copy is already in storage, so the preview can just be taken again — no
-     re-uploading, nothing destroyed, and a failure part way through simply
-     leaves the rest as they were. */
-  const [sharpening, setSharpening] = useState(false);
-  const sharpenable = box.recipes.filter((r) => r.thumb && !r.imageUrl).length;
-
-  const sharpenPreviews = async () => {
-    setSharpening(true);
-    try {
-      const recipes = [...box.recipes];
-      let done = 0;
-      let missing = 0;
-      for (let i = 0; i < recipes.length; i++) {
-        const r = recipes[i];
-        /* a URL photo is already shown full size in the tile */
-        if (!r.thumb || r.imageUrl) continue;
-        let full = null;
-        try { full = (await window.storage?.get(imageKey(r.id), true))?.value || null; } catch { full = null; }
-        if (!full) { missing++; continue; }
-        try {
-          recipes[i] = { ...r, thumb: await shrink(await imageFromSrc(full), THUMB_MAX, THUMB_Q) };
-          done++;
-        } catch { missing++; }
-      }
-      if (!done) {
-        flash(missing
-          ? `No full-size copy stored for ${missing} ${missing === 1 ? "photo" : "photos"}, so there is nothing sharper to cut from`
-          : "Nothing needed sharpening", 6000);
-        return;
-      }
-      const next = { ...box, recipes };
-      setBox(next);
-      const saved = await saveBox(next);
-      flash(
-        saved
-          ? `Sharpened ${done} ${done === 1 ? "preview" : "previews"}${missing ? `, ${missing} left alone` : ""}`
-          : "Sharpened them on this screen, but the save didn't go through",
-        6000,
-      );
-    } finally {
-      setSharpening(false);
-    }
-  };
-
   const openRecipe = box.recipes.find((r) => r.id === openId);
   const baseServings = servingsCount(openRecipe?.servings);
   /* Nutrition is stored for one serving. The panel describes the batch actually
@@ -2626,14 +2569,6 @@ export default function RecipeBox() {
                     <span aria-hidden>backup</span>
                   </button>
                 </div>
-                {sharpenable > 0 && (
-                  <div className="rb-setting">
-                    <span>{sharpening ? "Sharpening…" : "Sharpen photo previews"}</span>
-                    <button className="rb-focus rb-setctl" onClick={() => { sharpenPreviews(); close(); }} disabled={sharpening} aria-label="Sharpen photo previews">
-                      <span aria-hidden>{sharpenable} {sharpenable === 1 ? "photo" : "photos"}</span>
-                    </button>
-                  </div>
-                )}
                 <div className="rb-setting">
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                     What&apos;s new
