@@ -1549,6 +1549,9 @@ export default function RecipeBox() {
   const [linkBusy, setLinkBusy] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [hero, setHero] = useState("");        // full-size photo for the open recipe
+  /* "" wide, "mid" squarish, "tall" portrait. Cleared with every recipe, or the
+     shape of the last photo is inherited by the next one. */
+  const [heroShape, setHeroShape] = useState("");
   const photoRef = useRef(null);
   /* Snapshot of the list the recipe was opened from, so Back returns to the
      same search, scope, tag and box — not to a reset list. */
@@ -1687,6 +1690,7 @@ export default function RecipeBox() {
   useEffect(() => {
     let cancelled = false;
     const r = box.recipes.find((x) => x.id === openId);
+    setHeroShape("");
     if (!openId || !r) { setHero(""); return; }
     if (r.imageUrl) { setHero(r.imageUrl); return; }
     setHero(r.thumb || "");
@@ -2382,8 +2386,22 @@ export default function RecipeBox() {
        the order every recipe site puts them in. The actions sit between rules
        so they read as a bar rather than as loose buttons. */
     .rb-actbar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 15px 0; border-top: 1px solid var(--card-edge); border-bottom: 1px solid var(--card-edge); margin-bottom: 26px; }
-    .rb-hero { margin: 0 0 24px; border-radius: 2px; overflow: hidden; border: 1px solid var(--card-edge); }
-    .rb-hero img { display: block; width: 100%; height: auto; max-height: 520px; object-fit: cover; }
+    /* Nothing is cropped here. A wide photo fills the column; a tall one is
+       capped by height and centred, which leaves gutters — so a tall photo gets
+       a narrower frame of its own and fills that instead, the way a magazine
+       sets a portrait plate. Which one it is can only be known once the file
+       has loaded, so the class arrives with the image. */
+    /* Nothing is cropped here. A photo gets a frame shaped like itself, so it
+       fills that frame instead of sitting in a band of gutter: wide ones take
+       the whole column, squarish ones a medium plate, tall ones a narrow one,
+       the way a magazine sets a portrait. The proportions below are measured
+       against a 1000px column so 16:9, 3:2 and 4:3 all reach both edges.
+       Only the loaded file knows its shape, so the class arrives with it. */
+    .rb-hero { margin: 0 0 24px; border-radius: 2px; overflow: hidden; border: 1px solid var(--card-edge); background: var(--card-lift); display: flex; justify-content: center; }
+    .rb-hero img { display: block; width: auto; height: auto; max-width: 100%; max-height: 760px; }
+    .rb-hero-mid { max-width: 620px; margin-left: auto; margin-right: auto; }
+    .rb-hero-tall { max-width: 400px; margin-left: auto; margin-right: auto; }
+    .rb-hero-tall img { max-height: 700px; }
     .rb-stats { display: flex; flex-wrap: wrap; margin: 0 0 30px; padding: 0; border: 1px solid var(--card-edge); border-radius: 2px; }
     .rb-stats > div { flex: 1 1 116px; padding: 11px 15px; border-right: 1px solid var(--card-edge); }
     .rb-stats > div:last-child { border-right: 0; }
@@ -3172,8 +3190,15 @@ export default function RecipeBox() {
               </div>
 
               {hero && (
-                <div className="rb-hero">
-                  <img src={hero} alt={openRecipe.title} />
+                <div className={`rb-hero${heroShape ? ` rb-hero-${heroShape}` : ""}`}>
+                  <img
+                    src={hero}
+                    alt={openRecipe.title}
+                    onLoad={(e) => {
+                      const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+                      setHeroShape(!w || !h ? "" : w / h >= 1.3 ? "" : w / h >= 0.85 ? "mid" : "tall");
+                    }}
+                  />
                 </div>
               )}
 
