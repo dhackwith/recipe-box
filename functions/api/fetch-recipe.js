@@ -5,12 +5,18 @@
  * page is fetched.
  *
  * POST { url }                 -> { recipe, url }   the Recipe node, and where it was found
+ *
+ * A page can describe its recipe two ways: a block of ld+json, or microdata
+ * hung on the visible markup. Both are read, and what comes back is the same
+ * shape either way, so nothing downstream has to care which it was.
  * POST { url, kind: "image" }  -> the image bytes, for the recipe's photo
  *
  * It is deliberately not a general proxy: pages come back only as the parsed
  * recipe, never as HTML, and the image mode refuses anything that is not an
  * image. Cloudflare Access sits in front, so only the family can reach it.
  */
+
+import { findMicrodataRecipe } from "../../shared/microdata.js";
 
 const MAX_PAGE = 5 * 1024 * 1024;
 const MAX_IMAGE = 10 * 1024 * 1024;
@@ -125,7 +131,11 @@ async function page(url) {
   try { html = new TextDecoder().decode(await readCapped(res, MAX_PAGE)); }
   catch { return json({ error: "That page is too large to read" }, 502); }
 
-  const recipe = findRecipe(ldBlocks(html));
+  /* JSON-LD first, because when a page has it, it is the tidier and more
+     complete of the two. Microdata is the fallback, not a second opinion: it is
+     read only when there is no ld+json at all, so the cost lands on the pages
+     that would otherwise have failed outright. */
+  const recipe = findRecipe(ldBlocks(html)) || findMicrodataRecipe(html);
   if (!recipe) {
     return json({ error: "That page doesn't publish a recipe this can read — try copying the recipe text into the paste box instead" }, 422);
   }
