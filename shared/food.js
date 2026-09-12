@@ -69,20 +69,52 @@ function fromNutrients(list) {
   };
 }
 
-/* What one portion is called. A branded record states its own serving; anything
-   else is per 100 g and says so, because "1 serving of celery" would be a
-   number this file invented. */
-function portionOf(food, fromBranded) {
-  if (fromBranded) {
-    const size = num(food.servingSize);
-    const unit = String(food.servingSizeUnit || "").toLowerCase();
-    const household = String(food.householdServingFullText || "").trim();
-    if (household && size) return `${household} (${round(size)} ${unit})`;
-    if (household) return household;
-    if (size) return `${round(size)} ${unit}`;
-    return "1 serving";
-  }
-  return "100 g";
+/* A branded record in a SEARCH reply does not carry labelNutrients — that field
+   only appears when a single food is fetched by id. What it does carry is its
+   serving size in grams, alongside nutrients measured per 100 g. So the serving
+   is arithmetic rather than invention: scale the hundred-gram figures by the
+   stated size.
+
+   This matters most exactly where it is easiest to miss. Peanut butter reads
+   600 calories per 100 g and 180 per the two tablespoons anybody actually eats,
+   and a tracker offering only the first is technically right and practically
+   useless.
+
+   Only grams and millilitres, because those are the basis the nutrients are
+   measured against. A serving stated in ounces or pieces is left as per 100 g
+   rather than converted on an assumption. */
+const BY_WEIGHT = new Set(["g", "gram", "grams", "grm", "ml", "mlt", "millilitre", "milliliter"]);
+
+function perServing(food, per100) {
+  const size = num(food.servingSize);
+  const unit = String(food.servingSizeUnit || "").toLowerCase().trim();
+  if (!(size > 0) || !BY_WEIGHT.has(unit)) return null;
+  const k = size / 100;
+  return {
+    calories: round(per100.calories * k),
+    protein: round(per100.protein * k),
+    carbs: round(per100.carbs * k),
+    fat: round(per100.fat * k),
+  };
+}
+
+/* "0.667 CUP | ABOUT" is how some labels arrive; the part after the bar is
+   commentary. */
+const household = (food) => {
+  const said = String(food.householdServingFullText || "").split("|")[0].replace(/\s+/g, " ").trim();
+  /* Some labels put the weight in the household field as well — "15 GRM" next
+     to a 15 g serving reads as a stutter. */
+  return /^[\d.]+\s*(g|grm|gram|grams|ml|mlt)$/i.test(said) ? "" : said;
+};
+
+function portionOf(food, scaled) {
+  if (!scaled) return "100 g";
+  const size = round(num(food.servingSize));
+  const unit = String(food.servingSizeUnit || "").toLowerCase().trim();
+  const said = household(food);
+  if (said && size) return `${said} (${size} ${unit})`;
+  if (said) return said;
+  return `${size} ${unit}`;
 }
 
 const tidy = (s) => String(s || "").replace(/\s+/g, " ").trim();
@@ -93,18 +125,23 @@ const tidy = (s) => String(s || "").replace(/\s+/g, " ").trim();
 export function readFood(food) {
   if (!food || typeof food !== "object") return null;
   const branded = String(food.dataType || "").toLowerCase() === "branded";
-  const per = (branded && fromLabel(food.labelNutrients)) || fromNutrients(food.foodNutrients);
-  if (!per) return null;
-
   const name = tidy(food.description || food.lowercaseDescription);
   if (!name) return null;
+
+  /* A label if one came with it, otherwise the per-100g measurement — scaled to
+     the stated serving when the record says what a serving weighs. */
+  const label = branded ? fromLabel(food.labelNutrients) : null;
+  const per100 = fromNutrients(food.foodNutrients);
+  const scaled = !label && branded && per100 ? perServing(food, per100) : null;
+  const per = label || scaled || per100;
+  if (!per) return null;
 
   return {
     id: String(food.fdcId ?? ""),
     name,
     brand: tidy(food.brandName || food.brandOwner) || null,
     kind: String(food.dataType || "").trim() || null,
-    portion: portionOf(food, branded && !!fromLabel(food.labelNutrients)),
+    portion: portionOf(food, !!label || !!scaled),
     per,
   };
 }

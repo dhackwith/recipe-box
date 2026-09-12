@@ -71,18 +71,34 @@ export async function onRequest({ request, env }) {
     }, 502);
   }
 
-  if (res.status === 429 || res.status === 403) {
+  /* The status alone is not enough to tell what happened. Watched live, the
+     data.gov limiter answers 429 most of the time and 400 some of the time for
+     the very same condition, so the body's error code is the thing to trust —
+     and a rejected key deserves to say so rather than arriving as a generic
+     failure while somebody is trying to work out whether they set it right. */
+  const body = await res.text();
+  let payload = null;
+  try { payload = JSON.parse(body); } catch { payload = null; }
+  const code = payload?.error?.code || "";
+
+  if (code === "API_KEY_INVALID" || code === "API_KEY_MISSING" || res.status === 403) {
+    return json({
+      error: env.FDC_API_KEY
+        ? "FoodData Central rejected the key. Check FDC_API_KEY in the Pages project — and that it is set for the environment this deployment is in, and that the project has been redeployed since."
+        : "No food database key is set. Add FDC_API_KEY in the Pages project.",
+    }, 502);
+  }
+
+  if (code === "OVER_RATE_LIMIT" || res.status === 429) {
     return json({
       error: env.FDC_API_KEY
         ? "The food database has had too many requests this hour — try again shortly"
         : "This is using the shared demo key, which only allows a few searches an hour. Set FDC_API_KEY in the Pages project for the full allowance.",
     }, 429);
   }
-  if (!res.ok) return json({ error: `The food database answered with an error (${res.status})` }, 502);
 
-  let payload;
-  try { payload = await res.json(); }
-  catch { return json({ error: "The food database sent something unreadable" }, 502); }
+  if (!res.ok) return json({ error: `The food database answered with an error (${res.status})` }, 502);
+  if (!payload) return json({ error: "The food database sent something unreadable" }, 502);
 
   return json({ results: readSearch(payload, MAX_RESULTS), demo: !env.FDC_API_KEY }, 200, CACHE_SECONDS);
 }

@@ -30,7 +30,9 @@ const celery = {
   ],
 };
 
-/* Branded: the label, already per serving. */
+/* Branded, as a SEARCH reply really sends it: no labelNutrients, nutrients per
+   100 g, and a stated serving size. The label only arrives when a single food
+   is fetched by id — checked against the live API on 2026-09-12. */
 const peanutButter = {
   fdcId: 2262074,
   dataType: "Branded",
@@ -38,14 +40,25 @@ const peanutButter = {
   brandName: "SOME BRAND",
   servingSize: 32,
   servingSizeUnit: "g",
-  householdServingFullText: "2 tbsp",
+  householdServingFullText: "2 Tbsp",
+  foodNutrients: [
+    { nutrientNumber: "208", value: 594 },
+    { nutrientNumber: "203", value: 22 },
+    { nutrientNumber: "205", value: 25 },
+    { nutrientNumber: "204", value: 50 },
+  ],
+};
+
+/* And the older shape, in case a detail fetch is ever used. */
+const peanutButterWithLabel = {
+  ...peanutButter,
+  fdcId: 2262075,
   labelNutrients: {
     calories: { value: 190 },
     protein: { value: 7 },
     carbohydrates: { value: 8 },
     fat: { value: 16 },
   },
-  foodNutrients: [{ nutrientNumber: "208", value: 594 }],   // per 100 g, and not what we want
 };
 
 /* Survey: how people actually eat it, including restaurant dishes. */
@@ -70,12 +83,21 @@ is("the macros come with it", [c.per.protein, c.per.carbs, c.per.fat], [1, 3, 0]
 is("no brand on a whole food", c.brand, null);
 is("the dataset is carried through", c.kind, "SR Legacy");
 
-console.log("\n— a packet, where the label is per serving —");
+console.log("\n— a packet, where a serving is not a hundred grams —");
 const p = readFood(peanutButter);
-is("the label wins over the per-100g row", p.per.calories, 190);
-is("...for every macro", [p.per.protein, p.per.carbs, p.per.fat], [7, 8, 16]);
-is("the portion is the one on the packet", p.portion, "2 tbsp (32 g)");
+is("the hundred-gram figure is scaled to the stated serving", p.per.calories, Math.round(594 * 0.32));
+is("...and so is every macro", [p.per.protein, p.per.carbs, p.per.fat], [7, 8, 16]);
+is("the portion says what that serving is", p.portion, "2 Tbsp (32 g)");
 is("the brand is kept", p.brand, "SOME BRAND");
+is("a real label still wins when one is there", readFood(peanutButterWithLabel).per.calories, 190);
+is("a serving in units the nutrients are not measured in is left alone",
+  readFood({ ...peanutButter, servingSizeUnit: "oz", servingSize: 2 }).portion, "100 g");
+is("...with the hundred-gram figures intact",
+  readFood({ ...peanutButter, servingSizeUnit: "oz", servingSize: 2 }).per.calories, 594);
+is("no serving size at all stays per 100 g",
+  readFood({ ...peanutButter, servingSize: undefined }).portion, "100 g");
+is("commentary after a bar is dropped from the portion",
+  readFood({ ...peanutButter, householdServingFullText: "0.667 CUP | ABOUT" }).portion, "0.667 CUP (32 g)");
 
 console.log("\n— a restaurant-shaped dish —");
 const b = readFood(burger);
