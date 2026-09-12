@@ -107,12 +107,15 @@ upstream = reply({ foods: [] });
 is("one letter asks nobody anything", (await ask("c")).data?.results, []);
 
 console.log("\n— every way the database can let us down —");
+/* Factories, not responses. A Response body can only be read once, and a 5xx is
+   now attempted twice — handing the same object to both tries fails as "body
+   already read" rather than as the thing being tested. */
 const cases = [
-  ["a rejected key", reply({ error: { code: "API_KEY_INVALID" } }, 403), 502, /rejected the key/i],
-  ["over the limit, as a 429", reply({ error: { code: "OVER_RATE_LIMIT" } }, 429), 429, /too many requests/i],
-  ["over the limit, dressed as a 400", reply({ error: { code: "OVER_RATE_LIMIT" } }, 400), 429, /too many requests/i],
-  ["some other error", reply({ error: { code: "SOMETHING_ELSE" } }, 500), 502, /answered with an error/i],
-  ["a body that is not JSON", new Response("<html>nope</html>", { status: 200 }), 502, /unreadable/i],
+  ["a rejected key", () => reply({ error: { code: "API_KEY_INVALID" } }, 403), 502, /rejected the key/i],
+  ["over the limit, as a 429", () => reply({ error: { code: "OVER_RATE_LIMIT" } }, 429), 429, /too many requests/i],
+  ["over the limit, dressed as a 400", () => reply({ error: { code: "OVER_RATE_LIMIT" } }, 400), 429, /too many requests/i],
+  ["some other error", () => reply({ error: { code: "SOMETHING_ELSE" } }, 500), 502, /answered with an error/i],
+  ["a body that is not JSON", () => new Response("<html>nope</html>", { status: 200 }), 502, /unreadable/i],
 ];
 for (const [label, answer, status, shape] of cases) {
   upstream = answer;
@@ -120,6 +123,36 @@ for (const [label, answer, status, shape] of cases) {
   is(label + " — the status", r.status, status);
   is(label + " — says something a person can read", shape.test(r.data?.error || ""), true);
 }
+
+/* The live capture that prompted this: 2ms of CPU, no exception, outcome ok,
+   and a 502 anyway. Nothing crashed — api.data.gov handed back something
+   unusable, intermittently, for a search that worked a minute earlier. */
+console.log("\n— a database having a bad moment —");
+let tries = 0;
+upstream = () => { tries++; return tries === 1 ? reply({ error: "upstream" }, 503) : reply(celery); };
+const recovered = await ask("chicken salad");
+is("a 5xx is tried again rather than handed straight to the cook", tries, 2);
+is("...and the second try is the answer", recovered.status, 200);
+is("...carrying the food", recovered.data?.results?.[0]?.name, "Celery, raw");
+
+tries = 0;
+upstream = () => { tries++; return reply({ error: "upstream" }, 503); };
+const gaveUp = await ask("chicken salad twice");
+is("a database down both times gives up rather than hammering it", tries, 2);
+is("...and says so", gaveUp.status, 502);
+is("...suggesting the thing that usually works", /try that search again/i.test(gaveUp.data?.error || ""), true);
+
+/* A 4xx is an answer, not a wobble. Asking again changes nothing except how
+   long somebody waits to hear the same thing. */
+tries = 0;
+upstream = () => { tries++; return reply({ error: { code: "API_KEY_INVALID" } }, 403); };
+await ask("chicken salad thrice");
+is("a rejected key is not tried again", tries, 1);
+
+tries = 0;
+upstream = () => { tries++; return reply({ error: { code: "OVER_RATE_LIMIT" } }, 429); };
+await ask("chicken salad again");
+is("neither is a rate limit", tries, 1);
 
 console.log("\n— and when it cannot be reached at all —");
 upstream = () => { throw new Error("connect ECONNREFUSED"); };
