@@ -158,8 +158,17 @@ const paletteVars = (p, mode) => {
    right colours before the account has answered — see the script in index.html. */
 const localPalette = () => { try { return localStorage.getItem("rb-palette"); } catch { return null; } };
 
-const DISPLAY = "'Fraunces', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif";
-const UI = "'Karla', 'Avenir Next', 'Segoe UI', system-ui, -apple-system, sans-serif";
+/* Jost for titles and figures, Radley for the words you actually read while
+   cooking, Inter for buttons and labels — Bon Appétit's arrangement, as near as
+   free faces reach it (their Futura PT and Archer are both licensed).
+
+   Radley ships one weight and one italic and nothing else, so nothing set in
+   PROSE may ask for 500 or bold: the browser would fake it and the fake is
+   visibly worse than the real thing. Headings and step titles carry weight,
+   which is why they stay on Jost. */
+const DISPLAY = "'Jost', 'Futura', 'Century Gothic', 'Avenir Next', sans-serif";
+const PROSE = "'Radley', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif";
+const UI = "'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif";
 const STORAGE_KEY = "recipe-box";
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1391,7 +1400,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
               {step.title}
             </h2>
           )}
-          <p style={{ font: `400 clamp(17px, 2.4vw, 21px)/1.68 ${DISPLAY}`, color: "rgba(var(--on-page), calc(.92 * var(--ink-k)))", margin: 0, maxWidth: "56ch" }}>
+          <p style={{ font: `400 clamp(17px, 2.4vw, 21px)/1.68 ${PROSE}`, color: "rgba(var(--on-page), calc(.92 * var(--ink-k)))", margin: 0, maxWidth: "56ch" }}>
             {scaleText(step.text, factor)}
           </p>
           {secs && (
@@ -1560,7 +1569,7 @@ export default function RecipeBox() {
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href =
-      "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=Karla:wght@400;500;600;700&display=swap";
+      "https://fonts.googleapis.com/css2?family=Jost:ital,wght@0,300;0,400;0,500;1,400&family=Radley:ital@0;1&family=Inter:wght@400;500;600;700&display=swap";
     document.head.appendChild(link);
     return () => link.remove();
   }, []);
@@ -2309,7 +2318,7 @@ export default function RecipeBox() {
     .rb-btn { cursor: pointer; border-radius: 2px; font-family: ${UI}; font-weight: 600; font-size: 14px; letter-spacing: .01em; transition: filter 120ms ease; }
     .rb-btn:hover { filter: brightness(1.07); }
     .rb-btn:disabled { cursor: not-allowed; filter: none; opacity: .5; }
-    .rb-lede::first-letter { float: left; font-family: ${DISPLAY}; font-weight: 500; font-size: 3.4em; line-height: .82; padding: .04em .09em 0 0; color: var(--card-accent); }
+    .rb-lede::first-letter { float: left; font-family: ${PROSE}; font-weight: 400; font-size: 3.4em; line-height: .82; padding: .04em .09em 0 0; color: var(--card-accent); }
     .rb-num { font-family: ${DISPLAY}; font-weight: 400; font-variant-numeric: lining-nums tabular-nums; }
     .rb-step { animation: rbfade 260ms ease both; }
     @keyframes rbfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -2822,7 +2831,7 @@ export default function RecipeBox() {
                     <Grain card />
                     <div style={{ position: "relative", padding: "22px 24px 20px", display: "flex", flexDirection: "column", gap: 9, flex: 1 }}>
                       <h3 style={{ font: `400 24px/1.18 ${DISPLAY}`, color: "var(--card-text)", margin: 0, letterSpacing: "-0.01em" }}>{r.title}</h3>
-                      {r.contributor && <p style={{ font: `italic 400 14.5px/1.4 ${DISPLAY}`, color: "var(--card-accent)", margin: 0 }}>from {r.contributor}'s kitchen</p>}
+                      {r.contributor && <p style={{ font: `italic 400 14.5px/1.4 ${PROSE}`, color: "var(--card-accent)", margin: 0 }}>from {r.contributor}'s kitchen</p>}
                       {r.description && <p className="rb-clamp" style={{ font: `400 14px/1.65 ${UI}`, color: "var(--card-muted)", margin: 0 }}>{r.description}</p>}
                       <div style={{ marginTop: "auto", paddingTop: 14, borderTop: `1px solid var(--card-edge)`, font: `400 12.5px/1.4 ${UI}`, color: "var(--card-muted)", display: "flex", gap: 16, flexWrap: "wrap" }}>
                         <span>{r.ingredients.length} ingredients</span>
@@ -3081,10 +3090,10 @@ export default function RecipeBox() {
                 {openRecipe.title}
               </h2>
               {openRecipe.contributor && (
-                <p style={{ font: `italic 400 17px/1.4 ${DISPLAY}`, color: "var(--card-accent)", margin: "0 0 20px" }}>from {openRecipe.contributor}'s kitchen</p>
+                <p style={{ font: `italic 400 17px/1.4 ${PROSE}`, color: "var(--card-accent)", margin: "0 0 20px" }}>from {openRecipe.contributor}'s kitchen</p>
               )}
               {openRecipe.description && (
-                <p className="rb-lede" style={{ font: `400 17px/1.72 ${DISPLAY}`, color: "var(--card-text)", maxWidth: "60ch", margin: "0 0 26px" }}>
+                <p className="rb-lede" style={{ font: `400 17px/1.72 ${PROSE}`, color: "var(--card-text)", maxWidth: "60ch", margin: "0 0 26px" }}>
                   {openRecipe.description}
                 </p>
               )}
@@ -3230,7 +3239,7 @@ export default function RecipeBox() {
                           </button>
                           <div style={{ maxWidth: "64ch" }}>
                             {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
-                            <p style={{ font: `400 16.5px/1.75 ${DISPLAY}`, color: "var(--card-text)", margin: 0 }}>{scaleText(text, factor)}</p>
+                            <p style={{ font: `400 16.5px/1.75 ${PROSE}`, color: "var(--card-text)", margin: 0 }}>{scaleText(text, factor)}</p>
                             {secs && (
                               <button
                                 className="rb-btn rb-focus rb-noprint"
