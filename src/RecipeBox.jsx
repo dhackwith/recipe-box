@@ -657,9 +657,9 @@ const durLabel = (s) => (s >= 3600 ? `${Math.round((s / 3600) * 10) / 10} hr` : 
 
 /* ══════════════════════════════════════════════════════════════════
    The alarm
-   Marimba: three notes up a chord, each with a brief flick of its fourth
-   harmonic for the knock of the mallet. Generated rather than loaded, so there
-   is no file to fetch and it still rings with the wifi off.
+   A harp playing five notes and settling back where it began. Generated rather
+   than loaded, so there is no file to fetch and it still rings with the wifi
+   off.
 
    One AudioContext for the life of the page, not one per ring. A browser will
    only allow a handful at once, and a timer that keeps chiming would run
@@ -677,28 +677,49 @@ function audio() {
   } catch { return null; }
 }
 
+/* G C D C G — out, and back to where it started. Offsets are in seconds from
+   the top of the phrase and are already divided by 1.4, which is the tempo
+   Devon picked: at this spacing a note is still sounding when the next one
+   lands, so the middle blooms into something nearer a chord than a count.
+
+   Only the spacing is sped up. A pluck decays for as long as a pluck decays,
+   and compressing that too would change the instrument rather than the tempo. */
+const HEARTH = [
+  [392.00, 0],
+  [523.25, 0.214],
+  [587.33, 0.429],
+  [523.25, 0.643],
+  [392.00, 0.857],
+];
+
 function alarm() {
   const ctx = audio();
   if (!ctx) return;
   try {
     const at0 = ctx.currentTime + 0.04;
-    const voice = (freq, at, dur, peak, attack) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = "sine";
-      o.frequency.setValueAtTime(freq, at);
-      o.connect(g).connect(ctx.destination);
-      g.gain.setValueAtTime(0.0001, at);
-      g.gain.exponentialRampToValueAtTime(peak, at + attack);
-      g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-      o.start(at);
-      o.stop(at + dur + 0.02);
+    /* A plucked string: the note itself on a triangle for warmth, with quiet
+       touches of its octave and twelfth over the top so it does not sound like
+       a bare sine. Struck, then left to fade — a sound that decays has already
+       finished asking for attention, which is what something repeating every
+       five seconds needs to do. */
+    const pluck = (freq, at, peak) => {
+      const partial = (f, dur, p, type) => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(f, at);
+        o.connect(g).connect(ctx.destination);
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.exponentialRampToValueAtTime(p, at + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+        o.start(at);
+        o.stop(at + dur + 0.03);
+      };
+      partial(freq, 1.3, peak * 0.85, "triangle");
+      partial(freq * 2, 0.45, peak * 0.22, "sine");
+      partial(freq * 3, 0.22, peak * 0.1, "sine");
     };
-    [523.25, 659.25, 783.99].forEach((f, i) => {
-      const at = at0 + i * 0.13;
-      voice(f, at, 0.7, 0.26, 0.006);
-      voice(f * 4, at, 0.16, 0.07, 0.004);
-    });
+    HEARTH.forEach(([freq, off]) => pluck(freq, at0 + off, 0.24));
   } catch { /* a browser that will not make noise is not worth breaking over */ }
 }
 
