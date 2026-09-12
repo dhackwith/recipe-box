@@ -67,7 +67,7 @@ const forged = await call("POST", "", devon, {
   recipe: "r1", text: "I halved the sugar", email: "tracey.hackwith@example.com", name: "Tracey", mine: true,
 });
 is("a note is created", forged.status, 201);
-is("...signed by the token, not the body", forged.data.entry.name, "Devonhackwith");
+is("...signed by the token, not the body", forged.data.entry.name, "Devon Hackwith");
 is("...and the stored record holds the verified email",
   JSON.parse(kv.get(forged.data.entry.id)).email, "devonhackwith@gmail.com");
 
@@ -93,15 +93,14 @@ const listed = await call("GET", "?recipe=r2", devon);
 is("both are listed", listed.data.entries.length, 2);
 is("in the order they were written", listed.data.entries.map((e) => e.at).slice().sort(), listed.data.entries.map((e) => e.at));
 is("each knows whether it is yours", listed.data.entries.map((e) => e.mine).sort(), [false, true]);
-is("a default name is derived from the email",
-  listed.data.entries.map((e) => e.name).sort(), ["Devonhackwith", "Tracey Hackwith"]);
+is("a known address is named from the roster",
+  listed.data.entries.map((e) => e.name).sort(), ["Devon Hackwith", "Tracey Hackwith"]);
 
-/* ── names are resolved on read, so a rename reaches old notes ── */
-is("a name can be set", (await call("PUT", "", devon, { name: "Devon" })).status, 200);
+/* ── nobody may rename themselves any more ── */
+is("renaming is not a thing the endpoint does", (await call("PUT", "", devon, { name: "Somebody Else" })).status, 405);
 const renamed = await call("GET", "?recipe=r2", devon);
-is("...and the note written before it now reads the new name",
-  renamed.data.entries.map((e) => e.name).sort(), ["Devon", "Tracey Hackwith"]);
-is("an empty name is refused", (await call("PUT", "", devon, { name: "  " })).status, 400);
+is("...so the names are unchanged",
+  renamed.data.entries.map((e) => e.name).sort(), ["Devon Hackwith", "Tracey Hackwith"]);
 
 /* ── removing ── */
 const mine = renamed.data.entries.find((e) => e.mine);

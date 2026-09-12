@@ -10,7 +10,7 @@ leave the plumbing out unless they would notice it.
 - **The shopping list asks for what shops sell.** A recipe wanting a frozen banana now puts "banana" on the list, and it joins any other bananas already there. Things that really are sold that way — frozen peas, ground cinnamon, shredded mozzarella — are left alone.
 - **A timer that waits for you.** The alarm is a short phrase on a harp now, and instead of sounding once it keeps playing every few seconds and flashes around the edge of the screen until you clear it. It stops making noise after five minutes; the flashing stays until you do.
 - **More links import.** Older recipe sites label their pages a different way, and the importer now reads that too. Sites it still can't read say so and point you at the paste box.
-- **Notes from the family, and a record of who made it.** Every recipe now has a place to write down what you changed or what to watch for, and a button that logs that you cooked it. Your name is taken from the sign-in rather than typed, so nobody can write as somebody else — and you can set what that name should be.
+- **Notes from the family, and a record of who made it.** Every recipe now has a place to write down what you changed or what to watch for, and a button that logs that you cooked it. Your name comes from who you signed in as, so nobody can write as somebody else.
 - **The heading changes more gently.** Switching between recipe boxes fades the title and the line beneath it out and back, rather than swapping the words on the spot.
 - **Four more colours.** Lavender, Midnight Purple, Light Pink and Hot Pink, each with its own light and dark version.
 - **Backgrounds are gone.** The patterned backdrops behind the site have been taken out. The colour schemes stay.

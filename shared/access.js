@@ -40,11 +40,50 @@ export async function identity(request) {
   }
 }
 
-/* A readable stand-in until somebody tells us what to call them. Only ever a
-   default: the name a person sets for themselves always wins. */
-export function nameFromEmail(email) {
-  const local = String(email || "").split("@")[0].replace(/\+.*$/, "");
+/* Who is who.
+ *
+ * Access decides whether somebody may be here at all; this decides what their
+ * name is once they are. Both ends are now out of the reader's hands: the
+ * address comes from a verified token, and the name comes from this list. There
+ * is no way to post as somebody else, and no way to rename yourself into them.
+ *
+ * An entry containing @ matches that address exactly. An entry without one
+ * matches any address whose local part is that word — Devon gave three of these
+ * as bare names, and on an invite-only site the part before the @ is
+ * unambiguous enough to go on. Supply the full address to tighten any of them.
+ *
+ * Two addresses may name one person; Nicholas has two.
+ *
+ * Somebody not listed still gets in — Access, not this file, decides that — and
+ * is named from their address until they are added here. */
+const ROSTER = new Map(Object.entries({
+  "devonhackwith@gmail.com": "Devon Hackwith",
+  uktraceyj: "Tracey Hackwith",
+  hhackwith: "Haven Hackwith",
+  ashtonhack: "Ashton Hackwith",
+  "nick@heyerconception.com": "Nicholas Heyer",
+  "nick@heyer.app": "Nicholas Heyer",
+  "mhealy.dev@gmail.com": "Michael Healy",
+}));
+
+/* A readable stand-in for anybody not on the roster. Only ever a fallback, and
+   a visible prompt to add them to it. */
+function fromAddress(local) {
   const words = local.split(/[._-]+/).filter(Boolean);
   if (!words.length) return "Someone";
   return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+export function displayName(email) {
+  const raw = String(email || "").trim().toLowerCase();
+  if (!raw) return "Someone";
+  /* Gmail and others treat everything after a + as the same mailbox, so the
+     suffix comes off before any lookup — otherwise a full-address entry is
+     missed by the very person it names, and they are quietly renamed. */
+  const at = raw.indexOf("@");
+  const local = (at < 0 ? raw : raw.slice(0, at)).replace(/\+.*$/, "");
+  const addr = at < 0 ? local : local + raw.slice(at);
+  if (ROSTER.has(addr)) return ROSTER.get(addr);
+  if (ROSTER.has(local)) return ROSTER.get(local);
+  return fromAddress(local);
 }

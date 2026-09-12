@@ -1905,8 +1905,6 @@ export default function RecipeBox() {
   const [noteText, setNoteText] = useState("");
   const [notesBusy, setNotesBusy] = useState(false);
   const [notesError, setNotesError] = useState("");
-  const [renaming, setRenaming] = useState(false);
-  const [nameDraft, setNameDraft] = useState("");
 
   useEffect(() => {
     if (!openId) { setNotes(null); setNotesError(""); return; }
@@ -1960,24 +1958,6 @@ export default function RecipeBox() {
     }
   };
 
-  /* The name is stored against the verified email, so it follows a person
-     between devices and renames every note they have already left. */
-  const saveName = async () => {
-    const name = nameDraft.trim();
-    if (!name) { setRenaming(false); return; }
-    setNotesBusy(true);
-    try {
-      await notesCall("PUT", "", { name });
-      setMyName(name);
-      setRenaming(false);
-      const data = await notesCall("GET", `?recipe=${encodeURIComponent(openId)}`);
-      setNotes(data.entries || []);
-    } catch (err) {
-      setNotesError(String(err.message || err));
-    } finally {
-      setNotesBusy(false);
-    }
-  };
   const openRecipe = box.recipes.find((r) => r.id === openId);
   const baseServings = servingsCount(openRecipe?.servings);
   /* Nutrition is stored for one serving. The panel describes the batch actually
@@ -3649,33 +3629,10 @@ export default function RecipeBox() {
                     <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => addEntry("made")} disabled={notesBusy}>
                       I made this
                     </button>
+                    {/* Not a choice any more: the name comes from the roster in
+                        shared/access.js, against the address Access verified. */}
                     <span style={{ font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", marginLeft: "auto" }}>
-                      {renaming ? (
-                        <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                          <input
-                            autoFocus
-                            className="rb-focus"
-                            value={nameDraft}
-                            maxLength={40}
-                            onChange={(ev) => setNameDraft(ev.target.value)}
-                            onKeyDown={(ev) => { if (ev.key === "Enter") saveName(); if (ev.key === "Escape") setRenaming(false); }}
-                            aria-label="What should we call you?"
-                            style={{ ...input, width: 150, padding: "6px 9px", font: `400 13px/1.3 ${UI}` }}
-                          />
-                          <button type="button" className="rb-focus rb-entry-x" onClick={saveName} disabled={notesBusy}>Save</button>
-                        </span>
-                      ) : (
-                        <>
-                          Posting as {myName || "you"}{" "}
-                          <button
-                            type="button"
-                            className="rb-focus rb-entry-x"
-                            onClick={() => { setNameDraft(myName); setRenaming(true); }}
-                          >
-                            change
-                          </button>
-                        </>
-                      )}
+                      {myName ? `Posting as ${myName}` : ""}
                     </span>
                   </div>
                 </div>
