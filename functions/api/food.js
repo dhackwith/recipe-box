@@ -76,10 +76,12 @@ async function search({ request, env }) {
 
        AbortSignal.timeout is guarded for the same reason: a missing API should
        cost the timeout, not the whole request. */
-    res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: typeof AbortSignal?.timeout === "function" ? AbortSignal.timeout(TIMEOUT_MS) : undefined,
-    });
+    const init = { headers: { Accept: "application/json" } };
+    /* Added only when it exists, rather than passed as undefined. A runtime
+       that validates this field would reject the literal undefined, and the
+       throw would land outside anything that could explain it. */
+    if (typeof AbortSignal?.timeout === "function") init.signal = AbortSignal.timeout(TIMEOUT_MS);
+    res = await fetch(url, init);
   } catch (err) {
     return json({
       error: err && err.name === "TimeoutError"
