@@ -30,6 +30,18 @@ function parseChangelog(md) {
 
 const CHANGELOG = parseChangelog(CHANGELOG_MD);
 
+/* One dot, on this device, for days the person reading here has not seen yet.
+   Only the newest date is kept: opening the list clears everything older along
+   with it. ISO dates sort as strings, which is the whole reason for the format.
+   Somebody new sees the dot on their first visit, which is right — all of it is
+   new to them. */
+const NEWS_KEY = "rb-news-seen";
+const latestNews = () => (CHANGELOG.length ? CHANGELOG[0].date : "");
+const newsSeen = () => { try { return localStorage.getItem(NEWS_KEY) || ""; } catch { return ""; } };
+const newsDot = (color, size = 7) => ({
+  flex: "none", width: size, height: size, borderRadius: "50%", background: color,
+});
+
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July",
   "August", "September", "October", "November", "December"];
 /* Split by hand rather than through Date, which reads a bare YYYY-MM-DD as UTC
@@ -1525,6 +1537,13 @@ export default function RecipeBox() {
   const [palette, setPalette] = useState(() => paletteById(localPalette()));
   const [texture, setTexture] = useState(() => textureById(localTexture()));
   const [menuPane, setMenuPane] = useState("main");
+  const [newsRead, setNewsRead] = useState(newsSeen);
+  const unreadNews = Boolean(latestNews()) && newsRead < latestNews();
+  const markNewsRead = () => {
+    const at = latestNews();
+    setNewsRead(at);
+    try { localStorage.setItem(NEWS_KEY, at); } catch { /* private mode: the dot simply comes back */ }
+  };
   const [dragging, setDragging] = useState(false);
   const [factor, setFactor] = useState(1);
   const [cooking, setCooking] = useState(false);
@@ -2445,6 +2464,7 @@ export default function RecipeBox() {
               >
                 <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>☰</span>
                 Menu
+                {unreadNews && <span role="img" aria-label="new updates" title="New updates" style={newsDot("var(--page-accent)")} />}
               </button>
             )}
           >
@@ -2513,8 +2533,11 @@ export default function RecipeBox() {
                   <span>{exporting ? "Exporting…" : "Export all recipes"}</span>
                   <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>backup</span>
                 </button>
-                <button className="rb-focus" onClick={() => setMenuPane("news")} style={menuRow(false)}>
-                  <span>What's new</span>
+                <button className="rb-focus" onClick={() => { setMenuPane("news"); markNewsRead(); }} style={menuRow(false)}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    What's new
+                    {unreadNews && <span role="img" aria-label="unread" style={newsDot("var(--card-accent)", 6)} />}
+                  </span>
                   <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>
                     {CHANGELOG.length ? prettyDate(CHANGELOG[0].date) : ""} ›
                   </span>

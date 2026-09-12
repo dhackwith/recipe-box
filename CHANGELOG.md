@@ -7,6 +7,7 @@ leave the plumbing out unless they would notice it.
 
 ## 2026-09-11
 
+- **A note of what's new.** This list. The menu keeps a dated record of what changed, and a dot appears beside Menu when there is something here you have not read yet.
 - **Your shopping list follows you.** Build a list on the computer and it is waiting on your phone at the shop. It is yours alone — nobody else in the family can see or change it, and ticking something off still works with no signal.
 - **Timers for short steps.** A step that says to blend for 60 seconds now gets its own timer button, not just the long bakes and simmers.
 - **The photo button behaves.** Clicking in the empty space beside "Choose a photo" no longer opens the file picker.
