@@ -7,6 +7,7 @@ leave the plumbing out unless they would notice it.
 
 ## 2026-09-11
 
+- **Four more colours.** Lavender, Midnight Purple, Light Pink and Hot Pink, each with its own light and dark version.
 - **Backgrounds are gone.** The patterned backdrops behind the site have been taken out. The colour schemes stay.
 - **Sharper photos in the box.** Previews are cut more than twice as large now, so a photo looks as good in the list as it does with the recipe open. Photos added before this keep their old preview until you pick "Sharpen photo previews" in the menu, which recuts them from the full-size copy already saved.
 - **A new look.** The site is lighter, and photographs lead. A recipe in the box is now its picture with the name underneath, and a recipe page puts the title, who it came from and what it is above the photo, with the serving, time and step counts in a row beneath it.

@@ -110,6 +110,18 @@ const PALETTES = [
   { id: "farmhouse", name: "Farmhouse", darkCard: "#2F312C", darkLift: "#393C36",
     dark: { soft: "#30322D", bg: "#242622", deep: "#161715", ink: "#EEEAE1", accent: "#A6C39C", onAccent: "#161715", k: 1 },
     light: { soft: "#FFFFFF", bg: "#FAF9F5", deep: "#E8E5DC", ink: "#232320", accent: "#4C6746", onAccent: "#FBFAF6", k: 1.45, grain: 0.035 } },
+  { id: "lavender", name: "Lavender", darkCard: "#332A4A", darkLift: "#3E3358", darkMuted: "#B3A9C4",
+    dark: { soft: "#362C52", bg: "#2A2240", deep: "#191327", ink: "#F3EFFA", accent: "#C9ADF2", onAccent: "#1D1531", k: 1.05 },
+    light: { soft: "#FFFFFF", bg: "#FBFAFE", deep: "#E9E4F4", ink: "#221C2E", accent: "#5B3E9B", onAccent: "#FBF8FF", k: 1.45, grain: 0.04 } },
+  { id: "midnight-purple", name: "Midnight Purple", darkCard: "#271C3F", darkLift: "#31254D", darkMuted: "#A79CBD",
+    dark: { soft: "#291E42", bg: "#1E1630", deep: "#120C1E", ink: "#EFEAF7", accent: "#A98BE8", onAccent: "#150E24", k: 1.05 },
+    light: { soft: "#FFFFFF", bg: "#FAF9FD", deep: "#E6E2F0", ink: "#1B1528", accent: "#4A2E86", onAccent: "#F9F6FF", k: 1.45, grain: 0.04 } },
+  { id: "light-pink", name: "Light Pink", darkCard: "#452C39", darkLift: "#523546", darkMuted: "#C7AEB8",
+    dark: { soft: "#482D3C", bg: "#3A2430", deep: "#24151E", ink: "#FBEEF4", accent: "#F2A9C4", onAccent: "#2A1720", k: 1.08 },
+    light: { soft: "#FFFFFF", bg: "#FDF9FB", deep: "#F2E3EB", ink: "#2B1B23", accent: "#A03C68", onAccent: "#FFF7FA", k: 1.45, grain: 0.04 } },
+  { id: "hot-pink", name: "Hot Pink", darkCard: "#4A1439", darkLift: "#5A1B46", darkMuted: "#CFA5BC",
+    dark: { soft: "#4D163D", bg: "#3D1030", deep: "#260A1E", ink: "#FDEBF5", accent: "#FF6FAE", onAccent: "#2C0821", k: 1.08 },
+    light: { soft: "#FFFFFF", bg: "#FEF8FB", deep: "#F7DFEC", ink: "#2E1022", accent: "#C2185B", onAccent: "#FFF6FA", k: 1.45, grain: 0.04 } },
 ];
 
 const paletteById = (id) => PALETTES.find((p) => p.id === id) || PALETTES[0];
@@ -1319,15 +1331,11 @@ const btnGhost = { background: "transparent", color: "rgba(var(--on-page), calc(
 const btnQuiet = { background: "transparent", color: "var(--card-muted)", border: `1px solid var(--card-edge)`, padding: "10px 18px" };
 const linkButton = { background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--card-accent)", font: "inherit", textDecoration: "underline", textUnderlineOffset: 2 };
 /* rows and headings inside the dropdown panels, which use the card palette */
-/* Sized to what it holds, not to the width of the menu. Stretching every row
-   edge to edge left a band of dead-looking space beside each label that still
-   toggled dark mode or started an export when clicked — the same surprise the
-   photo field used to hand out, arrived at a different way. The gap inside a
-   row, between a label and its own switch or chevron, is part of that control
-   and stays live. */
+/* Still used by the lists in the menus — the recipe boxes, Back, Add someone —
+   where the whole row really is one choice and clicking anywhere in it is the
+   point. The settings rows are built differently; see .rb-setting. */
 const menuRow = (on) => ({
-  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-  width: "fit-content", maxWidth: "100%",
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, width: "100%",
   padding: "9px 10px", border: "none", borderRadius: 3, cursor: "pointer", textAlign: "left",
   font: `500 14px/1.3 ${UI}`, background: on ? "var(--card-lift)" : "transparent", color: on ? "var(--card-accent)" : "var(--card-text)",
 });
@@ -2343,11 +2351,20 @@ export default function RecipeBox() {
     .rb * { box-sizing: border-box; }
     .rb ::selection { background: var(--page-accent); color: var(--on-accent); }
     .rb-focus:focus-visible { outline: 2px solid var(--page-accent); outline-offset: 3px; }
-    /* Nothing in the menu reacted to a pointer, so a row gave no sign of where
-       it began or ended. Now it lights up exactly as far as it is live.
-       !important is doing real work here: menuRow sets background inline, and
+    /* !important is doing real work here: menuRow sets background inline, and
        an inline declaration beats a stylesheet rule whatever its specificity. */
     .rb [role="dialog"] > button:hover:not(:disabled) { background: var(--card-lift) !important; }
+    /* A settings row is a label and its control, held apart across the full
+       width. The row itself is not a button: only the control on the right is,
+       so the stretch of nothing between them does nothing when clicked — and,
+       unlike making the row ignore pointer events, a click there is swallowed
+       here rather than passed through to whatever sits behind the menu. The
+       control's negative margin buys it a comfortable target without pushing
+       the row out of line with the rest of the menu. */
+    .rb-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 9px 10px; font: 500 14px/1.3 ${UI}; color: var(--card-text); }
+    .rb-setctl { display: inline-flex; align-items: center; gap: 8px; flex: none; background: transparent; border: 0; border-radius: 3px; padding: 7px 9px; margin: -7px -9px -7px 0; cursor: pointer; font: 500 12px/1 ${UI}; color: var(--card-muted); }
+    .rb-setctl:hover:not(:disabled) { background: var(--card-lift); color: var(--card-text); }
+    .rb-setctl:disabled { cursor: default; opacity: .55; }
     .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     /* Title, who wrote it, what it is, what you can do, then the photograph —
@@ -2575,13 +2592,20 @@ export default function RecipeBox() {
               </>
             ) : (
               <>
-                <button className="rb-focus" onClick={flipTheme} aria-pressed={theme === "dark"} style={menuRow(false)}>
+                <div className="rb-setting">
                   <span>Dark mode</span>
-                  <span aria-hidden style={{ position: "relative", flex: "none", width: 34, height: 20, borderRadius: 999, background: theme === "dark" ? "var(--card-accent)" : "var(--card-edge)" }}>
-                    <span style={{ position: "absolute", top: 3, left: theme === "dark" ? 17 : 3, width: 14, height: 14, borderRadius: "50%", background: "var(--card-bg)", transition: "left 120ms ease" }} />
-                  </span>
-                </button>
-                <button className="rb-focus" onClick={() => setMenuPane("theme")} style={menuRow(false)}>
+                  <button
+                    className="rb-focus rb-setctl"
+                    onClick={flipTheme}
+                    aria-pressed={theme === "dark"}
+                    aria-label="Dark mode"
+                  >
+                    <span aria-hidden style={{ position: "relative", flex: "none", width: 34, height: 20, borderRadius: 999, background: theme === "dark" ? "var(--card-accent)" : "var(--card-edge)" }}>
+                      <span style={{ position: "absolute", top: 3, left: theme === "dark" ? 17 : 3, width: 14, height: 14, borderRadius: "50%", background: "var(--card-bg)", transition: "left 120ms ease" }} />
+                    </span>
+                  </button>
+                </div>
+                <div className="rb-setting">
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
                     <span
                       aria-hidden
@@ -2592,30 +2616,33 @@ export default function RecipeBox() {
                     />
                     Colours
                   </span>
-                  <span aria-hidden style={{ color: "var(--card-muted)" }}>›</span>
-                </button>
-                <button className="rb-focus" onClick={() => { exportAll(); close(); }} disabled={exporting} style={menuRow(false)}>
-                  <span>{exporting ? "Exporting…" : "Export all recipes"}</span>
-                  <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>backup</span>
-                </button>
-                {sharpenable > 0 && (
-                  <button className="rb-focus" onClick={() => { sharpenPreviews(); close(); }} disabled={sharpening} style={menuRow(false)}>
-                    <span>{sharpening ? "Sharpening…" : "Sharpen photo previews"}</span>
-                    <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>
-                      {sharpenable} {sharpenable === 1 ? "photo" : "photos"}
-                    </span>
+                  <button className="rb-focus rb-setctl" onClick={() => setMenuPane("theme")} aria-label="Choose colours">
+                    <span aria-hidden>Choose ›</span>
                   </button>
+                </div>
+                <div className="rb-setting">
+                  <span>{exporting ? "Exporting…" : "Export all recipes"}</span>
+                  <button className="rb-focus rb-setctl" onClick={() => { exportAll(); close(); }} disabled={exporting} aria-label="Export all recipes">
+                    <span aria-hidden>backup</span>
+                  </button>
+                </div>
+                {sharpenable > 0 && (
+                  <div className="rb-setting">
+                    <span>{sharpening ? "Sharpening…" : "Sharpen photo previews"}</span>
+                    <button className="rb-focus rb-setctl" onClick={() => { sharpenPreviews(); close(); }} disabled={sharpening} aria-label="Sharpen photo previews">
+                      <span aria-hidden>{sharpenable} {sharpenable === 1 ? "photo" : "photos"}</span>
+                    </button>
+                  </div>
                 )}
-                <button className="rb-focus" onClick={() => { setMenuPane("news"); markNewsRead(); }} style={menuRow(false)}>
+                <div className="rb-setting">
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                    What's new
+                    What&apos;s new
                     {unreadNews && <span role="img" aria-label="unread" style={newsDot("var(--card-accent)", 6)} />}
                   </span>
-                  <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>
-                    {CHANGELOG.length ? prettyDate(CHANGELOG[0].date) : ""} ›
-                  </span>
-                </button>
-              </>
+                  <button className="rb-focus rb-setctl" onClick={() => { setMenuPane("news"); markNewsRead(); }} aria-label="What's new">
+                    <span aria-hidden>{CHANGELOG.length ? prettyDate(CHANGELOG[0].date) : ""} ›</span>
+                  </button>
+                </div>              </>
             )}
           </Popover>
         </div>
