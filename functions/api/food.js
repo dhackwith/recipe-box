@@ -38,6 +38,18 @@ const json = (data, status = 200, seconds = 0) =>
   });
 
 export async function onRequest({ request, env }) {
+  /* Everything, not just the outbound call. Without this any throw escapes into
+     Cloudflare's own error page — which arrives as a 5xx carrying HTML, so the
+     app cannot read a reason out of it and says only that it could not search.
+     A function that fails should still answer in the shape it promised. */
+  try {
+    return await search({ request, env });
+  } catch (err) {
+    return json({ error: `The food search broke: ${err && err.message ? err.message : err}` }, 500);
+  }
+}
+
+async function search({ request, env }) {
   if (!(await identity(request))) {
     return json({ error: "Could not tell who is signed in" }, 403);
   }
@@ -56,12 +68,17 @@ export async function onRequest({ request, env }) {
 
   let res;
   try {
+    /* Deliberately plain. This had cf: { cacheTtl, cacheEverything } on it,
+       which is a Cloudflare-only fetch option and therefore the one line that
+       could not be exercised anywhere else — and an untestable optimisation is
+       a poor trade against a search that works. The reply is still cached, by
+       the Cache-Control header below, which every client honours.
+
+       AbortSignal.timeout is guarded for the same reason: a missing API should
+       cost the timeout, not the whole request. */
     res = await fetch(url, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      /* Cloudflare caches the upstream reply, so a repeated search costs
-         nothing against the hourly allowance. */
-      cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true },
+      signal: typeof AbortSignal?.timeout === "function" ? AbortSignal.timeout(TIMEOUT_MS) : undefined,
     });
   } catch (err) {
     return json({

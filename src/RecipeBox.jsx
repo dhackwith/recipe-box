@@ -2434,10 +2434,20 @@ export default function RecipeBox() {
     setFoodPick(null);
     try {
       const res = await fetch(`/api/food?q=${encodeURIComponent(q)}`, { credentials: "same-origin" });
+      /* Read it once as text, then try it as JSON. A reply that is not JSON is
+         not the endpoint talking — it is Cloudflare's own error page — and
+         "couldn't search (502)" on its own gives nobody anything to act on, so
+         the first line of whatever arrived is shown instead. */
+      const body = await res.text();
       let data = null;
-      try { data = await res.json(); } catch { data = null; }
-      if (!res.ok) throw new Error((data && data.error) || `Couldn't search (${res.status})`);
-      if (data === null) throw new Error("Food search isn't available here — this needs the deployed site");
+      try { data = JSON.parse(body); } catch { data = null; }
+
+      if (data && data.error) throw new Error(data.error);
+      if (!res.ok) {
+        const clue = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+        throw new Error(`The food search failed (${res.status})${clue ? ` — ${clue}` : ""}`);
+      }
+      if (!data) throw new Error("Food search isn't available here — this needs the deployed site");
       setFoodResults(data.results || []);
     } catch (err) {
       setFoodResults([]);
