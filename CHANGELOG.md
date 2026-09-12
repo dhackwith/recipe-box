@@ -7,6 +7,7 @@ leave the plumbing out unless they would notice it.
 
 ## 2026-09-11
 
+- **The heading changes more gently.** Switching between recipe boxes fades the title and the line beneath it out and back, rather than swapping the words on the spot.
 - **Four more colours.** Lavender, Midnight Purple, Light Pink and Hot Pink, each with its own light and dark version.
 - **Backgrounds are gone.** The patterned backdrops behind the site have been taken out. The colour schemes stay.
 - **Sharper photos in the box.** Previews are cut more than twice as large now, so a photo looks as good in the list as it does with the recipe open.

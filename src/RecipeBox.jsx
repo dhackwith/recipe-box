@@ -1699,6 +1699,26 @@ export default function RecipeBox() {
     flash((await saveBox(next)) ? "Saved" : "Couldn't save — that change is only on this screen");
   };
 
+  /* The heading names whichever box is open, so switching boxes swaps both the
+     title and the line under it. Doing that on the same frame as the click made
+     the words appear to jump. They now lift and fade out, change while nobody
+     can read them, and settle back — one element the whole time, so the text
+     never sits in two places at once and the layout never reflows twice.
+
+     shownBox trails activeBox by exactly the length of the fade; everything
+     else on the page still filters on activeBox immediately, so only the
+     heading waits. Somebody who has asked for less movement gets the swap on
+     the spot instead. */
+  const [shownBox, setShownBox] = useState(activeBox);
+  const [titleSettling, setTitleSettling] = useState(false);
+  useEffect(() => {
+    if (activeBox === shownBox) { setTitleSettling(false); return; }
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (still) { setShownBox(activeBox); return; }
+    setTitleSettling(true);
+    const t = setTimeout(() => { setShownBox(activeBox); setTitleSettling(false); }, 150);
+    return () => clearTimeout(t);
+  }, [activeBox, shownBox]);
   const openRecipe = box.recipes.find((r) => r.id === openId);
   const baseServings = servingsCount(openRecipe?.servings);
   /* Nutrition is stored for one serving. The panel describes the batch actually
@@ -2308,7 +2328,13 @@ export default function RecipeBox() {
     .rb-setctl { display: inline-flex; align-items: center; gap: 8px; flex: none; background: transparent; border: 0; border-radius: 3px; padding: 7px 9px; margin: -7px -9px -7px 0; cursor: pointer; font: 500 12px/1 ${UI}; color: var(--card-muted); }
     .rb-setctl:hover:not(:disabled) { background: var(--card-lift); color: var(--card-text); }
     .rb-setctl:disabled { cursor: default; opacity: .55; }
-    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
+    /* Out is quicker than in — leaving should feel decisive and arriving should
+       feel settled, which is what keeps a crossfade from reading as a lag. The
+       heading rises a little as it goes and comes back to rest, so the change
+       has a direction rather than just blinking. */
+    .rb-heading { opacity: 1; transform: none; transition: opacity 210ms cubic-bezier(.2,.7,.3,1), transform 210ms cubic-bezier(.2,.7,.3,1); }
+    .rb-heading.is-settling { opacity: 0; transform: translateY(-5px); transition-duration: 130ms; }
+    @media (prefers-reduced-motion: reduce) { .rb-heading, .rb-heading.is-settling { transition: none; opacity: 1; transform: none; } }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     /* Title, who wrote it, what it is, what you can do, then the photograph —
        the order every recipe site puts them in. The actions sit between rules
@@ -2577,22 +2603,24 @@ export default function RecipeBox() {
                   <button className="rb-focus rb-setctl" onClick={() => { setMenuPane("news"); markNewsRead(); }} aria-label="What's new">
                     <span aria-hidden>{CHANGELOG.length ? prettyDate(CHANGELOG[0].date) : ""} ›</span>
                   </button>
-                </div>              </>
+                </div>
+              </>
             )}
           </Popover>
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 22, alignItems: "flex-end", justifyContent: "space-between" }}>
           <div style={{ minWidth: 260 }}>
-            <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: "rgb(var(--on-page))" }}>
-              {activeBox ? `${activeBox}'s Recipes` : SITE_NAME}
-            </h1>
-            <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.58 * var(--ink-k)))", margin: "12px 0 0", maxWidth: "46ch" }}>
-              {activeBox
-                ? `${boxCount(activeBox)} ${boxCount(activeBox) === 1 ? "recipe" : "recipes"} from ${activeBox}.`
-                : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}
-            </p>
-
+            <div className={`rb-heading${titleSettling ? " is-settling" : ""}`}>
+              <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: "rgb(var(--on-page))" }}>
+                {shownBox ? `${shownBox}'s Recipes` : SITE_NAME}
+              </h1>
+              <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.58 * var(--ink-k)))", margin: "12px 0 0", maxWidth: "46ch" }}>
+                {shownBox
+                  ? `${boxCount(shownBox)} ${boxCount(shownBox) === 1 ? "recipe" : "recipes"} from ${shownBox}.`
+                  : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}
+              </p>
+            </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button className="rb-btn rb-focus" style={btnGhost} onClick={openShopping}>
