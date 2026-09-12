@@ -26,9 +26,15 @@ const env = {
     get: async (k) => (kv.has(k) ? kv.get(k) : null),
     put: async (k, v) => void kv.set(k, v),
     delete: async (k) => void kv.delete(k),
-    list: async ({ prefix, limit = 1000 }) => {
+    /* Paged the way KV really is, so the feed's cursor loop is exercised rather
+       than assumed. */
+    list: async ({ prefix, limit = 1000, cursor }) => {
       const all = [...kv.keys()].filter((k) => k.startsWith(prefix)).sort();
-      return { keys: all.slice(0, limit).map((name) => ({ name })), list_complete: all.length <= limit };
+      const start = cursor ? Number(cursor) : 0;
+      const page = all.slice(start, start + limit);
+      const next = start + page.length;
+      const done = next >= all.length;
+      return { keys: page.map((name) => ({ name })), list_complete: done, cursor: done ? undefined : String(next) };
     },
   },
 };
@@ -114,6 +120,37 @@ is("a missing id is refused", (await call("DELETE", "?id=note:r2:nope", devon)).
 /* ── length ── */
 const long = await call("POST", "", devon, { recipe: "r3", text: "x".repeat(5000) });
 is("a very long note is cut, not rejected", JSON.parse(kv.get(long.data.entry.id)).text.length, 2000);
+
+/* -- the feed across every recipe -- */
+const feedAt = (recipe, iso, email, kind, text) =>
+  kv.set(`note:${recipe}:${iso}-aaaaaa`, JSON.stringify({ kind, text, email, at: iso }));
+
+kv.clear();
+feedAt("apple", "2026-09-01T10:00:00.000Z", "devonhackwith@gmail.com", "note", "oldest");
+feedAt("zucchini", "2026-09-05T10:00:00.000Z", "nick@heyer.app", "made", "");
+feedAt("apple", "2026-09-09T10:00:00.000Z", "uktraceyj@gmail.com", "note", "middle");
+feedAt("zucchini", "2026-09-11T10:00:00.000Z", "devonhackwith@gmail.com", "note", "newest");
+
+const feed = await call("GET", "?recent=3", devon);
+is("the feed comes back newest first", feed.data.entries.map((e) => e.text), ["newest", "middle", ""]);
+is("...across different recipes", feed.data.entries.map((e) => e.recipe), ["zucchini", "apple", "zucchini"]);
+is("...naming everyone from the roster", feed.data.entries.map((e) => e.name),
+  ["Devon Hackwith", "Tracey Hackwith", "Nicholas Heyer"]);
+is("...marking which are yours", feed.data.entries.map((e) => e.mine), [true, false, false]);
+is("...and keeping the kind", feed.data.entries.map((e) => e.kind), ["note", "note", "made"]);
+is("a bigger ask than there is content is fine", (await call("GET", "?recent=50", devon)).data.entries.length, 4);
+is("the feed needs a token too", (await call("GET", "?recent=3", null)).status, 403);
+
+/* The newest entry sits under a recipe late in the alphabet, so a single
+   unpaged listing would return the first thousand and miss it entirely. */
+kv.clear();
+for (let i = 0; i < 1100; i++) {
+  feedAt(`aaa${String(i).padStart(4, "0")}`, `2026-01-01T00:00:${String(i % 60).padStart(2, "0")}.000Z`, "hhackwith@gmail.com", "note", "old");
+}
+feedAt("zzz", "2026-09-12T08:00:00.000Z", "ashtonhack@icloud.com", "note", "the one that matters");
+const deep = await call("GET", "?recent=1", devon);
+is("past a thousand entries, the newest is still found", deep.data.entries[0]?.text, "the one that matters");
+is("...and named correctly", deep.data.entries[0]?.name, "Ashton Hackwith");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

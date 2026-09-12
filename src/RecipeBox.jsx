@@ -1897,6 +1897,24 @@ export default function RecipeBox() {
     const t = setTimeout(() => { setShownBox(activeBox); setTitleSettling(false); }, 150);
     return () => clearTimeout(t);
   }, [activeBox, shownBox]);
+  /* The newest few things said anywhere in the box, for the feed under the
+     recipes. Re-read whenever the box page comes back into view, so leaving a
+     note and going home shows it there. Quiet about failure: the recipes are
+     the point of that page, and a feed that cannot load should not say so
+     twice. */
+  const [lately, setLately] = useState([]);
+  useEffect(() => {
+    if (view !== "list") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await notesCall("GET", "?recent=6");
+        if (!cancelled) setLately(data.entries || []);
+      } catch { if (!cancelled) setLately([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [view, box.recipes.length]);
+
   /* Notes belong to the open recipe and are fetched when it opens. null means
      "not asked yet", which is what keeps an empty recipe from flashing "nothing
      here" before the first answer arrives. */
@@ -2601,7 +2619,19 @@ export default function RecipeBox() {
     @media (prefers-reduced-motion: reduce) {
       .rb-flash { animation: none; opacity: .7; }
       .rb-chip-done { animation: none; }
-    }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
+    }    /* The newest thing said gets the room; the ones under it are a list you
+       skim. Both are one button each, because the useful thing to do with any
+       of them is open the recipe they are about. */
+    .rb-lately { margin-top: 54px; padding-top: 26px; border-top: 1px solid rgba(var(--on-page), calc(.16 * var(--ink-k))); }
+    .rb-lately-open { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 11px 0; cursor: pointer; border-bottom: 1px solid rgba(var(--on-page), calc(.1 * var(--ink-k))); }
+    .rb-lately-open:disabled { cursor: default; opacity: .6; }
+    .rb-lately-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font: 400 12.5px/1.5 ${UI}; color: rgba(var(--on-page), calc(.6 * var(--ink-k))); }
+    .rb-lately-name { font-weight: 600; color: rgb(var(--on-page)); }
+    .rb-lately-what { color: var(--page-accent); font-weight: 600; }
+    .rb-lately-text { display: block; margin-top: 5px; font: 400 14.5px/1.65 ${PROSE}; color: rgba(var(--on-page), calc(.88 * var(--ink-k))); }
+    .rb-lately-lead .rb-lately-text { font-size: 17px; line-height: 1.7; }
+    .rb-lately-lead .rb-lately-open { padding-top: 0; padding-bottom: 16px; }
+    .rb-lately-open:hover .rb-lately-what { text-decoration: underline; text-underline-offset: 2px; }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     /* Title, who wrote it, what it is, what you can do, then the photograph —
        the order every recipe site puts them in. The actions sit between rules
@@ -3148,6 +3178,43 @@ export default function RecipeBox() {
               </div>
             )}
 
+            {lately.length > 0 && (
+              <section className="rb-noprint rb-lately">
+                <h2 style={{ font: `300 26px/1.15 ${DISPLAY}`, margin: "0 0 4px", color: "rgb(var(--on-page))", letterSpacing: "-0.01em" }}>
+                  Lately
+                </h2>
+                <p style={{ font: `400 13.5px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.55 * var(--ink-k)))", margin: "0 0 20px" }}>
+                  What people have been cooking, and what they said about it.
+                </p>
+
+                <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                  {lately.map((e, i) => {
+                    const r = box.recipes.find((x) => x.id === e.recipe);
+                    return (
+                      <li key={e.id} className={i === 0 ? "rb-lately-lead" : "rb-lately-row"}>
+                        <button
+                          type="button"
+                          className="rb-focus rb-lately-open"
+                          onClick={() => r && openCard(r.id)}
+                          disabled={!r}
+                          aria-label={r ? `Open ${r.title}` : "That recipe is no longer in the box"}
+                        >
+                          <span className="rb-lately-who">
+                            <span className="rb-lately-name">{e.name}</span>
+                            <span aria-hidden>·</span>
+                            <span>{e.kind === "made" ? "made" : "wrote about"}</span>
+                            <span className="rb-lately-what">{r ? r.title : "a recipe since removed"}</span>
+                            <span aria-hidden>·</span>
+                            <span>{whenLabel(e.at)}</span>
+                          </span>
+                          {e.kind === "note" && e.text && <span className="rb-lately-text">{e.text}</span>}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
             <div className="rb-noprint" style={{ marginTop: 50, paddingTop: 24, borderTop: `1px solid rgba(var(--on-page), calc(.16 * var(--ink-k)))` }}>
               <p style={{ font: `400 12.5px/1.65 ${UI}`, color: "rgba(var(--on-page), calc(.48 * var(--ink-k)))", margin: 0, maxWidth: 460 }}>
                 Everyone shares one box. Whoever has the link can add, change, or remove anything in it.

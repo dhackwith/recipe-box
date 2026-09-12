@@ -18,6 +18,9 @@
  * feature whose entire point is "who said this" would be worse than having no
  * attribution at all.
  *
+ * GET ?recipe=<id>  everything said about one recipe
+ * GET ?recent=<n>    the newest few from across the whole box, for the feed
+ *
  * Requires the same RECIPES binding as /api/storage.
  */
 
@@ -30,6 +33,11 @@ const json = (data, status = 200) =>
   });
 
 const NOTE_MAX = 2000;
+/* How many the feed on the box page will show, and how far it will read to find
+   them. Ten pages is ten thousand entries — far past anything this site will
+   hold, and a bound so a runaway listing cannot spin. */
+const FEED_MAX = 12;
+const FEED_PAGES = 10;
 /* A listing reads every entry, so this is the number of round trips one recipe
    can cost, not just how much is shown. */
 const LIST_MAX = 200;
@@ -40,6 +48,38 @@ const noteKey = (recipe, at, rand) => `note:${recipe}:${at}-${rand}`;
    A colon would let a crafted id read another recipe's notes. */
 const okId = (v) => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
 
+/* Pulling the key apart again. A recipe id cannot contain a colon (okId sees to
+   that), so the first colon after the prefix ends it; what follows is the ISO
+   timestamp with a short random tail, and the tail is whatever comes after the
+   last dash. The timestamp leads, so the remainder sorts chronologically as
+   plain text — which is what makes a feed across every recipe possible without
+   opening a single entry. */
+function readKey(key) {
+  const rest = key.slice("note:".length);
+  const cut = rest.indexOf(":");
+  if (cut < 0) return null;
+  return { recipe: rest.slice(0, cut), stamp: rest.slice(cut + 1) };
+}
+
+/* Every note key on the site, newest last.
+ *
+ * A prefix listing comes back sorted by recipe, not by date, so the whole set
+ * has to be seen before the newest few can be known. It is paged rather than
+ * asked for in one go: a single call caps at 1000 keys and would silently
+ * return the alphabetically-first thousand, which on a busy box would quietly
+ * start hiding the most recent things — the one job this has. */
+async function allNoteKeys(env) {
+  const keys = [];
+  let cursor;
+  for (let page = 0; page < FEED_PAGES; page++) {
+    const listed = await env.RECIPES.list({ prefix: "note:", limit: 1000, cursor });
+    keys.push(...listed.keys.map((k) => k.name));
+    if (listed.list_complete) break;
+    cursor = listed.cursor;
+    if (!cursor) break;
+  }
+  return keys;
+}
 export async function onRequest({ request, env }) {
   if (!env.RECIPES) {
     return json({ error: "KV namespace RECIPES is not bound to this project" }, 500);
@@ -54,6 +94,37 @@ export async function onRequest({ request, env }) {
 
   try {
     if (request.method === "GET") {
+      /* The whole site's activity, newest first, for the feed on the box page.
+         Only the handful being shown are opened; the rest are sorted by their
+         key alone. */
+      const recent = url.searchParams.get("recent");
+      if (recent !== null) {
+        const want = Math.min(Math.max(parseInt(recent, 10) || 0, 1), FEED_MAX);
+        const ordered = allNoteKeys(env)
+          .then((keys) => keys
+            .map((name) => ({ name, ...(readKey(name) || {}) }))
+            .filter((k) => k.stamp)
+            .sort((a, b) => (a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : 0))
+            .slice(0, want));
+
+        const entries = [];
+        for (const k of await ordered) {
+          const raw = await env.RECIPES.get(k.name);
+          if (!raw) continue;
+          let e;
+          try { e = JSON.parse(raw); } catch { continue; }
+          entries.push({
+            id: k.name,
+            recipe: k.recipe,
+            kind: e.kind === "made" ? "made" : "note",
+            text: typeof e.text === "string" ? e.text : "",
+            at: e.at || "",
+            name: displayName(e.email || ""),
+            mine: e.email === email,
+          });
+        }
+        return json({ entries });
+      }
       const recipe = url.searchParams.get("recipe");
       if (!okId(recipe)) return json({ error: "recipe required" }, 400);
 

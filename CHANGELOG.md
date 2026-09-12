@@ -5,6 +5,10 @@ newest first, and one `- **Headline.** Sentence or two.` line per change. Write 
 for whoever is cooking, not for whoever is coding: say what they can now do, and
 leave the plumbing out unless they would notice it.
 
+## 2026-09-12
+
+- **Lately.** The bottom of the recipes page now shows the newest things anyone has said or cooked, across the whole box, with the most recent given the most room. Tap one to open the recipe it is about.
+
 ## 2026-09-11
 
 - **The shopping list asks for what shops sell.** A recipe wanting a frozen banana now puts "banana" on the list, and it joins any other bananas already there. Things that really are sold that way — frozen peas, ground cinnamon, shredded mozzarella — are left alone.
