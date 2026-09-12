@@ -1,14 +1,20 @@
 # What's new
 
 Read inside the site under Menu → What's new. One `## YYYY-MM-DD` heading per day,
-newest first, and one `- **Headline.** Sentence or two.` line per change. Write it
-for whoever is cooking, not for whoever is coding: say what they can now do, and
-leave the plumbing out unless they would notice it.
+newest first, and one `- **Headline.** Sentence or two.` line per change.
+
+The headline is a short description of the change, not the name of the thing that
+changed: "Keep track of what you have eaten", never "Today". Somebody reading this
+has not met the feature yet, and a name tells them nothing. The sentence or two
+after it explains what they can now do.
+
+Write it for whoever is cooking, not for whoever is coding, and leave the plumbing
+out unless they would notice it.
 
 ## 2026-09-12
 
-- **Today.** A place to log what you have eaten from the box — breakfast, lunch, dinner and snacks — with the calories and macros adding up as you go. Give it your height, weight, age and how much you move and it will estimate what a day needs. All of it stays on the device you enter it on: not in the shared box, and not on a server.
-- **Lately.** The bottom of the recipes page now shows the newest things anyone has said or cooked, across the whole box, with the most recent given the most room. Tap one to open the recipe it is about.
+- **Keep track of what you have eaten.** A new Today page logs meals from the box across breakfast, lunch, dinner and snacks, adding up calories and macros as you go, and will estimate what a day needs from your height, weight, age and how much you move. Everything you put into it stays on that device — not in the shared box, and not on a server.
+- **See what everyone has been cooking.** The foot of the recipes page now lists the newest notes and made-its from across the whole box, with the most recent given the most room. Tap one to open the recipe it is about.
 
 ## 2026-09-11
 
