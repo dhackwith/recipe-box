@@ -26,30 +26,53 @@ import { readSearch, DATA_TYPES } from "../../shared/food.js";
 const FDC = "https://api.nal.usda.gov/fdc/v1/foods/search";
 const CACHE_SECONDS = 86400;
 const TIMEOUT_MS = 8000;
-const MAX_RESULTS = 25;
+/* Eight, not twenty-five. Two reasons, and the second is the one that matters:
+   a list of twenty-five near-identical PEANUT BUTTERs helps nobody, and the
+   reply is enormous — every food carries dozens of nutrient rows and several
+   fields nothing here reads. Parsing that, on top of verifying an RSA-signed
+   token, is real work against a per-request budget, and going over it is not an
+   error a function can catch: the isolate is stopped and Cloudflare answers
+   with its own gateway page. Which is exactly the intermittent failure this is
+   fixing. */
+const MAX_RESULTS = 8;
 
 const json = (data, status = 200, seconds = 0) =>
   new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json",
-      "Cache-Control": seconds ? `private, max-age=${seconds}` : "no-store",
+      /* public, not private: this is food data, identical for everybody, and
+         the Cache API refuses to store a response marked private. */
+      "Cache-Control": seconds ? `public, max-age=${seconds}` : "no-store",
     },
   });
 
-export async function onRequest({ request, env }) {
+/* A repeated search should cost nothing. The same few foods get looked up over
+   and over in a household, and the expensive half is not the network — it is
+   parsing the reply. A hit here skips both.
+
+   Shared across everybody on purpose: the answer does not depend on who asked,
+   and the request is only reached after Access has let somebody in. */
+const cacheKey = (q) => new Request(`https://food-cache.invalid/v1?q=${encodeURIComponent(q.toLowerCase())}`);
+
+const edgeCache = () => {
+  try { return typeof caches !== "undefined" && caches.default ? caches.default : null; }
+  catch { return null; }
+};
+
+export async function onRequest({ request, env, waitUntil }) {
   /* Everything, not just the outbound call. Without this any throw escapes into
      Cloudflare's own error page — which arrives as a 5xx carrying HTML, so the
      app cannot read a reason out of it and says only that it could not search.
      A function that fails should still answer in the shape it promised. */
   try {
-    return await search({ request, env });
+    return await search({ request, env, waitUntil });
   } catch (err) {
     return json({ error: `The food search broke: ${err && err.message ? err.message : err}` }, 500);
   }
 }
 
-async function search({ request, env }) {
+async function search({ request, env, waitUntil }) {
   if (!(await identity(request))) {
     return json({ error: "Could not tell who is signed in" }, 403);
   }
@@ -63,6 +86,10 @@ async function search({ request, env }) {
      stray character. Forty characters of key and one invisible one is a wrong
      answer nobody can see, so it is dealt with here rather than left as a thing
      somebody has to notice. */
+  const cache = edgeCache();
+  const hit = cache && (await cache.match(cacheKey(q)).catch(() => null));
+  if (hit) return hit;
+
   const key = String(env.FDC_API_KEY || "").trim() || "DEMO_KEY";
   const configured = key !== "DEMO_KEY";
   const url = new URL(FDC);
@@ -125,5 +152,12 @@ async function search({ request, env }) {
   if (!res.ok) return json({ error: `The food database answered with an error (${res.status})` }, 502);
   if (!payload) return json({ error: "The food database sent something unreadable" }, 502);
 
-  return json({ results: readSearch(payload, MAX_RESULTS), demo: !configured }, 200, CACHE_SECONDS);
+  const answer = json({ results: readSearch(payload, MAX_RESULTS), demo: !configured }, 200, CACHE_SECONDS);
+
+  /* Storing a copy must never be the thing that breaks a search that worked. */
+  if (cache) {
+    const store = cache.put(cacheKey(q), answer.clone()).catch(() => {});
+    if (typeof waitUntil === "function") waitUntil(store); else await store;
+  }
+  return answer;
 }

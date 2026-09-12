@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Food search stops dropping out.** Looking a food up sometimes failed with a gateway error, and trying again would usually work. Searches now come back with the closest handful of matches rather than a long list, and anything looked up recently answers straight away.
 - **Log things that are not recipes.** The tracker can now look up any food — celery, a jar of peanut butter, a burger — from the USDA's public food database, or you can type the numbers straight off a packet or a chain's nutrition page. Both sit alongside recipes from the box in the same meal.
 - **Keep track of what you have eaten.** A new daily nutrition tracker logs meals from the box across breakfast, lunch, dinner and snacks, adding up calories and macros as you go, and will estimate what a day needs from your height, weight, age and how much you move. It follows you between your own devices, and nobody else in the family can see it.
 - **See what everyone has been cooking.** The foot of the recipes page now lists the newest notes and made-its from across the whole box, with the most recent given the most room. Tap one to open the recipe it is about.

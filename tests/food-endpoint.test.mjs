@@ -151,5 +151,52 @@ is("...with an error a caller can show", typeof broken.data?.error === "string" 
 is("...and never HTML", /^\s*</.test(broken.text), false);
 globalThis.fetch = realFetch;
 
+/* The repeat-search cache. This only exists on Cloudflare, so it is stood up
+   here as the smallest thing with the same shape — if the endpoint ever stops
+   asking the cache first, the upstream counter below notices. */
+console.log("\n— asking twice —");
+const store = new Map();
+let upstreamCalls = 0;
+globalThis.caches = {
+  default: {
+    async match(req) {
+      const saved = store.get(req.url);
+      return saved ? saved.clone() : undefined;
+    },
+    async put(req, res) { store.set(req.url, res); },
+  },
+};
+
+upstream = () => { upstreamCalls++; return reply(celery); };
+const first = await ask("celery");
+is("the first search goes out to the database", upstreamCalls, 1);
+const second = await ask("celery");
+is("the second does not", upstreamCalls, 1);
+is("...and still answers", second.status, 200);
+is("...with the same food", second.data?.results?.[0]?.name, first.data?.results?.[0]?.name);
+is("capitals are the same search", (await ask("CELERY")).data?.results?.[0]?.name, "Celery, raw");
+is("...without asking again", upstreamCalls, 1);
+is("a different food is a different question", (await ask("celery root")) && upstreamCalls, 2);
+
+/* A cache that throws is a cache that is having a bad day, not a failed search. */
+console.log("\n— when the cache misbehaves —");
+globalThis.caches = {
+  default: {
+    async match() { throw new Error("cache unavailable"); },
+    async put() { throw new Error("cache unavailable"); },
+  },
+};
+upstream = () => reply(celery);
+const despite = await ask("celery");
+is("a cache that throws on read does not break the search", despite.status, 200);
+is("...and the food still arrives", despite.data?.results?.[0]?.name, "Celery, raw");
+delete globalThis.caches;
+
+console.log("\n— how much is asked for —");
+upstream = () => reply(celery);
+await ask("celery seed");
+is("a page small enough to parse inside the budget",
+  Number(new URL(lastRequest.href).searchParams.get("pageSize")) <= 10, true);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
