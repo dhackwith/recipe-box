@@ -1345,8 +1345,15 @@ const btnGhost = { background: "transparent", color: "rgba(var(--on-page), calc(
 const btnQuiet = { background: "transparent", color: "var(--card-muted)", border: `1px solid var(--card-edge)`, padding: "10px 18px" };
 const linkButton = { background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--card-accent)", font: "inherit", textDecoration: "underline", textUnderlineOffset: 2 };
 /* rows and headings inside the dropdown panels, which use the card palette */
+/* Sized to what it holds, not to the width of the menu. Stretching every row
+   edge to edge left a band of dead-looking space beside each label that still
+   toggled dark mode or started an export when clicked — the same surprise the
+   photo field used to hand out, arrived at a different way. The gap inside a
+   row, between a label and its own switch or chevron, is part of that control
+   and stays live. */
 const menuRow = (on) => ({
-  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, width: "100%",
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+  width: "fit-content", maxWidth: "100%",
   padding: "9px 10px", border: "none", borderRadius: 3, cursor: "pointer", textAlign: "left",
   font: `500 14px/1.3 ${UI}`, background: on ? "var(--card-lift)" : "transparent", color: on ? "var(--card-accent)" : "var(--card-text)",
 });
@@ -2380,6 +2387,11 @@ export default function RecipeBox() {
       padding: .08em .3em; margin: 0 -.3em;
       -webkit-box-decoration-break: clone; box-decoration-break: clone;
     }
+    /* Nothing in the menu reacted to a pointer, so a row gave no sign of where
+       it began or ended. Now it lights up exactly as far as it is live.
+       !important is doing real work here: menuRow sets background inline, and
+       an inline declaration beats a stylesheet rule whatever its specificity. */
+    .rb [role="dialog"] > button:hover:not(:disabled) { background: var(--card-lift) !important; }
     .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     /* Title, who wrote it, what it is, what you can do, then the photograph —
