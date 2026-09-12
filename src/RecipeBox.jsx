@@ -576,6 +576,122 @@ function dayTotals(day, recipes) {
   return { ...totals, unknown };
 }
 /* ══════════════════════════════════════════════════════════════════
+   The week's plan
+   What somebody intends to cook, laid out across a week, and a way to turn
+   that intention into a shopping list.
+
+   Deliberately the same shape as the day log above — days keyed by local date,
+   each holding the four meals, each meal a list of entries with ids — because
+   that shape already has a merge that works across two devices, and a plan has
+   exactly the same problem: two phones, one person, no conflict worth a
+   dialogue box. mergeLogs and its tombstones are reused whole.
+
+   The difference is which way it points. A log is a record of what happened and
+   only ever grows backwards; a plan is mostly in the future, so it is kept in a
+   window either side of today rather than as the last N days.
+
+   One plan per person, like the shopping list and the tracker. A household plan
+   is a fair thing to want, but it is a different feature: it needs the family
+   to agree on one answer, and this one only needs you to.
+   ══════════════════════════════════════════════════════════════════ */
+const PLAN_KEY = "rb-plan";
+const PLAN_BACK = 35;        // days of gone-by plan kept, so last week is still there
+const PLAN_AHEAD = 120;      // how far ahead you may plan
+
+/* Monday. Asked rather than assumed: the US convention is Sunday, and the rest
+   of the world plus most planning apps start on Monday, which keeps the working
+   week as one block and puts the weekend together at the end. */
+const WEEK_STARTS_ON = 1;
+
+/* The Monday on or before a given day. getDay() counts from Sunday, so the
+   shift is how far this day sits past the start of its own week. */
+const weekStart = (id) => {
+  const [y, m, d] = String(id).split("-").map(Number);
+  if (!y || !m || !d) return id;
+  const at = new Date(y, m - 1, d);
+  at.setDate(at.getDate() - ((at.getDay() - WEEK_STARTS_ON + 7) % 7));
+  return dayId(at);
+};
+
+const weekDays = (start) => Array.from({ length: 7 }, (_, i) => shiftDay(start, i));
+
+/* "September 7 – 13", or "7–13 September", or "30 December – 5 January".
+   Which of those is right depends on where somebody is, and formatRange is the
+   part of Intl that knows: it puts the month where the locale puts it and says
+   the shared parts once. Assembling this by hand produced "7 – September 13"
+   here, which is not how anybody writes a date. */
+function weekLabel(start) {
+  const asDate = (id) => {
+    const [y, m, d] = String(id).split("-").map(Number);
+    return new Date(y, m - 1, d);
+  };
+  const a = asDate(start);
+  const b = asDate(shiftDay(start, 6));
+  const sameYear = a.getFullYear() === b.getFullYear() && a.getFullYear() === new Date().getFullYear();
+  const opts = { day: "numeric", month: "long", ...(sameYear ? {} : { year: "numeric" }) };
+  try {
+    const fmt = new Intl.DateTimeFormat(undefined, opts);
+    /* formatRange is newer than the rest of Intl, so the join below stands in
+       where it is missing rather than letting the header throw. */
+    if (typeof fmt.formatRange === "function") return fmt.formatRange(a, b);
+    return `${fmt.format(a)} – ${fmt.format(b)}`;
+  } catch {
+    return `${start} – ${shiftDay(start, 6)}`;
+  }
+}
+
+/* How the week reads in a column heading: "Mon 15". */
+const weekdayShort = (id) => {
+  const [y, m, d] = String(id).split("-").map(Number);
+  if (!y || !m || !d) return id;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short" });
+};
+const dayNumber = (id) => Number(String(id).split("-")[2]) || "";
+
+/* A window either side of today rather than a tail. Last month stays readable
+   and next term is plannable, and anything outside that is dropped so the plan
+   cannot grow without limit in a store that will eventually refuse it. */
+const prunePlan = (plan, today = dayId()) => {
+  const from = shiftDay(today, -PLAN_BACK);
+  const to = shiftDay(today, PLAN_AHEAD);
+  const cutoff = Date.now() - PLAN_BACK * 86400000;
+  return {
+    days: Object.fromEntries(Object.entries(plan.days || {}).filter(([d]) => d >= from && d <= to)),
+    removed: Object.fromEntries(Object.entries(plan.removed || {}).filter(([, at]) => at > cutoff)),
+  };
+};
+
+/* What a stretch of days asks you to buy.
+   Totalled by recipe, not listed slot by slot, because the shopping list holds
+   one share per recipe and replaces it rather than stacking — so a chicken
+   salad on Tuesday and again on Friday has to arrive as one line of eight
+   servings, not as four twice, which would silently buy half of what is
+   needed. */
+function planShopping(plan, dates) {
+  const totals = new Map();
+  for (const date of dates) {
+    const day = (plan.days || {})[date];
+    if (!day) continue;
+    for (const meal of MEALS) {
+      for (const entry of day[meal.id] || []) {
+        if (!entry || !entry.recipeId) continue;
+        const want = Number(entry.servings) || 0;
+        if (want <= 0) continue;
+        totals.set(entry.recipeId, (totals.get(entry.recipeId) || 0) + want);
+      }
+    }
+  }
+  return [...totals.entries()].map(([recipeId, servings]) => ({ recipeId, servings }));
+}
+
+/* How many meals are on a stretch of days, for the chip in the header. */
+const planCount = (plan, dates) =>
+  dates.reduce((n, date) => {
+    const day = (plan.days || {})[date];
+    return n + (day ? MEALS.reduce((k, meal) => k + (day[meal.id] || []).length, 0) : 0);
+  }, 0);
+
+/* ══════════════════════════════════════════════════════════════════
    Shopping list
    One list per person, following them between their own devices and visible to
    nobody else. localStorage is still where a change lands first — instantly, so
@@ -2403,6 +2519,8 @@ export default function RecipeBox() {
 
   /* ── The day ──────────────────────────────────────────────────────── */
   const [dayLog, setDayLog] = useState(() => asLog(readStore(DAY_KEY, null)));
+  const [plan, setPlan] = useState(() => asLog(readStore(PLAN_KEY, null)));
+  const planRef = useRef(null);
   const [daySync, setDaySync] = useState("unknown");   // unknown | synced | device
   const logRef = useRef(null);
   const bodyRef = useRef(null);
@@ -2413,6 +2531,12 @@ export default function RecipeBox() {
   const [addTo, setAddTo] = useState(null);          // which meal is being added to
   const [addPick, setAddPick] = useState("");
   const [addServings, setAddServings] = useState("1");
+
+  /* Which week the planner is showing, as the date of its Monday. */
+  const [weekOf, setWeekOf] = useState(() => weekStart(dayId()));
+  const [planTo, setPlanTo] = useState(null);      // { date, meal } being added to
+  const [planPick, setPlanPick] = useState("");
+  const [planServes, setPlanServes] = useState("");
 
   /* Which day is on screen. Usually today, but the picker can send it back up to
      a month. Kept apart from `today` deliberately: `today` is what the calendar
@@ -2439,6 +2563,7 @@ export default function RecipeBox() {
 
   logRef.current = dayLog;
   bodyRef.current = body;
+  planRef.current = plan;
 
   const day = dayLog.days[viewDay] || emptyDay();
   /* Separate from `day` on purpose. The chip in the header answers "how am I
@@ -2449,6 +2574,11 @@ export default function RecipeBox() {
   const shape = body ? bmi(body) : null;
   const totals = dayTotals(day, box.recipes);
   const oldestDay = earliestDay(today);
+  const thisWeek = weekStart(today);
+  const planned = planCount(plan, weekDays(weekOf));
+  /* The chip in the header is about this week, always, however far ahead the
+     planner itself has been scrolled. */
+  const thisWeekPlanned = planCount(plan, weekDays(thisWeek));
   const onToday = viewDay === today;
 
   /* Writes land on the day being looked at, not on today. That is what makes
@@ -2462,6 +2592,36 @@ export default function RecipeBox() {
     setDayLog(log);
     if (!writeStore(DAY_KEY, log)) flash("Couldn't save that day on this device — its storage may be full or switched off", 7000);
     queueDaySync();
+  };
+
+  /* Adding to, or taking off, the plan. Same tombstone bookkeeping as the day
+     log, for the same reason: without it, taking something off on a phone is
+     undone the moment a laptop that still remembers it syncs. */
+  const savePlan = (date, next, removedIds = []) => {
+    const removed = { ...plan.removed };
+    for (const id of removedIds) removed[id] = Date.now();
+    const updated = prunePlan({ days: { ...plan.days, [date]: next }, removed }, today);
+    planRef.current = updated;
+    setPlan(updated);
+    if (!writeStore(PLAN_KEY, updated)) flash("Couldn't save the plan on this device — its storage may be full or switched off", 7000);
+    queueDaySync();
+  };
+
+  const planFor = (date) => plan.days[date] || emptyDay();
+
+  const addToPlan = (date, mealId, recipeId, servings) => {
+    const day = planFor(date);
+    const entry = {
+      id: `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      recipeId,
+      servings: Math.max(1, Number(servings) || 1),
+    };
+    savePlan(date, { ...day, [mealId]: [...(day[mealId] || []), entry] });
+  };
+
+  const removeFromPlan = (date, mealId, entryId) => {
+    const day = planFor(date);
+    savePlan(date, { ...day, [mealId]: (day[mealId] || []).filter((e) => e.id !== entryId) }, [entryId]);
   };
 
   /* Three ways into a meal: something from the box, something looked up, or
@@ -2616,6 +2776,10 @@ export default function RecipeBox() {
      overwritten so a phone waking up cannot undo a laptop's lunch. */
   const DAY_SYNC = "day-log";
   const BODY_SYNC = "body";
+  /* The plan rides the same channel. It is the same person, the same debounce
+     and the same wake-up, so a third key costs one more round trip rather than
+     a second set of everything. */
+  const PLAN_SYNC = "meal-plan";
   const daySyncTimer = useRef(null);
   const daySyncing = useRef(false);
   const daySyncAgain = useRef(false);
@@ -2630,6 +2794,9 @@ export default function RecipeBox() {
       catch (err) { if (!/not found/i.test(String(err && err.message))) throw err; }
       try { theirBody = JSON.parse((await window.storage.get(BODY_SYNC)).value); }
       catch (err) { if (!/not found/i.test(String(err && err.message))) throw err; }
+      let theirPlan = null;
+      try { theirPlan = asLog(JSON.parse((await window.storage.get(PLAN_SYNC)).value)); }
+      catch (err) { if (!/not found/i.test(String(err && err.message))) throw err; }
 
       const mineLog = logRef.current;
       const mergedLog = theirLog ? mergeLogs(mineLog, theirLog) : mineLog;
@@ -2640,6 +2807,19 @@ export default function RecipeBox() {
       }
       if (!theirLog || JSON.stringify(mergedLog) !== JSON.stringify(theirLog)) {
         await window.storage.set(DAY_SYNC, JSON.stringify(mergedLog));
+      }
+
+      /* mergeLogs whole, because a plan has the same shape and the same
+         question to settle: is this entry still there, on either device. */
+      const minePlan = planRef.current;
+      const mergedPlan = theirPlan ? mergeLogs(minePlan, theirPlan) : minePlan;
+      if (JSON.stringify(mergedPlan) !== JSON.stringify(minePlan)) {
+        planRef.current = mergedPlan;
+        setPlan(mergedPlan);
+        writeStore(PLAN_KEY, mergedPlan);
+      }
+      if (!theirPlan || JSON.stringify(mergedPlan) !== JSON.stringify(theirPlan)) {
+        await window.storage.set(PLAN_SYNC, JSON.stringify(mergedPlan));
       }
 
       const mineBody = bodyRef.current;
@@ -2684,6 +2864,11 @@ export default function RecipeBox() {
     setView("today");
     window.scrollTo(0, 0);
   };
+  const openPlan = () => {
+    if (view !== "plan") shoppingFrom.current = view;
+    setView("plan");
+    window.scrollTo(0, 0);
+  };
   const openShopping = () => {
     if (view !== "shopping") shoppingFrom.current = view;
     setConfirmClear(false);
@@ -2719,6 +2904,51 @@ export default function RecipeBox() {
     if (view === "import") { setStaged([]); setImportErrors([]); }
     if (view !== "list") setView("list");
     window.scrollTo({ top: 0, behavior: view === "list" ? "smooth" : "auto" });
+  };
+
+  /* The week, turned into a shop.
+     One pass, one write: every recipe planned that week arrives at the total
+     servings the week asks for, which is why planShopping totals by recipe
+     first. Going slot by slot would replace each recipe's share six times over
+     and leave only the last one standing. */
+  const planToList = () => {
+    const wanted = planShopping(plan, weekDays(weekOf));
+    if (!wanted.length) {
+      flash("Nothing is planned for this week yet");
+      return;
+    }
+    let put = 0;
+    let gone = 0;
+    updateList((l) => {
+      let next = l;
+      for (const { recipeId, servings } of wanted) {
+        const recipe = box.recipes.find((r) => r.id === recipeId);
+        /* A recipe somebody deleted after planning it. The plan keeps the slot
+           so it is visible and can be cleared, but there is nothing to buy. */
+        if (!recipe) { gone += 1; continue; }
+        const base = servingsCount(recipe.servings);
+        const lines = recipe.ingredients.map((ing) => scaleLine(ing, base ? servings / base : 1));
+        next = withRecipe(next, recipe, lines, servings);
+        put += 1;
+      }
+      return next;
+    });
+    flash(
+      put
+        ? `${put} ${put === 1 ? "recipe is" : "recipes are"} on the shopping list${gone ? `, and ${gone} could not be found` : ""}`
+        : "None of this week's recipes are in the box any more",
+      gone ? 7000 : 4000,
+    );
+  };
+
+  /* Tapping a planned meal opens the recipe, and Back comes here rather than to
+     the list — somebody checking what Thursday needs is still planning. */
+  const openFromPlan = (recipe) => {
+    shoppingFrom.current = "plan";
+    setOpenId(recipe.id);
+    setFactor(1);
+    setView("detail");
+    window.scrollTo(0, 0);
   };
 
   const addRecipeToList = (recipe) => {
@@ -3137,6 +3367,73 @@ export default function RecipeBox() {
     .rb-lately-open:hover .rb-lately-what { text-decoration: underline; text-underline-offset: 2px; }    /* The day's tally: four figures across the top, each with how far through
        its target the day has got. Over the target turns the bar, rather than
        letting it run past the end where it would say nothing. */
+    /* The week. Seven columns where there is room, and a single column of days
+       on a phone — a 7-wide grid on a 375px screen gives each day 40 pixels,
+       which is not a column, it is a stripe. */
+    .rb-week { display: grid; gap: 10px; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+    @media (max-width: 900px) { .rb-week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .rb-weekday {
+      display: flex; flex-direction: column; min-width: 0;
+      border: 1px solid var(--card-edge); border-radius: 2px; background: var(--card-bg);
+    }
+    .rb-weekday.is-today { border-color: var(--card-accent); }
+    .rb-weekday-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+      padding: 9px 10px 7px; border-bottom: 1px solid var(--card-edge);
+    }
+    .rb-weekday-name { font: 600 9.5px/1 ${UI}; letter-spacing: .12em; text-transform: uppercase; color: var(--card-muted); }
+    .rb-weekday.is-today .rb-weekday-name { color: var(--card-accent); }
+    .rb-weekday-num { font: 400 15px/1 ${DISPLAY}; color: var(--card-text); }
+    .rb-weekday-body { flex: 1; padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; min-height: 64px; }
+    .rb-weekday-empty { margin: 0; font: 400 12px/1.5 ${UI}; color: var(--card-muted); opacity: .7; }
+    .rb-weekday-add {
+      margin: 0 8px 8px; padding: 6px 8px; border: 1px dashed var(--card-edge); border-radius: 2px;
+      background: transparent; color: var(--card-muted); font: 600 11.5px/1 ${UI}; cursor: pointer;
+    }
+    .rb-weekday-add:hover { border-color: var(--card-accent); color: var(--card-accent); border-style: solid; }
+
+    .rb-planmeal { display: flex; flex-direction: column; gap: 4px; }
+    .rb-planmeal-label { margin: 0; font: 600 9px/1 ${UI}; letter-spacing: .11em; text-transform: uppercase; color: var(--card-muted); }
+    .rb-planitem { display: flex; align-items: flex-start; gap: 4px; }
+    .rb-planitem-name {
+      flex: 1; min-width: 0; text-align: left; background: transparent; border: none; padding: 2px 0;
+      color: var(--card-text); font: 400 13px/1.35 ${UI}; cursor: pointer;
+    }
+    .rb-planitem-name:disabled { color: var(--card-muted); cursor: default; font-style: italic; }
+    .rb-planitem-name:hover:not(:disabled) { color: var(--card-accent); }
+    .rb-planitem-serves { display: block; font: 400 11px/1.4 ${UI}; color: var(--card-muted); }
+    .rb-planitem-off {
+      flex: none; background: transparent; border: none; padding: 0 2px; line-height: 1;
+      color: var(--card-muted); font-size: 15px; cursor: pointer;
+    }
+    .rb-planitem-off:hover { color: var(--card-danger); }
+
+    .rb-planadd { padding: 0 8px 10px; display: flex; flex-direction: column; gap: 7px; }
+    .rb-planadd-meals { display: flex; flex-wrap: wrap; gap: 4px; }
+    .rb-planadd-meal {
+      border: 1px solid var(--card-edge); border-radius: 999px; background: transparent;
+      padding: 4px 9px; color: var(--card-muted); font: 600 10.5px/1 ${UI}; cursor: pointer;
+    }
+    .rb-planadd-meal.is-on { border-color: var(--card-accent); color: var(--card-accent); }
+    .rb-planadd-pick, .rb-planadd-serves input {
+      width: 100%; box-sizing: border-box; border: 1px solid var(--card-edge); border-radius: 2px;
+      background: var(--card-bg); color: var(--card-text); font: 400 12.5px/1.4 ${UI}; padding: 6px 7px;
+    }
+    .rb-planadd-row { display: flex; align-items: flex-end; gap: 6px; }
+    .rb-planadd-serves { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+    .rb-planadd-serves span { font: 600 9px/1 ${UI}; letter-spacing: .11em; text-transform: uppercase; color: var(--card-muted); }
+
+    /* One day per row on a phone. The min-height that gives a column some body
+       on a wide screen just makes seven tall empty boxes to scroll past here,
+       so an untouched day shrinks to its own height. */
+    @media (max-width: 560px) {
+      .rb-week { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+      .rb-weekday-body { min-height: 0; padding: 7px 10px; }
+      .rb-weekday-head { padding: 7px 10px 6px; }
+    }
+
+    .rb-daybar-sub { margin: 0; font: 400 12.5px/1.4 ${UI}; color: var(--card-muted); }
+
     /* The day picker. Arrows either side of the date so a thumb can walk back
        through the week without aiming, and the calendar underneath for the jump
        somebody has in mind. */
@@ -3496,6 +3793,9 @@ export default function RecipeBox() {
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={openPlan}>
+              <span aria-hidden style={{ marginRight: 7 }}>🗓</span>Meal plan{thisWeekPlanned ? ` (${thisWeekPlanned})` : ""}
+            </button>
             <button className="rb-btn rb-focus" style={btnGhost} onClick={openShopping}>
               <span aria-hidden style={{ marginRight: 7 }}>🛒</span>Shopping list{toBuy ? ` (${toBuy})` : ""}
             </button>
@@ -3853,6 +4153,220 @@ export default function RecipeBox() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* ═══════ THE WEEK'S PLAN ═══════ */}
+        {!loading && view === "plan" && (
+          <article className="rb-sheet" style={{ ...sheet, maxWidth: 1040 }}>
+            <Grain card />
+            <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 36px" }}>
+              <button
+                className="rb-focus"
+                onClick={leaveShopping}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 16,
+                  background: "transparent", border: "none", padding: "4px 0",
+                  color: "var(--card-accent)", font: `600 13.5px/1 ${UI}`,
+                }}
+              >
+                <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
+                Back to recipes
+              </button>
+
+              <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Meal plan</h2>
+              <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 18px", maxWidth: "62ch" }}>
+                What you mean to cook this week. When it looks right, send the whole week to your shopping list in one go.
+                {daySync === "synced"
+                  ? " It follows you between your own devices, and nobody else in the family can see it."
+                  : daySync === "device"
+                  ? " Saved on this device. It couldn't reach your account just now, so it will catch up later."
+                  : ""}
+              </p>
+
+              {/* ── which week ── */}
+              <div className="rb-daybar">
+                <div className="rb-daynav">
+                  <button
+                    type="button"
+                    className="rb-daystep rb-focus"
+                    aria-label="The week before"
+                    onClick={() => setWeekOf(shiftDay(weekOf, -7))}
+                  >
+                    <span aria-hidden>←</span>
+                  </button>
+                  <div className="rb-daybar-when">
+                    <p className="rb-daybar-name">{weekLabel(weekOf)}</p>
+                    <p className="rb-daybar-sub">
+                      {weekOf === thisWeek ? "This week" : weekOf === shiftDay(thisWeek, 7) ? "Next week" : weekOf < thisWeek ? "Gone by" : "Ahead"}
+                      {planned ? ` · ${planned} ${planned === 1 ? "meal" : "meals"}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rb-daystep rb-focus"
+                    aria-label="The week after"
+                    onClick={() => setWeekOf(shiftDay(weekOf, 7))}
+                  >
+                    <span aria-hidden>→</span>
+                  </button>
+                </div>
+
+                {weekOf !== thisWeek && (
+                  <button type="button" className="rb-dayback rb-focus" onClick={() => setWeekOf(thisWeek)}>
+                    Back to this week
+                  </button>
+                )}
+              </div>
+
+              {/* ── the week ── */}
+              <div className="rb-week">
+                {weekDays(weekOf).map((date) => {
+                  const dayPlan = planFor(date);
+                  const isToday = date === today;
+                  const count = MEALS.reduce((n, meal) => n + (dayPlan[meal.id] || []).length, 0);
+                  return (
+                    <section key={date} className={`rb-weekday${isToday ? " is-today" : ""}`}>
+                      <header className="rb-weekday-head">
+                        <span className="rb-weekday-name">{weekdayShort(date)}</span>
+                        <span className="rb-weekday-num rb-num">{dayNumber(date)}</span>
+                      </header>
+
+                      <div className="rb-weekday-body">
+                        {MEALS.map((meal) => {
+                          const entries = dayPlan[meal.id] || [];
+                          if (!entries.length) return null;
+                          return (
+                            <div key={meal.id} className="rb-planmeal">
+                              <p className="rb-planmeal-label">{meal.label}</p>
+                              {entries.map((entry) => {
+                                const recipe = box.recipes.find((r) => r.id === entry.recipeId);
+                                return (
+                                  <div key={entry.id} className="rb-planitem">
+                                    <button
+                                      type="button"
+                                      className="rb-planitem-name rb-focus"
+                                      disabled={!recipe}
+                                      title={recipe ? "Open this recipe" : "This recipe is no longer in the box"}
+                                      onClick={() => recipe && openFromPlan(recipe)}
+                                    >
+                                      {recipe ? recipe.title : "No longer in the box"}
+                                      <span className="rb-planitem-serves">
+                                        {entry.servings} {entry.servings === 1 ? "serving" : "servings"}
+                                      </span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="rb-planitem-off rb-focus"
+                                      aria-label={`Take ${recipe ? recipe.title : "this"} off ${meal.label} on ${date}`}
+                                      onClick={() => removeFromPlan(date, meal.id, entry.id)}
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+
+                        {!count && <p className="rb-weekday-empty">Nothing yet</p>}
+                      </div>
+
+                      <button
+                        type="button"
+                        className="rb-weekday-add rb-focus"
+                        onClick={() => { setPlanTo(planTo && planTo.date === date ? null : { date, meal: "dinner" }); setPlanPick(""); setPlanServes(""); }}
+                      >
+                        {planTo && planTo.date === date ? "Close" : "Add"}
+                      </button>
+
+                      {planTo && planTo.date === date && (
+                        <div className="rb-planadd">
+                          <div className="rb-planadd-meals">
+                            {MEALS.map((meal) => (
+                              <button
+                                key={meal.id}
+                                type="button"
+                                className={`rb-planadd-meal rb-focus${planTo.meal === meal.id ? " is-on" : ""}`}
+                                onClick={() => setPlanTo({ date, meal: meal.id })}
+                              >
+                                {meal.label}
+                              </button>
+                            ))}
+                          </div>
+                          <select
+                            className="rb-planadd-pick rb-focus"
+                            aria-label="Which recipe"
+                            value={planPick}
+                            onChange={(e) => {
+                              setPlanPick(e.target.value);
+                              /* Default to what the recipe itself makes, so the
+                                 common case is one tap and the shopping list
+                                 gets a sensible number without being told. */
+                              const r = box.recipes.find((x) => x.id === e.target.value);
+                              setPlanServes(String(servingsCount(r?.servings) || 1));
+                            }}
+                          >
+                            <option value="">Pick a recipe…</option>
+                            {[...box.recipes].sort((a, b) => a.title.localeCompare(b.title)).map((r) => (
+                              <option key={r.id} value={r.id}>{r.title}</option>
+                            ))}
+                          </select>
+                          <div className="rb-planadd-row">
+                            <label className="rb-planadd-serves">
+                              <span>Servings</span>
+                              <input
+                                className="rb-focus"
+                                type="number"
+                                min="1"
+                                max="99"
+                                inputMode="numeric"
+                                value={planServes}
+                                onChange={(e) => setPlanServes(e.target.value)}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="rb-btn rb-focus"
+                              style={{ ...btnPrimary, padding: "8px 14px", fontSize: 13 }}
+                              disabled={!planPick}
+                              onClick={() => {
+                                addToPlan(date, planTo.meal, planPick, planServes);
+                                setPlanTo(null);
+                                setPlanPick("");
+                                setPlanServes("");
+                              }}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+
+              {/* ── the shop ── */}
+              <div className="rb-actbar" style={{ marginTop: 26 }}>
+                <button
+                  className="rb-btn rb-focus"
+                  style={btnPrimary}
+                  disabled={!planned}
+                  onClick={planToList}
+                >
+                  Send this week to the shopping list
+                </button>
+                <button className="rb-btn rb-focus" style={btnQuiet} onClick={openShopping}>
+                  Open the shopping list{toBuy ? ` (${toBuy})` : ""}
+                </button>
+              </div>
+              <p style={{ font: `400 12.5px/1.6 ${UI}`, color: "var(--card-muted)", margin: "10px 0 0", maxWidth: "62ch" }}>
+                A recipe planned more than once this week is added at the total the week asks for, not once per night.
+                Anything already on the list from that recipe is replaced rather than doubled.
+              </p>
+            </div>
+          </article>
         )}
 
         {/* ═══════ DETAIL ═══════ */}
