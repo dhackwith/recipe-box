@@ -84,6 +84,20 @@ is("the key went in the query", new URL(lastRequest.href).searchParams.get("api_
 is("so did the search", new URL(lastRequest.href).searchParams.get("query"), "celery");
 is("all four datasets", new URL(lastRequest.href).searchParams.getAll("dataType").length, 4);
 
+/* A key pasted from a dashboard usually arrives with a newline on it, and
+   data.gov rejects the whole key for the one invisible character. Devon's was
+   41 characters where the format is 40. */
+console.log("\n— a key pasted with a newline on it —");
+/* A Response can only be read once, so this section hands out a fresh one per
+   call rather than the same body three times. */
+upstream = () => reply(celery);
+await ask("celery", { FDC_API_KEY: "  a-real-key\n" });
+is("a key with whitespace around it is trimmed before use",
+  new URL(lastRequest.href).searchParams.get("api_key"), "a-real-key");
+is("...and is still treated as configured", (await ask("celery", { FDC_API_KEY: " a-real-key " })).data?.demo, false);
+is("a key that is only whitespace falls back to the demo one",
+  (await ask("celery", { FDC_API_KEY: "   " })).data?.demo, true);
+
 console.log("\n— who may ask —");
 is("no token, no search", (await ask("celery", { FDC_API_KEY: "k" }, false)).status, 403);
 is("...and that refusal is readable", (await ask("celery", { FDC_API_KEY: "k" }, false)).data?.error?.length > 0, true);

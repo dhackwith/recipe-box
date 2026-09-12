@@ -58,7 +58,13 @@ async function search({ request, env }) {
   if (q.length < 2) return json({ results: [] });
   if (q.length > 100) return json({ error: "That search is too long" }, 400);
 
-  const key = env.FDC_API_KEY || "DEMO_KEY";
+  /* Trimmed, because a key pasted into a dashboard field arrives with a newline
+     on it more often than not, and data.gov rejects the whole thing for the one
+     stray character. Forty characters of key and one invisible one is a wrong
+     answer nobody can see, so it is dealt with here rather than left as a thing
+     somebody has to notice. */
+  const key = String(env.FDC_API_KEY || "").trim() || "DEMO_KEY";
+  const configured = key !== "DEMO_KEY";
   const url = new URL(FDC);
   url.searchParams.set("api_key", key);
   url.searchParams.set("query", q);
@@ -102,7 +108,7 @@ async function search({ request, env }) {
 
   if (code === "API_KEY_INVALID" || code === "API_KEY_MISSING" || res.status === 403) {
     return json({
-      error: env.FDC_API_KEY
+      error: configured
         ? "FoodData Central rejected the key. Check FDC_API_KEY in the Pages project — and that it is set for the environment this deployment is in, and that the project has been redeployed since."
         : "No food database key is set. Add FDC_API_KEY in the Pages project.",
     }, 502);
@@ -110,7 +116,7 @@ async function search({ request, env }) {
 
   if (code === "OVER_RATE_LIMIT" || res.status === 429) {
     return json({
-      error: env.FDC_API_KEY
+      error: configured
         ? "The food database has had too many requests this hour — try again shortly"
         : "This is using the shared demo key, which only allows a few searches an hour. Set FDC_API_KEY in the Pages project for the full allowance.",
     }, 429);
@@ -119,5 +125,5 @@ async function search({ request, env }) {
   if (!res.ok) return json({ error: `The food database answered with an error (${res.status})` }, 502);
   if (!payload) return json({ error: "The food database sent something unreadable" }, 502);
 
-  return json({ results: readSearch(payload, MAX_RESULTS), demo: !env.FDC_API_KEY }, 200, CACHE_SECONDS);
+  return json({ results: readSearch(payload, MAX_RESULTS), demo: !configured }, 200, CACHE_SECONDS);
 }
