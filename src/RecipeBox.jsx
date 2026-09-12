@@ -179,7 +179,14 @@ const STORAGE_KEY = "recipe-box";
    when a recipe is opened.
    ══════════════════════════════════════════════════════════════════ */
 const FULL_MAX = 1400;
-const THUMB_MAX = 300;
+/* The preview used to be 300px at quality 0.6, which was ample while a card
+   showed it about 160px wide. A tile now runs to roughly 340px, and doubles
+   that again on a retina screen, so the old cut was being stretched past twice
+   its size and every JPEG artifact came with it. 640 covers a tile on a 2x
+   display; the preview still lives inside the recipe record, which is read on
+   every visit, so this is as large as it should get. */
+const THUMB_MAX = 640;
+const THUMB_Q = 0.72;
 const imageKey = (id) => `image:${id}`;
 
 async function loadBitmap(file) {
@@ -213,10 +220,21 @@ async function shrink(source, maxDim, quality) {
   return canvas.toDataURL("image/jpeg", quality);
 }
 
+/* Load a data URL back into something canvas will draw. Only ever called with
+   a data: URL from our own storage, so the canvas is never tainted and
+   toDataURL keeps working — a remote photo would poison it. */
+const imageFromSrc = (src) =>
+  new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error("could not read that photo"));
+    img.src = src;
+  });
+
 async function prepPhoto(file) {
   const bmp = await loadBitmap(file);
   const full = await shrink(bmp, FULL_MAX, 0.78);
-  const thumb = await shrink(bmp, THUMB_MAX, 0.6);
+  const thumb = await shrink(bmp, THUMB_MAX, THUMB_Q);
   bmp.close?.();
   return { full, thumb };
 }
@@ -1706,6 +1724,52 @@ export default function RecipeBox() {
     flash((await saveBox(next)) ? "Saved" : "Couldn't save — that change is only on this screen");
   };
 
+  /* Photos uploaded before the previews were enlarged still carry the old
+     300px cut, and no amount of new code re-cuts them on its own. The full-size
+     copy is already in storage, so the preview can just be taken again — no
+     re-uploading, nothing destroyed, and a failure part way through simply
+     leaves the rest as they were. */
+  const [sharpening, setSharpening] = useState(false);
+  const sharpenable = box.recipes.filter((r) => r.thumb && !r.imageUrl).length;
+
+  const sharpenPreviews = async () => {
+    setSharpening(true);
+    try {
+      const recipes = [...box.recipes];
+      let done = 0;
+      let missing = 0;
+      for (let i = 0; i < recipes.length; i++) {
+        const r = recipes[i];
+        /* a URL photo is already shown full size in the tile */
+        if (!r.thumb || r.imageUrl) continue;
+        let full = null;
+        try { full = (await window.storage?.get(imageKey(r.id), true))?.value || null; } catch { full = null; }
+        if (!full) { missing++; continue; }
+        try {
+          recipes[i] = { ...r, thumb: await shrink(await imageFromSrc(full), THUMB_MAX, THUMB_Q) };
+          done++;
+        } catch { missing++; }
+      }
+      if (!done) {
+        flash(missing
+          ? `No full-size copy stored for ${missing} ${missing === 1 ? "photo" : "photos"}, so there is nothing sharper to cut from`
+          : "Nothing needed sharpening", 6000);
+        return;
+      }
+      const next = { ...box, recipes };
+      setBox(next);
+      const saved = await saveBox(next);
+      flash(
+        saved
+          ? `Sharpened ${done} ${done === 1 ? "preview" : "previews"}${missing ? `, ${missing} left alone` : ""}`
+          : "Sharpened them on this screen, but the save didn't go through",
+        6000,
+      );
+    } finally {
+      setSharpening(false);
+    }
+  };
+
   const openRecipe = box.recipes.find((r) => r.id === openId);
   const baseServings = servingsCount(openRecipe?.servings);
   /* Nutrition is stored for one serving. The panel describes the batch actually
@@ -2568,6 +2632,14 @@ export default function RecipeBox() {
                   <span>{exporting ? "Exporting…" : "Export all recipes"}</span>
                   <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>backup</span>
                 </button>
+                {sharpenable > 0 && (
+                  <button className="rb-focus" onClick={() => { sharpenPreviews(); close(); }} disabled={sharpening} style={menuRow(false)}>
+                    <span>{sharpening ? "Sharpening…" : "Sharpen photo previews"}</span>
+                    <span aria-hidden style={{ color: "var(--card-muted)", fontSize: 12 }}>
+                      {sharpenable} {sharpenable === 1 ? "photo" : "photos"}
+                    </span>
+                  </button>
+                )}
                 <button className="rb-focus" onClick={() => { setMenuPane("news"); markNewsRead(); }} style={menuRow(false)}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                     What's new
@@ -2835,8 +2907,8 @@ export default function RecipeBox() {
                     className="rb-tile rb-focus"
                   >
                     <div className="rb-shot">
-                      {(r.thumb || r.imageUrl)
-                        ? <img src={r.thumb || r.imageUrl} alt="" loading="lazy" />
+                      {(r.imageUrl || r.thumb)
+                        ? <img src={r.imageUrl || r.thumb} alt="" loading="lazy" />
                         : <span className="rb-noshot">no photo yet</span>}
                     </div>
                     <h3 style={{ font: `400 20px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "12px 0 2px", letterSpacing: "-0.01em" }}>{r.title}</h3>
