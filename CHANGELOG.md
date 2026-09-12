@@ -13,7 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
-- **Keep track of what you have eaten.** A new Today page logs meals from the box across breakfast, lunch, dinner and snacks, adding up calories and macros as you go, and will estimate what a day needs from your height, weight, age and how much you move. Everything you put into it stays on that device — not in the shared box, and not on a server.
+- **Keep track of what you have eaten.** A new daily nutrition tracker logs meals from the box across breakfast, lunch, dinner and snacks, adding up calories and macros as you go, and will estimate what a day needs from your height, weight, age and how much you move. Everything you put into it stays on that device — not in the shared box, and not on a server.
 - **See what everyone has been cooking.** The foot of the recipes page now lists the newest notes and made-its from across the whole box, with the most recent given the most room. Tap one to open the recipe it is about.
 
 ## 2026-09-11

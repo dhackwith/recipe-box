@@ -15,8 +15,9 @@
  *     why rather than quietly showing something lower.
  */
 
-/* Mifflin-St Jeor. The usual starting point, and about as good as an equation
-   gets without measuring somebody directly. */
+/* Mifflin-St Jeor, the equation published in 1990 as a better fit for modern
+   lifestyles than Harris-Benedict, and the one TDEE calculators have used since.
+   About as good as an equation gets without measuring somebody directly. */
 export function restingBurn({ sex, kg, cm, age }) {
   if (!(kg > 0) || !(cm > 0) || !(age > 0)) return null;
   const base = 10 * kg + 6.25 * cm - 5 * age;
@@ -28,11 +29,19 @@ export function restingBurn({ sex, kg, cm, age }) {
   return base - 78;
 }
 
+/* The five factors every TDEE calculator uses, with the descriptions they are
+   defined by. Total daily burn is the resting figure times one of these.
+
+   The fifth was missing before, and the fourth was carrying its description:
+   "very active" was reading "hard exercise 6–7 days, or physical work", which
+   are two different levels — 1.725 and 1.9. Somebody doing manual labour was
+   being told to eat for six gym sessions instead. */
 export const ACTIVITY = [
-  { id: "sedentary", label: "Mostly sitting", note: "Desk work, little exercise", factor: 1.2 },
-  { id: "light", label: "Lightly active", note: "On your feet some, or 1–3 workouts a week", factor: 1.375 },
-  { id: "moderate", label: "Moderately active", note: "3–5 workouts a week", factor: 1.55 },
-  { id: "active", label: "Very active", note: "Hard exercise 6–7 days, or physical work", factor: 1.725 },
+  { id: "sedentary", label: "Sedentary", note: "Desk job, little or no exercise", factor: 1.2 },
+  { id: "light", label: "Lightly active", note: "Light exercise 1–3 days a week", factor: 1.375 },
+  { id: "moderate", label: "Moderately active", note: "Moderate exercise 3–5 days a week", factor: 1.55 },
+  { id: "active", label: "Very active", note: "Hard exercise 6–7 days a week", factor: 1.725 },
+  { id: "extra", label: "Extra active", note: "A physical job, or training twice a day", factor: 1.9 },
 ];
 
 export const GOALS = [

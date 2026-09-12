@@ -97,7 +97,11 @@ is("...and back again", cmToFeetInches(177.8), { feet: 5, inches: 10 });
 is("a round metre eighty", cmToFeetInches(182.88), { feet: 6, inches: 0 });
 
 console.log("\n— the lists the form offers —");
-is("four levels of activity", ACTIVITY.length, 4);
+is("the five standard levels", ACTIVITY.map((a) => a.factor), [1.2, 1.375, 1.55, 1.725, 1.9]);
+is("...named the way every calculator names them",
+  ACTIVITY.map((a) => a.label), ["Sedentary", "Lightly active", "Moderately active", "Very active", "Extra active"]);
+is("sedentary is the floor, extra active the ceiling",
+  [ACTIVITY[0].id, ACTIVITY[ACTIVITY.length - 1].id], ["sedentary", "extra"]);
 is("three goals, none of them drastic", GOALS.map((g) => g.id), ["maintain", "lose", "gain"]);
 is("nothing cuts more than fifteen per cent", Math.min(...GOALS.map((g) => g.adjust)) >= 0.85, true);
 

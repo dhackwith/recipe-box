@@ -383,7 +383,9 @@ const scaleServings = (s, factor) => {
 };
 
 /* ══════════════════════════════════════════════════════════════════
-   The day
+   The daily nutrition tracker
+   Called "the day" throughout the code, which is what it holds: one date's
+   meals and the figures they add up to.
    What was eaten, and roughly what a day needs. Both live in this browser and
    nowhere else. That is the whole point rather than a shortcut: the recipe box
    is shared with the family, the shopping list is private to a person, and
@@ -3148,7 +3150,7 @@ export default function RecipeBox() {
             </button>
 
             <button className="rb-btn rb-focus" style={btnGhost} onClick={openToday}>
-              <span aria-hidden style={{ marginRight: 7 }}>◷</span>Today{totals.calories ? ` (${totals.calories})` : ""}
+              <span aria-hidden style={{ marginRight: 7 }}>◷</span>Daily nutrition{totals.calories ? ` (${totals.calories})` : ""}
             </button>
 
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
@@ -3520,7 +3522,7 @@ export default function RecipeBox() {
                 Back to recipes
               </button>
 
-              <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Today</h2>
+              <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Daily nutrition tracker</h2>
               <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 22px", maxWidth: "60ch" }}>
                 What you have eaten from the box today, and roughly what it came to.
                 Kept on this device only — not in the shared box, and not on anybody's server.
