@@ -655,28 +655,59 @@ const clock = (s) => {
 };
 const durLabel = (s) => (s >= 3600 ? `${Math.round((s / 3600) * 10) / 10} hr` : s >= 60 ? `${Math.round(s / 60)} min` : `${s} sec`);
 
-function beep() {
+/* ══════════════════════════════════════════════════════════════════
+   The alarm
+   Marimba: three notes up a chord, each with a brief flick of its fourth
+   harmonic for the knock of the mallet. Generated rather than loaded, so there
+   is no file to fetch and it still rings with the wifi off.
+
+   One AudioContext for the life of the page, not one per ring. A browser will
+   only allow a handful at once, and a timer that keeps chiming would run
+   through them. It is opened when a timer is started, which is a real tap and
+   therefore the moment a browser will let sound be unlocked at all.
+   ══════════════════════════════════════════════════════════════════ */
+let audioCtx = null;
+function audio() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    [0, 0.45, 0.9].forEach((offset) => {
+    if (!Ctx) return null;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === "suspended") audioCtx.resume?.();
+    return audioCtx;
+  } catch { return null; }
+}
+
+function alarm() {
+  const ctx = audio();
+  if (!ctx) return;
+  try {
+    const at0 = ctx.currentTime + 0.04;
+    const voice = (freq, at, dur, peak, attack) => {
       const o = ctx.createOscillator();
       const g = ctx.createGain();
       o.type = "sine";
-      o.frequency.value = 784;
-      o.connect(g);
-      g.connect(ctx.destination);
-      const t0 = ctx.currentTime + offset;
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
-      o.start(t0);
-      o.stop(t0 + 0.35);
+      o.frequency.setValueAtTime(freq, at);
+      o.connect(g).connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(peak, at + attack);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+      o.start(at);
+      o.stop(at + dur + 0.02);
+    };
+    [523.25, 659.25, 783.99].forEach((f, i) => {
+      const at = at0 + i * 0.13;
+      voice(f, at, 0.7, 0.26, 0.006);
+      voice(f * 4, at, 0.16, 0.07, 0.004);
     });
-    setTimeout(() => ctx.close?.(), 2000);
-  } catch {}
+  } catch { /* a browser that will not make noise is not worth breaking over */ }
 }
+
+/* A finished timer keeps ringing until somebody clears it — the point of the
+   whole thing is the pan you walked away from. It stops making noise after
+   RING_FOR, because a tab left open should not still be chiming at midnight;
+   the flashing and the chip stay until cleared either way. */
+const RING_EVERY = 5000;
+const RING_FOR = 5 * 60 * 1000;
 
 /* ══════════════════════════════════════════════════════════════════
    Import parsing — markdown, frontmatter, JSON (incl. schema.org)
@@ -1668,6 +1699,20 @@ export default function RecipeBox() {
     })();
   }, []);
 
+  /* Whether anything is currently owed attention. One flag for every finished
+     timer rather than one per timer: two pans going off at once should not ring
+     twice as fast. */
+  const ringing = timers.some((t) => t.remaining === 0);
+
+  useEffect(() => {
+    if (!ringing) return;
+    const since = Date.now();
+    const id = setInterval(() => {
+      if (Date.now() - since > RING_FOR) { clearInterval(id); return; }
+      alarm();
+    }, RING_EVERY);
+    return () => clearInterval(id);
+  }, [ringing]);
   /* timer tick — one interval for the life of the app. Returns the same array
      reference when nothing changed, so React skips the re-render entirely. */
   useEffect(() => {
@@ -1682,7 +1727,7 @@ export default function RecipeBox() {
           changed = true;
           if (remaining === 0 && !firedRef.current.has(t.id)) {
             firedRef.current.add(t.id);
-            beep();
+            alarm();
           }
           return { ...t, remaining, running: remaining > 0 };
         });
@@ -2165,6 +2210,8 @@ export default function RecipeBox() {
      step that is already counting does nothing; a different step is free to
      run alongside it. */
   const startTimer = (label, seconds, key) => {
+    /* Opening it here, inside the tap, is what lets it make a sound later. */
+    audio();
     setTimers((prev) => (prev.some((t) => t.key === key) ? prev : [
       ...prev,
       { id: `${Date.now()}-${Math.random()}`, key, label, total: seconds, remaining: seconds, running: true, endsAt: Date.now() + seconds * 1000 },
@@ -2460,7 +2507,23 @@ export default function RecipeBox() {
     .rb-entry-who > span:first-child { color: var(--card-text); font-weight: 600; }
     .rb-entry-text { margin: 5px 0 0; font: 400 15px/1.7 ${PROSE}; color: var(--card-text); white-space: pre-wrap; }
     .rb-entry-x { background: none; border: 0; padding: 0; cursor: pointer; font: 500 12px/1.4 ${UI}; color: var(--card-accent); text-decoration: underline; text-underline-offset: 2px; }
-    .rb-entry-x:disabled { cursor: default; opacity: .5; }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
+    .rb-entry-x:disabled { cursor: default; opacity: .5; }    /* Something you can catch from the other side of the room without it
+       covering what you are reading: a band of the theme's accent around the
+       edge of the window, breathing rather than blinking.
+
+       The rate matters. Anything at or above three flashes a second is a
+       seizure risk, so this cycle is 1.6s — under one a second — and swings
+       between faint and firm rather than between nothing and full. Somebody
+       who has asked for less movement gets it held steady instead, which is
+       just as visible and does not move at all. */
+    .rb-flash { position: fixed; inset: 0; z-index: 60; pointer-events: none; box-shadow: inset 0 0 0 7px var(--page-accent); animation: rb-pulse 1.6s ease-in-out infinite; }
+    @keyframes rb-pulse { 0%, 100% { opacity: .18; } 50% { opacity: .9; } }
+    .rb-chip-done { animation: rb-chip 1.6s ease-in-out infinite; }
+    @keyframes rb-chip { 0%, 100% { border-color: var(--page-accent); } 50% { border-color: rgba(var(--accent-rgb), .35); } }
+    @media (prefers-reduced-motion: reduce) {
+      .rb-flash { animation: none; opacity: .7; }
+      .rb-chip-done { animation: none; }
+    }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     /* Title, who wrote it, what it is, what you can do, then the photograph —
        the order every recipe site puts them in. The actions sit between rules
@@ -3756,8 +3819,11 @@ export default function RecipeBox() {
       </main>
 
       {/* ═══════ TIMER TRAY ═══════ */}
+      {ringing && <div className="rb-flash rb-noprint" aria-hidden />}
+
       {timers.length > 0 && (
         <div
+          role="status"
           className="rb-noprint rb-tray"
           style={{
             position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 70,
@@ -3770,6 +3836,7 @@ export default function RecipeBox() {
             return (
               <div
                 key={t.id}
+                className={done ? "rb-chip-done" : undefined}
                 style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", flex: "0 0 auto",
                   border: `1px solid ${done ? "var(--page-accent)" : "rgba(var(--on-page), calc(.24 * var(--ink-k)))"}`, borderRadius: 2,
