@@ -15,9 +15,9 @@ const a = src.indexOf("const DAY_KEY =");
 const b = src.indexOf("/* ══", a);
 if (a < 0 || b < 0) throw new Error("could not find the day model — has RecipeBox.jsx moved on?");
 
-const EXPORTS = "export { dayTotals, dayId, pruneDays, emptyDay, emptyLog, asLog, mergeLogs, newerBody, numOf, MEALS };";
-const { dayTotals, dayId, pruneDays, emptyDay, emptyLog, asLog, mergeLogs, newerBody, numOf, MEALS } = await import(
-  "data:text/javascript," + encodeURIComponent(src.slice(a, b) + EXPORTS)
+const NAMES = "dayTotals, dayId, shiftDay, earliestDay, dayLabel, dayIsEmpty, pruneDays, emptyDay, emptyLog, asLog, mergeLogs, newerBody, numOf, MEALS, HISTORY_DAYS, DAY_HISTORY";
+const { dayTotals, dayId, shiftDay, earliestDay, dayLabel, dayIsEmpty, pruneDays, emptyDay, emptyLog, asLog, mergeLogs, newerBody, numOf, MEALS, HISTORY_DAYS, DAY_HISTORY } = await import(
+  "data:text/javascript," + encodeURIComponent(src.slice(a, b) + "export { " + NAMES + " };")
 );
 
 let pass = 0, fail = 0;
@@ -137,6 +137,39 @@ is("...whichever side it is on", newerBody({ kg: 80, at: 3 }, { kg: 82, at: 2 })
 is("one side missing", newerBody(null, { kg: 82, at: 2 }).kg, 82);
 is("the other side missing", newerBody({ kg: 80, at: 1 }, null).kg, 80);
 is("neither", newerBody(null, null), null);
+
+/* Walking back through the calendar.
+   Every one of these is a case where "subtract 86400000 milliseconds" gives the
+   wrong answer: a month boundary, a leap day, and the mornings the clocks move,
+   when a local day is 23 or 25 hours long. */
+console.log("\n— stepping between days —");
+is("back one inside a month", shiftDay("2026-09-12", -1), "2026-09-11");
+is("forward one inside a month", shiftDay("2026-09-12", 1), "2026-09-13");
+is("back over the start of a month", shiftDay("2026-09-01", -1), "2026-08-31");
+is("back over a short month", shiftDay("2026-03-01", -1), "2026-02-28");
+is("...and over a leap one", shiftDay("2024-03-01", -1), "2024-02-29");
+is("back over New Year", shiftDay("2026-01-01", -1), "2025-12-31");
+is("forward over the end of a year", shiftDay("2025-12-31", 1), "2026-01-01");
+is("the morning the clocks go forward is still one day", shiftDay("2026-03-08", 1), "2026-03-09");
+is("and the morning they go back", shiftDay("2026-11-01", 1), "2026-11-02");
+is("a month back lands where a calendar says", shiftDay("2026-09-12", -30), "2026-08-13");
+is("nothing in gives the same thing back", shiftDay("nonsense", -1), "nonsense");
+
+console.log("\n— how far back you can look —");
+is("a month of days, counting today", HISTORY_DAYS, 31);
+is("the oldest day offered", earliestDay("2026-09-12"), "2026-08-13");
+is("the picker never reaches past what the store keeps", HISTORY_DAYS <= DAY_HISTORY, true);
+
+console.log("\n— naming a day —");
+is("today is called today", dayLabel("2026-09-12", "2026-09-12"), "Today");
+is("and the one before it", dayLabel("2026-09-11", "2026-09-12"), "Yesterday");
+is("anything older gets a month in words", /september/i.test(dayLabel("2026-09-09", "2026-09-12")), true);
+is("...rather than the key it is stored under", dayLabel("2026-09-09", "2026-09-12") === "2026-09-09", false);
+
+console.log("\n— a day with nothing on it —");
+is("a fresh day is empty", dayIsEmpty(emptyDay()), true);
+is("nothing at all is empty", dayIsEmpty(null), true);
+is("one thing eaten is not", dayIsEmpty({ ...emptyDay(), lunch: [{ id: "x" }] }), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

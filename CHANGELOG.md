@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Look back over the past month.** The nutrition tracker now has arrows and a calendar beside the date, so you can step back through the last 31 days and see what you ate and what it came to on any of them. You can add to an earlier day too, for the dinner you meant to log and didn't. Only your own days are there; nobody else can see them.
 - **Food search stops dropping out.** Looking a food up sometimes failed with a gateway error, and trying again would usually work. The public food database it asks is occasionally unreliable, so a search that fails that way now quietly tries once more before giving up. Searches also come back with the closest handful of matches rather than a long list, and anything looked up recently answers straight away.
 - **Log things that are not recipes.** The tracker can now look up any food — celery, a jar of peanut butter, a burger — from the USDA's public food database, or you can type the numbers straight off a packet or a chain's nutrition page. Both sit alongside recipes from the box in the same meal.
 - **Keep track of what you have eaten.** A new daily nutrition tracker logs meals from the box across breakfast, lunch, dinner and snacks, adding up calories and macros as you go, and will estimate what a day needs from your height, weight, age and how much you move. It follows you between your own devices, and nobody else in the family can see it.

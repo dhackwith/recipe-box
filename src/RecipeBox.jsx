@@ -412,7 +412,46 @@ const MEALS = [
 const dayId = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
+/* How far back you can look. The store keeps more than this — see DAY_HISTORY —
+   so that a day sitting at the edge of the range is whole rather than being
+   pruned out from under somebody who is reading it. */
+const HISTORY_DAYS = 31;
+
+/* Arithmetic through a Date rather than on the string. Adding a day is not
+   "add one to the last number": months end, February moves, and the two clock
+   changes a year would each drop or duplicate a day if this counted in
+   milliseconds. Setting the date and reading it back lets the calendar answer. */
+const shiftDay = (id, delta) => {
+  const [y, m, d] = String(id).split("-").map(Number);
+  if (!y || !m || !d) return id;
+  const at = new Date(y, m - 1, d);
+  at.setDate(at.getDate() + delta);
+  return dayId(at);
+};
+
+/* The oldest day the picker will offer, given what today is. */
+const earliestDay = (today) => shiftDay(today, -(HISTORY_DAYS - 1));
+
+/* Yesterday deserves its name. Beyond that a weekday and a date is what people
+   actually use to place a day — "Tuesday, 9 September" rather than 2026-09-09,
+   which is a key and reads like one. */
+const dayLabel = (id, today) => {
+  if (id === today) return "Today";
+  if (id === shiftDay(today, -1)) return "Yesterday";
+  const [y, m, d] = String(id).split("-").map(Number);
+  if (!y || !m || !d) return id;
+  const at = new Date(y, m - 1, d);
+  const sameYear = at.getFullYear() === new Date().getFullYear();
+  return at.toLocaleDateString(undefined, {
+    weekday: "long", day: "numeric", month: "long", ...(sameYear ? {} : { year: "numeric" }),
+  });
+};
+
 const emptyDay = () => ({ breakfast: [], lunch: [], dinner: [], snacks: [] });
+
+/* Whether a day has anything on it at all, for telling an untouched day apart
+   from one somebody genuinely ate nothing worth logging on. */
+const dayIsEmpty = (day) => !day || MEALS.every((m) => !(day[m.id] || []).length);
 
 /* Named for the store rather than for localStorage: the shopping list already
    has its own writeLocal inside the component, and a two-argument helper of the
@@ -2375,6 +2414,11 @@ export default function RecipeBox() {
   const [addPick, setAddPick] = useState("");
   const [addServings, setAddServings] = useState("1");
 
+  /* Which day is on screen. Usually today, but the picker can send it back up to
+     a month. Kept apart from `today` deliberately: `today` is what the calendar
+     says and must stay that way for the rollover below to mean anything. */
+  const [viewDay, setViewDay] = useState(today);
+
   /* A tab left open overnight should be showing the new day by the time
      somebody comes back to it, not still totalling yesterday's dinner. */
   useEffect(() => {
@@ -2384,21 +2428,39 @@ export default function RecipeBox() {
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", check); };
   }, []);
 
+  /* When the date turns over, a screen that was showing today follows it. One
+     that was deliberately parked on an older day stays where it was put — the
+     rollover is not a reason to lose somebody's place. */
+  const wasToday = useRef(today);
+  useEffect(() => {
+    if (viewDay === wasToday.current) setViewDay(today);
+    wasToday.current = today;
+  }, [today]);           // eslint-disable-line react-hooks/exhaustive-deps
+
   logRef.current = dayLog;
   bodyRef.current = body;
 
-  const day = dayLog.days[today] || emptyDay();
+  const day = dayLog.days[viewDay] || emptyDay();
+  /* Separate from `day` on purpose. The chip in the header answers "how am I
+     doing today", which is not the question the tracker is showing while
+     somebody is looking back at last Tuesday. */
+  const todayTotals = dayTotals(dayLog.days[today] || emptyDay(), box.recipes);
   const targets = body ? dailyTargets(body) : null;
   const shape = body ? bmi(body) : null;
   const totals = dayTotals(day, box.recipes);
+  const oldestDay = earliestDay(today);
+  const onToday = viewDay === today;
 
+  /* Writes land on the day being looked at, not on today. That is what makes
+     "I forgot to log yesterday's dinner" work, and it costs nothing — the same
+     code path, one key along. */
   const saveDay = (next, removedIds = []) => {
     const removed = { ...dayLog.removed };
     for (const id of removedIds) removed[id] = Date.now();
-    const log = pruneDays({ days: { ...dayLog.days, [today]: next }, removed });
+    const log = pruneDays({ days: { ...dayLog.days, [viewDay]: next }, removed });
     logRef.current = log;
     setDayLog(log);
-    if (!writeStore(DAY_KEY, log)) flash("Couldn't save today on this device — its storage may be full or switched off", 7000);
+    if (!writeStore(DAY_KEY, log)) flash("Couldn't save that day on this device — its storage may be full or switched off", 7000);
     queueDaySync();
   };
 
@@ -2997,6 +3059,7 @@ export default function RecipeBox() {
       --card-danger: ${T.rust};
       --grain-op: 0.022;
       --grain-blend: multiply;
+      --cal-icon: none;
     }
     .rb[data-theme="dark"] {
       --card-bg: var(--dark-card-bg);
@@ -3008,6 +3071,7 @@ export default function RecipeBox() {
       --card-danger: #F08A6B;
       --grain-op: 0.05;
       --grain-blend: overlay;
+      --cal-icon: invert(1);
     }
     .rb * { box-sizing: border-box; }
     .rb ::selection { background: var(--page-accent); color: var(--on-accent); }
@@ -3073,6 +3137,37 @@ export default function RecipeBox() {
     .rb-lately-open:hover .rb-lately-what { text-decoration: underline; text-underline-offset: 2px; }    /* The day's tally: four figures across the top, each with how far through
        its target the day has got. Over the target turns the bar, rather than
        letting it run past the end where it would say nothing. */
+    /* The day picker. Arrows either side of the date so a thumb can walk back
+       through the week without aiming, and the calendar underneath for the jump
+       somebody has in mind. */
+    .rb-daybar { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; margin: 0 0 20px; }
+    /* The arrows belong either side of the date, on every width. Left to wrap
+       on its own, the forward one lands on the next line looking like a control
+       for something else entirely. */
+    .rb-daynav { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .rb-daystep {
+      flex: none; width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid var(--card-edge); border-radius: 2px; background: var(--card-bg);
+      color: var(--card-text); font: 400 16px/1 ${UI}; cursor: pointer;
+    }
+    .rb-daystep:hover:not(:disabled) { border-color: var(--card-accent); color: var(--card-accent); }
+    .rb-daystep:disabled { opacity: .35; cursor: default; }
+    .rb-daybar-when { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .rb-daybar-name { margin: 0; font: 400 19px/1.2 ${DISPLAY}; color: var(--card-text); }
+    .rb-daybar-date {
+      border: none; background: transparent; padding: 0; color: var(--card-muted);
+      font: 400 12.5px/1.4 ${UI}; cursor: pointer; max-width: 100%;
+    }
+    /* Chromium hands the whole field a picker cursor but only the icon opens it;
+       colouring the icon to match the text keeps it legible in dark mode, where
+       the default is a black glyph on a dark ground. */
+    .rb-daybar-date::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .65; filter: var(--cal-icon); }
+    .rb-daybar-date:hover { color: var(--card-accent); }
+    .rb-dayback {
+      margin-left: auto; background: transparent; border: none; padding: 6px 0;
+      white-space: nowrap;
+      color: var(--card-accent); font: 600 13px/1 ${UI}; cursor: pointer;
+    }
     .rb-tally { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); background: var(--card-edge); border: 1px solid var(--card-edge); border-radius: 2px; overflow: hidden; }
     .rb-tally-cell { background: var(--card-bg); padding: 12px 14px; }
     .rb-tally-label { font: 600 9.5px/1 ${UI}; letter-spacing: .12em; text-transform: uppercase; color: var(--card-muted); margin: 0 0 6px; }
@@ -3406,7 +3501,7 @@ export default function RecipeBox() {
             </button>
 
             <button className="rb-btn rb-focus" style={btnGhost} onClick={openToday}>
-              <span aria-hidden style={{ marginRight: 7 }}>◷</span>Daily nutrition{totals.calories ? ` (${totals.calories})` : ""}
+              <span aria-hidden style={{ marginRight: 7 }}>◷</span>Daily nutrition{todayTotals.calories ? ` (${todayTotals.calories})` : ""}
             </button>
 
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
@@ -3779,14 +3874,68 @@ export default function RecipeBox() {
               </button>
 
               <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Daily nutrition tracker</h2>
-              <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 22px", maxWidth: "60ch" }}>
-                What you have eaten from the box today, and roughly what it came to.
+              <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 18px", maxWidth: "60ch" }}>
+                What you have eaten, and roughly what it came to. The last {HISTORY_DAYS} days are kept.
                 {daySync === "synced"
                   ? " It follows you between your own devices, and nobody else in the family can see it."
                   : daySync === "device"
                   ? " Saved on this device. It couldn't reach your account just now, so it will catch up later."
                   : ""}
               </p>
+
+              {/* ── which day ── */}
+              <div className="rb-daybar">
+                <div className="rb-daynav">
+                <button
+                  type="button"
+                  className="rb-daystep rb-focus"
+                  aria-label="The day before"
+                  disabled={viewDay <= oldestDay}
+                  onClick={() => setViewDay(shiftDay(viewDay, -1))}
+                >
+                  <span aria-hidden>←</span>
+                </button>
+
+                <div className="rb-daybar-when">
+                  <p className="rb-daybar-name">{dayLabel(viewDay, today)}</p>
+                  {/* The calendar itself. A native date input because every
+                      platform already has one its owner knows how to drive, and
+                      min/max stop it offering days that are not kept. */}
+                  <input
+                    type="date"
+                    className="rb-daybar-date rb-focus"
+                    aria-label="Pick a day"
+                    value={viewDay}
+                    min={oldestDay}
+                    max={today}
+                    onChange={(e) => {
+                      const picked = e.target.value;
+                      if (!picked) return;
+                      /* Clamped rather than trusted: a date field can be typed
+                         into as well as picked from, and min/max do not stop
+                         that on every browser. */
+                      setViewDay(picked > today ? today : picked < oldestDay ? oldestDay : picked);
+                    }}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  className="rb-daystep rb-focus"
+                  aria-label="The day after"
+                  disabled={onToday}
+                  onClick={() => setViewDay(shiftDay(viewDay, 1))}
+                >
+                  <span aria-hidden>→</span>
+                </button>
+                </div>
+
+                {!onToday && (
+                  <button type="button" className="rb-dayback rb-focus" onClick={() => setViewDay(today)}>
+                    Back to today
+                  </button>
+                )}
+              </div>
 
               {/* ── the tally ── */}
               <div className="rb-tally">
@@ -3814,6 +3963,12 @@ export default function RecipeBox() {
               {totals.unknown > 0 && (
                 <p style={{ font: `400 12.5px/1.6 ${UI}`, color: "var(--card-muted)", margin: "10px 0 0" }}>
                   {totals.unknown} {totals.unknown === 1 ? "thing is" : "things are"} not counted — the recipe carries no nutrition.
+                </p>
+              )}
+
+              {dayIsEmpty(day) && !onToday && (
+                <p style={{ font: `400 13px/1.6 ${UI}`, color: "var(--card-muted)", margin: "12px 0 0" }}>
+                  Nothing was logged on this day. You can still add to it.
                 </p>
               )}
 
