@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 /* ?raw inlines the file at build time — the button hands out exactly the
    template that is committed alongside this component. */
 import TEMPLATE_MD from "../claude-recipe-template.md?raw";
@@ -1785,6 +1785,13 @@ export default function RecipeBox() {
   /* Snapshot of the list the recipe was opened from, so Back returns to the
      same search, scope, tag and box — not to a reset list. */
   const listStateRef = useRef({ query: "", scope: "all", tagFilter: null, activeBox: null });
+  /* How far down the box somebody had scrolled when they opened a recipe, and
+     whether the next render of the list is the one that should go back there.
+     Changing view does not move the page by itself: opening the fourth recipe
+     down used to leave the window where it was, so the recipe arrived already
+     scrolled past its own title. */
+  const listScrollRef = useRef(0);
+  const restoreScrollRef = useRef(null);
   const [addingBox, setAddingBox] = useState(false);
   const [newBoxName, setNewBoxName] = useState("");
   /* Escape has to beat the input's own blur handler, which would otherwise
@@ -2081,9 +2088,11 @@ export default function RecipeBox() {
 
   const openCard = (id) => {
     listStateRef.current = { query, scope, tagFilter, activeBox };
+    listScrollRef.current = window.scrollY;
     setOpenId(id);
     setFactor(1);
     setView("detail");
+    window.scrollTo(0, 0);
   };
 
   const goBack = () => {
@@ -2093,7 +2102,19 @@ export default function RecipeBox() {
     setTagFilter(from.tagFilter);
     setActiveBox(from.activeBox);
     setView("list");
+    restoreScrollRef.current = listScrollRef.current;
   };
+
+  /* After the list is back on screen, not before — the page cannot be scrolled
+     to a position the content does not occupy yet. Laid out rather than merely
+     effected, so the jump happens before the browser paints and nobody sees the
+     top of the list first. */
+  useLayoutEffect(() => {
+    if (view !== "list" || restoreScrollRef.current == null) return;
+    const y = restoreScrollRef.current;
+    restoreScrollRef.current = null;
+    window.scrollTo(0, y);
+  }, [view]);
 
   /* what Back will say, described from the snapshot rather than current state */
   const backLabel = () => {
