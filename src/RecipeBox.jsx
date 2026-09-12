@@ -3,6 +3,12 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from
    template that is committed alongside this component. */
 import TEMPLATE_MD from "../claude-recipe-template.md?raw";
 import CHANGELOG_MD from "../CHANGELOG.md?raw";
+/* Quantities live in units.js — one place that knows what "1½" means, rather
+   than one here and one there that can drift apart. */
+import {
+  NUM, UNITS, VESSELS, toNumber, prettyNumber,
+  SYSTEMS, isSystem, convertText, convertIngredient,
+} from "./units.js";
 import {
   dailyTargets, bmi, ACTIVITY, GOALS,
   lbToKg, kgToLb, feetInchesToCm, cmToFeetInches,
@@ -274,45 +280,7 @@ async function saveBox(box) {
 /* ══════════════════════════════════════════════════════════════════
    Quantities — parsing, scaling, pretty-printing
    ══════════════════════════════════════════════════════════════════ */
-const UNI = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875 };
-const NUM = "(?:\\d+\\s+\\d+\\/\\d+|\\d+\\s*[¼½¾⅓⅔⅛⅜⅝⅞]|\\d+\\/\\d+|\\d*\\.?\\d+|[¼½¾⅓⅔⅛⅜⅝⅞])";
 const QTY_RE = new RegExp(`^(\\s*)(${NUM})(\\s*(?:-|–|to)\\s*)?(${NUM})?`);
-const FRACTIONS = [
-  [1 / 8, "⅛"], [1 / 4, "¼"], [1 / 3, "⅓"], [3 / 8, "⅜"], [1 / 2, "½"],
-  [5 / 8, "⅝"], [2 / 3, "⅔"], [3 / 4, "¾"], [7 / 8, "⅞"],
-];
-
-function toNumber(tok) {
-  if (!tok) return null;
-  const t = String(tok).trim();
-  if (UNI[t] != null) return UNI[t];
-  const mixed = t.match(/^(\d+)\s*([¼½¾⅓⅔⅛⅜⅝⅞])$/);
-  if (mixed) return parseInt(mixed[1], 10) + UNI[mixed[2]];
-  const mixedFrac = t.match(/^(\d+)\s+(\d+)\/(\d+)$/);
-  if (mixedFrac) return parseInt(mixedFrac[1], 10) + Number(mixedFrac[2]) / Number(mixedFrac[3]);
-  const frac = t.match(/^(\d+)\/(\d+)$/);
-  if (frac) return Number(frac[1]) / Number(frac[2]);
-  const n = parseFloat(t.replace(",", "."));
-  return Number.isFinite(n) ? n : null;
-}
-
-function prettyNumber(n) {
-  if (n == null || !Number.isFinite(n)) return "";
-  if (n < 0.05) return String(Math.round(n * 100) / 100);
-  if (n >= 10) return String(Math.round(n * 10) / 10);
-  const whole = Math.floor(n + 1e-9);
-  const rem = n - whole;
-  if (rem < 0.06) return String(whole || 0);
-  let best = null;
-  let bestGap = Infinity;
-  for (const [val, glyph] of FRACTIONS) {
-    const gap = Math.abs(rem - val);
-    if (gap < bestGap) { bestGap = gap; best = glyph; }
-  }
-  if (bestGap > 0.07) return String(Math.round(n * 100) / 100);
-  return whole ? `${whole}${best}` : best;
-}
-
 function scaleLine(line, factor) {
   if (!factor || factor === 1) return line;
   const m = line.match(QTY_RE);
@@ -325,15 +293,6 @@ function scaleLine(line, factor) {
 }
 
 /* split leading quantity from the ingredient name, for the ruled column */
-const UNITS = new Set([
-  "cup","cups","tbsp","tbsps","tablespoon","tablespoons","tsp","tsps","teaspoon","teaspoons","oz","ounce","ounces",
-  "lb","lbs","pound","pounds","g","gram","grams","kg","ml","l","liter","liters","clove","cloves","can","cans",
-  "pinch","pinches","sprig","sprigs","slice","slices","stick","sticks","bunch","bunches","package","packages",
-  "quart","quarts","pint","pints","dash","dashes","qt","pt",
-  "scoop","scoops","packet","packets","handful","handfuls","head","heads","stalk","stalks",
-  "sheet","sheets","drop","drops","jar","jars","bottle","bottles","bag","bags","knob","knobs",
-]);
-
 function splitQty(s) {
   const m = s.match(new RegExp(`^\\s*(${NUM}(?:\\s*(?:-|–|to)\\s*${NUM})?)\\s*([A-Za-z]+\\.?)?\\s+(.*)$`));
   if (!m) return [null, s];
@@ -353,15 +312,12 @@ function splitQty(s) {
    100 g packet is still 100 g however many of them go in. */
 const STEP_QTY_RE = new RegExp(`(${NUM})(\\s*(?:-|–|to)\\s*(${NUM}))?(\\s+)([A-Za-z]+)\\b`, "g");
 
-/* A measure followed by one of these is sizing the container, not the amount
-   going into it: a 40 oz pitcher is still 40 oz however much you make, and a
-   14 oz can is the tin you bought. */
-const VESSELS = new Set([
-  "pitcher","pitchers","blender","blenders","bowl","bowls","pan","pans","skillet","skillets",
-  "dish","dishes","pot","pots","tin","tins","ramekin","ramekins","mold","molds","tray","trays",
-  "jar","jars","bottle","bottles","can","cans","packet","packets","bag","bags","box","boxes",
-  "tub","tubs","container","containers","carton","cartons","block","blocks","loaf","loaves",
-]);
+/* Scale first, then convert. Scaling reads the recipe as its author wrote it —
+   which is what the vessel and bracket rules were tuned against — and the
+   conversion translates whatever that produced. The other order would have the
+   scaler reading text it had never seen the shape of. */
+const showLine = (line, factor, units) => convertIngredient(scaleLine(line, factor), units);
+const showText = (text, factor, units) => convertText(scaleText(text, factor), units);
 
 function scaleText(text, factor) {
   if (!text || !factor || factor === 1) return text;
@@ -717,6 +673,7 @@ const planCount = (plan, dates) =>
    a recipe again replaces its share instead of doubling it, and taking one off
    removes exactly what it put on.
    ══════════════════════════════════════════════════════════════════ */
+const UNITS_KEY = "rb-units";
 const LIST_KEY = "rb-shopping-list";
 const EMPTY_LIST = { items: [], recipes: {}, tombstones: {} };
 
@@ -1838,7 +1795,7 @@ const sheet = {
    each timer tick would unmount and remount the whole overlay (and replay
    its entrance animation), which read as a full-screen flash.
    ══════════════════════════════════════════════════════════════════ */
-function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseServings,
+function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseServings, units,
                       showPantry, setShowPantry, onClose, startTimer, hasTimer, prevStep, nextStep,
                       marks, onToggle, onFinish }) {
   const steps = recipe.steps;
@@ -1895,7 +1852,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
             </h2>
           )}
           <p style={{ font: `400 clamp(17px, 2.4vw, 21px)/1.68 ${PROSE}`, color: "rgba(var(--on-page), calc(.92 * var(--ink-k)))", margin: 0, maxWidth: "56ch" }}>
-            {scaleText(step.text, factor)}
+            {showText(step.text, factor, units)}
           </p>
           {secs && (
             <button
@@ -1950,7 +1907,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
                         color: got ? "rgba(var(--on-page), calc(.38 * var(--ink-k)))" : "rgba(var(--on-page), calc(.8 * var(--ink-k)))", textDecoration: got ? "line-through" : "none",
                       }}
                     >
-                      {scaleLine(ing, factor)}
+                      {showLine(ing, factor, units)}
                     </button>
                   </li>
                 );
@@ -2058,6 +2015,18 @@ export default function RecipeBox() {
   };
   const [dragging, setDragging] = useState(false);
   const [factor, setFactor] = useState(1);
+  /* Which units to read in. On the device rather than the account, like dark
+     mode: it says something about whoever is holding the phone, not about the
+     recipe, and the recipe belongs to everybody. */
+  const [units, setUnits] = useState(() => {
+    try {
+      const saved = localStorage.getItem(UNITS_KEY);
+      return isSystem(saved) ? saved : "as-written";
+    } catch { return "as-written"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(UNITS_KEY, units); } catch { /* storage off; the choice lasts the visit */ }
+  }, [units]);
   const [cooking, setCooking] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [showPantry, setShowPantry] = useState(false);
@@ -3738,6 +3707,7 @@ export default function RecipeBox() {
           factor={factor}
           setFactor={setFactor}
           baseServings={baseServings}
+          units={units}
           showPantry={showPantry}
           setShowPantry={setShowPantry}
           onClose={() => setCooking(false)}
@@ -3855,6 +3825,23 @@ export default function RecipeBox() {
                   </span>
                   <button className="rb-focus rb-setctl" onClick={() => setMenuPane("theme")} aria-label="Choose colours">
                     <span aria-hidden>Choose ›</span>
+                  </button>
+                </div>
+                <div className="rb-setting">
+                  <span>Units</span>
+                  {/* Cycled rather than given a pane of its own: three choices
+                      is a short enough loop that a tap to see the next one
+                      costs less than opening something. */}
+                  <button
+                    className="rb-focus rb-setctl"
+                    onClick={() => {
+                      const at = SYSTEMS.findIndex((u) => u.id === units);
+                      setUnits(SYSTEMS[(at + 1) % SYSTEMS.length].id);
+                    }}
+                    aria-label={`Units: ${SYSTEMS.find((u) => u.id === units)?.label}. Change`}
+                    title={SYSTEMS.find((u) => u.id === units)?.hint}
+                  >
+                    <span aria-hidden>{SYSTEMS.find((u) => u.id === units)?.label} ›</span>
                   </button>
                 </div>
                 <div className="rb-setting">
@@ -4904,7 +4891,13 @@ export default function RecipeBox() {
           const onList = Object.entries(list.recipes);
           const backLabel = { detail: "Back to the recipe", form: "Back to editing", import: "Back to the import" }[shoppingFrom.current] || "Back to recipes";
           const row = (item) => {
-            const { qty, name } = describeItem(item);
+            const described = describeItem(item);
+            /* Converted here rather than when the item was added: the stored
+               line stays as the recipe wrote it, so changing this setting
+               re-reads the whole list instead of leaving yesterday's cups
+               sitting next to today's millilitres. */
+            const qty = convertText(described.qty, units);
+            const name = described.name;
             const from = itemRecipes(item, list);
             return (
               <li key={item.id} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "11px 0", borderBottom: `1px solid var(--card-edge)` }}>
@@ -5118,7 +5111,7 @@ export default function RecipeBox() {
                   </p>
                   <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                     {openRecipe.ingredients.map((ing, i) => {
-                      const [qty, rest] = splitQty(scaleLine(ing, factor));
+                      const [qty, rest] = splitQty(showLine(ing, factor, units));
                       const got = marks.ing.includes(i);
                       const strike = got ? "line-through" : "none";
                       return (
@@ -5228,7 +5221,7 @@ export default function RecipeBox() {
                           </button>
                           <div style={{ maxWidth: "64ch" }}>
                             {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
-                            <p style={{ font: `400 16.5px/1.75 ${PROSE}`, color: "var(--card-text)", margin: 0 }}>{scaleText(text, factor)}</p>
+                            <p style={{ font: `400 16.5px/1.75 ${PROSE}`, color: "var(--card-text)", margin: 0 }}>{showText(text, factor, units)}</p>
                             {secs && (
                               <button
                                 className="rb-btn rb-focus rb-noprint"
