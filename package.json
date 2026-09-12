@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "dev:cf": "npm run build && npx wrangler pages dev dist --kv RECIPES"
+    "dev:cf": "npm run build && npx wrangler pages dev dist --kv RECIPES",
+    "test": "node tests/notes.test.mjs"
   },
   "dependencies": {
     "jose": "^6.2.12",

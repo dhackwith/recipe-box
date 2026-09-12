@@ -15,13 +15,9 @@
  * change at once.
  *
  * WHO IS ASKING
- * Cloudflare Access sits in front of the site. It no longer sends the old
- * Cf-Access-Authenticated-User-Email header — /api/whoami confirmed on the live
- * domain that only the signed token arrives — so identity comes from verifying
- * that token. Verification is the point, not a formality: the header it
- * replaced could be forged by anything able to reach the origin outside
- * Access, and a forged identity here would hand one person another person's
- * shopping list.
+ * Verifying the Access token, in shared/access.js — the same identity that
+ * signs a family note, so there is one implementation rather than two that can
+ * drift apart.
  *
  * STILL OPEN: shared keys (the family recipe box) are served without checking
  * a token, which is how this has always worked. If the project's *.pages.dev
@@ -32,39 +28,13 @@
  * whole site down with it.
  */
 
-import { createRemoteJWKSet, jwtVerify } from "jose";
-
-/* Both read off /api/whoami on the live domain. Neither is a secret: the AUD
-   tag names the Access application and rides in every member's token. It does
-   change if the Access application is ever deleted and recreated. */
-const TEAM_DOMAIN = "https://thehackwithtable.cloudflareaccess.com";
-const POLICY_AUD = "f6ab6d8de36d5a27b9d93a5d619d1b761ba360f573a5c53b009a9fe6baef13b0";
-
-/* jose caches the fetched keys, so this costs one request per isolate, not one
-   per visit. Built once at module scope for that reason. */
-const jwks = createRemoteJWKSet(new URL(`${TEAM_DOMAIN}/cdn-cgi/access/certs`));
+import { identity } from "../../shared/access.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
-
-/* The signed-in email, or null. Expired, wrong-audience, wrong-issuer and
-   outright forged tokens all get the same answer: we do not know you. */
-const identity = async (request) => {
-  const token = request.headers.get("Cf-Access-Jwt-Assertion");
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, jwks, {
-      issuer: TEAM_DOMAIN,
-      audience: POLICY_AUD,
-    });
-    return typeof payload.email === "string" ? payload.email.toLowerCase() : null;
-  } catch {
-    return null;
-  }
-};
 
 const namespaced = (email, key, shared) => (shared ? `shared:${key}` : `user:${email}:${key}`);
 

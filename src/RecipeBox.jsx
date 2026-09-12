@@ -515,6 +515,41 @@ function loadList() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   Family notes and the "made it" log
+   The server stamps who wrote each entry from the Access token, so nothing
+   here sends an author and nothing here could usefully lie about one.
+   ══════════════════════════════════════════════════════════════════ */
+const NOTES_API = "/api/notes";
+
+async function notesCall(method, query = "", body) {
+  const res = await fetch(NOTES_API + query, {
+    method,
+    credentials: "same-origin",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  /* The server's own refusals are already written for a person to read, so they
+     are passed straight through. The rest are translated here, because what
+     reaches this line otherwise is a 200 carrying the app's own HTML — the
+     dev server answering a route it does not have — and letting that fall
+     through produces a null-property error where a sentence belongs. */
+  if (!res.ok) throw new Error((data && data.error) || `Couldn't reach the notes (${res.status})`);
+  if (data === null) throw new Error("Notes aren't available here — this needs the deployed site");
+  return data;
+}
+
+/* "11 September", and the year too once it is no longer this one. The stored
+   value is a full timestamp with a zone, so reading it as local time is right. */
+const whenLabel = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const year = d.getFullYear() === new Date().getFullYear() ? "" : ` ${d.getFullYear()}`;
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}${year}`;
+};
+
+/* ══════════════════════════════════════════════════════════════════
    Syncing a list between one person's devices
    The account copy sits under a key the server namespaces to the verified
    signed-in email, so nobody else can read or write it. Writes are debounced:
@@ -1719,6 +1754,87 @@ export default function RecipeBox() {
     const t = setTimeout(() => { setShownBox(activeBox); setTitleSettling(false); }, 150);
     return () => clearTimeout(t);
   }, [activeBox, shownBox]);
+  /* Notes belong to the open recipe and are fetched when it opens. null means
+     "not asked yet", which is what keeps an empty recipe from flashing "nothing
+     here" before the first answer arrives. */
+  const [notes, setNotes] = useState(null);
+  const [myName, setMyName] = useState("");
+  const [noteText, setNoteText] = useState("");
+  const [notesBusy, setNotesBusy] = useState(false);
+  const [notesError, setNotesError] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+
+  useEffect(() => {
+    if (!openId) { setNotes(null); setNotesError(""); return; }
+    let cancelled = false;
+    setNotes(null);
+    setNoteText("");
+    setNotesError("");
+    (async () => {
+      try {
+        const data = await notesCall("GET", `?recipe=${encodeURIComponent(openId)}`);
+        if (cancelled) return;
+        setNotes(data.entries || []);
+        setMyName(data.me?.name || "");
+      } catch (err) {
+        if (cancelled) return;
+        /* Offline, or the endpoint isn't there. The recipe is still readable,
+           so this says so quietly rather than taking the page down. */
+        setNotes([]);
+        setNotesError(String(err.message || err));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [openId]);
+
+  const addEntry = async (kind) => {
+    const text = kind === "note" ? noteText.trim() : "";
+    if (kind === "note" && !text) return;
+    setNotesBusy(true);
+    setNotesError("");
+    try {
+      const { entry } = await notesCall("POST", "", { recipe: openId, kind, text });
+      setNotes((list) => [...(list || []), entry]);
+      if (kind === "note") setNoteText("");
+      flash(kind === "made" ? "Added to the log" : "Note added");
+    } catch (err) {
+      setNotesError(String(err.message || err));
+    } finally {
+      setNotesBusy(false);
+    }
+  };
+
+  const removeEntry = async (id) => {
+    setNotesBusy(true);
+    try {
+      await notesCall("DELETE", `?id=${encodeURIComponent(id)}`);
+      setNotes((list) => (list || []).filter((e) => e.id !== id));
+    } catch (err) {
+      setNotesError(String(err.message || err));
+    } finally {
+      setNotesBusy(false);
+    }
+  };
+
+  /* The name is stored against the verified email, so it follows a person
+     between devices and renames every note they have already left. */
+  const saveName = async () => {
+    const name = nameDraft.trim();
+    if (!name) { setRenaming(false); return; }
+    setNotesBusy(true);
+    try {
+      await notesCall("PUT", "", { name });
+      setMyName(name);
+      setRenaming(false);
+      const data = await notesCall("GET", `?recipe=${encodeURIComponent(openId)}`);
+      setNotes(data.entries || []);
+    } catch (err) {
+      setNotesError(String(err.message || err));
+    } finally {
+      setNotesBusy(false);
+    }
+  };
   const openRecipe = box.recipes.find((r) => r.id === openId);
   const baseServings = servingsCount(openRecipe?.servings);
   /* Nutrition is stored for one serving. The panel describes the batch actually
@@ -2334,7 +2450,17 @@ export default function RecipeBox() {
        has a direction rather than just blinking. */
     .rb-heading { opacity: 1; transform: none; transition: opacity 210ms cubic-bezier(.2,.7,.3,1), transform 210ms cubic-bezier(.2,.7,.3,1); }
     .rb-heading.is-settling { opacity: 0; transform: translateY(-5px); transition-duration: 130ms; }
-    @media (prefers-reduced-motion: reduce) { .rb-heading, .rb-heading.is-settling { transition: none; opacity: 1; transform: none; } }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
+    @media (prefers-reduced-motion: reduce) { .rb-heading, .rb-heading.is-settling { transition: none; opacity: 1; transform: none; } }    /* Notes are a conversation, so they sit apart from the recipe rather than
+       inside its two columns. A "made it" entry has no words of its own, so it
+       gets the accent rule to mark it as an event rather than a remark. */
+    .rb-family { margin-top: 38px; padding-top: 26px; border-top: 1px solid var(--card-edge); }
+    .rb-entry { padding-left: 13px; border-left: 2px solid var(--card-edge); }
+    .rb-entry-made { border-left-color: var(--card-accent); }
+    .rb-entry-who { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin: 0; font: 500 12.5px/1.4 ${UI}; color: var(--card-muted); }
+    .rb-entry-who > span:first-child { color: var(--card-text); font-weight: 600; }
+    .rb-entry-text { margin: 5px 0 0; font: 400 15px/1.7 ${PROSE}; color: var(--card-text); white-space: pre-wrap; }
+    .rb-entry-x { background: none; border: 0; padding: 0; cursor: pointer; font: 500 12px/1.4 ${UI}; color: var(--card-accent); text-decoration: underline; text-underline-offset: 2px; }
+    .rb-entry-x:disabled { cursor: default; opacity: .5; }    .rb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 22px; }
     .rb-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     /* Title, who wrote it, what it is, what you can do, then the photograph —
        the order every recipe site puts them in. The actions sit between rules
@@ -3297,6 +3423,102 @@ export default function RecipeBox() {
                   )}
                 </div>
               </div>
+
+              <section className="rb-family">
+                <h3 style={{ font: `400 21px/1.2 ${DISPLAY}`, margin: "0 0 4px", color: "var(--card-text)" }}>From the family</h3>
+                <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", margin: "0 0 16px" }}>
+                  What anyone learned the last time they cooked it.
+                </p>
+
+                {notes === null && (
+                  <p style={{ font: `400 14px/1.6 ${UI}`, color: "var(--card-muted)", margin: 0 }}>Looking…</p>
+                )}
+
+                {notes !== null && notes.length === 0 && !notesError && (
+                  <p style={{ font: `400 14px/1.6 ${PROSE}`, color: "var(--card-muted)", margin: 0 }}>
+                    Nobody has written anything yet.
+                  </p>
+                )}
+
+                {notes !== null && notes.length > 0 && (
+                  <ul style={{ listStyle: "none", margin: "0 0 20px", padding: 0, display: "flex", flexDirection: "column", gap: 14 }}>
+                    {notes.map((e) => (
+                      <li key={e.id} className={e.kind === "made" ? "rb-entry rb-entry-made" : "rb-entry"}>
+                        <p className="rb-entry-who">
+                          <span>{e.name}</span>
+                          <span aria-hidden>·</span>
+                          <span>{e.kind === "made" ? `made this on ${whenLabel(e.at)}` : whenLabel(e.at)}</span>
+                          {e.mine && (
+                            <button
+                              type="button"
+                              className="rb-focus rb-entry-x"
+                              onClick={() => removeEntry(e.id)}
+                              disabled={notesBusy}
+                              aria-label="Remove what you wrote"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </p>
+                        {e.kind === "note" && e.text && <p className="rb-entry-text">{e.text}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {notesError && (
+                  <p style={{ font: `400 13px/1.6 ${UI}`, color: "var(--card-danger)", margin: "12px 0 0" }}>{notesError}</p>
+                )}
+
+                <div className="rb-noprint" style={{ marginTop: 18 }}>
+                  <textarea
+                    className="rb-focus"
+                    value={noteText}
+                    onChange={(ev) => setNoteText(ev.target.value)}
+                    rows={3}
+                    maxLength={2000}
+                    placeholder="Anything worth knowing next time — what you changed, what to watch for"
+                    aria-label="Add a note"
+                    style={{ ...input, resize: "vertical", font: `400 14.5px/1.6 ${UI}` }}
+                  />
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+                    <button className="rb-btn rb-focus" style={btnPrimary} onClick={() => addEntry("note")} disabled={notesBusy || !noteText.trim()}>
+                      Add note
+                    </button>
+                    <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => addEntry("made")} disabled={notesBusy}>
+                      I made this
+                    </button>
+                    <span style={{ font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", marginLeft: "auto" }}>
+                      {renaming ? (
+                        <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                          <input
+                            autoFocus
+                            className="rb-focus"
+                            value={nameDraft}
+                            maxLength={40}
+                            onChange={(ev) => setNameDraft(ev.target.value)}
+                            onKeyDown={(ev) => { if (ev.key === "Enter") saveName(); if (ev.key === "Escape") setRenaming(false); }}
+                            aria-label="What should we call you?"
+                            style={{ ...input, width: 150, padding: "6px 9px", font: `400 13px/1.3 ${UI}` }}
+                          />
+                          <button type="button" className="rb-focus rb-entry-x" onClick={saveName} disabled={notesBusy}>Save</button>
+                        </span>
+                      ) : (
+                        <>
+                          Posting as {myName || "you"}{" "}
+                          <button
+                            type="button"
+                            className="rb-focus rb-entry-x"
+                            onClick={() => { setNameDraft(myName); setRenaming(true); }}
+                          >
+                            change
+                          </button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </section>
 
               <div className="rb-noprint rb-actions" style={{ display: "flex", gap: 10, marginTop: 38, flexWrap: "wrap" }}>
                 <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => startEdit(openRecipe)}>Edit</button>
