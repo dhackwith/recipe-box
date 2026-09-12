@@ -111,32 +111,6 @@ const PALETTES = [
     dark: { soft: "#30322D", bg: "#242622", deep: "#161715", ink: "#EEEAE1", accent: "#A6C39C", onAccent: "#161715", k: 1 },
     light: { soft: "#FFFFFF", bg: "#FAF9F5", deep: "#E8E5DC", ink: "#232320", accent: "#4C6746", onAccent: "#FBFAF6", k: 1.45, grain: 0.035 } },
 ];
-/* Backgrounds, picked separately from the colours and shown as they are —
-   nothing tints the image. Readability comes from what sits on it instead:
-   buttons, box tiles, search and tags get a near-solid fill of the colour
-   theme's own background, and loose text gets a soft halo in the same colour
-   (see .rb-textured in the stylesheet). The fill is .98: the least that keeps
-   all 144 pairings — every light and dark version against every texture — at
-   the original teal's contrast over each image's brightest and darkest spots.
-
-   Files live in public/themes and are served with the site, not from KV.
-   Sources — tiles are CC0 from Poly Haven (kitchen_wood, dark_wood,
-   waffle_pique_cotton, rough_linen, gingham_check), re-saved at JPEG 62;
-   photos are from Unsplash under its licence: Slate by Lakshya Soni, Flour
-   Dust by Patrick Fore (cropped to the dusted side), Floured Counter by
-   Benjamin Jauregui. */
-const TEXTURES = [
-  { id: "butcher-block", name: "Butcher Block", src: "/themes/butcher-block.jpg", thumb: "/themes/thumbs/butcher-block.jpg", tile: 512 },
-  { id: "mahogany", name: "Mahogany Board", src: "/themes/mahogany.jpg", thumb: "/themes/thumbs/mahogany.jpg", tile: 512 },
-  { id: "slate", name: "Slate", src: "/themes/slate.webp", thumb: "/themes/thumbs/slate.jpg" },
-  { id: "flour-dust", name: "Flour Dust", src: "/themes/flour-dust.webp", thumb: "/themes/thumbs/flour-dust.jpg" },
-  { id: "tea-towel", name: "Tea Towel", src: "/themes/tea-towel.jpg", thumb: "/themes/thumbs/tea-towel.jpg", tile: 400 },
-  { id: "blue-linen", name: "Blue Linen", src: "/themes/blue-linen.jpg", thumb: "/themes/thumbs/blue-linen.jpg", tile: 420 },
-  { id: "gingham", name: "Gingham", src: "/themes/gingham.jpg", thumb: "/themes/thumbs/gingham.jpg", tile: 360 },
-  { id: "floured-counter", name: "Floured Counter", src: "/themes/floured-counter.webp", thumb: "/themes/thumbs/floured-counter.jpg" },
-];
-const textureById = (id) => TEXTURES.find((t) => t.id === id) || null;
-const localTexture = () => { try { return localStorage.getItem("rb-texture"); } catch { return null; } };
 
 const paletteById = (id) => PALETTES.find((p) => p.id === id) || PALETTES[0];
 /* what the picker shows for a colour theme */
@@ -1578,7 +1552,6 @@ export default function RecipeBox() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [crossed, setCrossed] = useState(loadCrossed);
   const [palette, setPalette] = useState(() => paletteById(localPalette()));
-  const [texture, setTexture] = useState(() => textureById(localTexture()));
   const [menuPane, setMenuPane] = useState("main");
   const [newsRead, setNewsRead] = useState(newsSeen);
   const unreadNews = Boolean(latestNews()) && newsRead < latestNews();
@@ -1609,17 +1582,11 @@ export default function RecipeBox() {
   }, []);
 
   /* Mode, colours and background belong to this device, like the shopping
-     list. The server isn't told who is signed in, so it can't tell one person
-     from another — anything it kept "per person" would be one setting for everyone.
-     The effect below mirrors mode and colours locally; the background is
-     saved here. */
+     list. Mode, colours and the background used to be mirrored to the account
+     as well; they are kept here alone now, so one person's dark mode is not
+     everybody's. The effect below mirrors mode and colours locally. */
   const flipTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
   const choosePalette = (id) => setPalette(paletteById(id));
-  const chooseTexture = (id) => {
-    const t = textureById(id);
-    setTexture(t);
-    try { localStorage.setItem("rb-texture", t ? t.id : ""); } catch { /* fine */ }
-  };
 
   const swatchButton = (key, on, onClick, swatch, label) => (
     <button
@@ -2376,17 +2343,6 @@ export default function RecipeBox() {
     .rb * { box-sizing: border-box; }
     .rb ::selection { background: var(--page-accent); color: var(--on-accent); }
     .rb-focus:focus-visible { outline: 2px solid var(--page-accent); outline-offset: 3px; }
-    /* On a texture, anything carrying text sits on its own near-solid fill, so
-       the image itself never has to be dimmed. Loose text gets a strip behind
-       each line rather than a glow — a glow cannot hold up against a bold
-       gingham check. The negative margin keeps the text on its column. */
-    .rb-textured .rb-onimg { background-color: rgba(var(--bg-rgb), .98) !important; }
-    .rb-textured .rb-onimg-on { background: linear-gradient(rgba(var(--accent-rgb), .14), rgba(var(--accent-rgb), .14)), rgba(var(--bg-rgb), .98) !important; }
-    .rb-textured .rb-strip {
-      background: rgba(var(--bg-rgb), .98); border-radius: 2px;
-      padding: .08em .3em; margin: 0 -.3em;
-      -webkit-box-decoration-break: clone; box-decoration-break: clone;
-    }
     /* Nothing in the menu reacted to a pointer, so a row gave no sign of where
        it began or ended. Now it lights up exactly as far as it is live.
        !important is doing real work here: menuRow sets background inline, and
@@ -2494,7 +2450,7 @@ export default function RecipeBox() {
   /* ═══════════════════════════════════════════════════════════════ */
   return (
     <div
-      className={texture ? "rb rb-textured" : "rb"}
+      className="rb"
       data-theme={theme}
       onDragOver={(e) => { if (isFileDrag(e)) { e.preventDefault(); setDragging(true); } }}
       onDragLeave={() => setDragging(false)}
@@ -2512,21 +2468,7 @@ export default function RecipeBox() {
       }}
     >
       <style>{css}</style>
-      {texture && (
-        <div
-          aria-hidden
-          className="rb-backdrop"
-          style={{
-            position: "fixed", inset: 0, zIndex: -1, pointerEvents: "none",
-            backgroundImage: `url("${texture.src}")`,
-            backgroundRepeat: texture.tile ? "repeat" : "no-repeat",
-            backgroundSize: texture.tile ? `${texture.tile}px` : "cover",
-            backgroundPosition: "center",
-          }}
-        />
-      )}
-      {/* a real texture makes the speckle redundant */}
-      {!texture && <Grain opacity={palette[theme].grain ?? 0.06} />}
+      <Grain opacity={palette[theme].grain ?? 0.06} />
 
       {dragging && (
         <div style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(var(--deep-rgb), .88)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
@@ -2559,7 +2501,7 @@ export default function RecipeBox() {
       <header className="rb-noprint rb-head" style={{ position: "relative", maxWidth: 1120, margin: "0 auto", padding: "52px 26px 0" }}>
         <div className="rb-corner" style={{ position: "absolute", top: 14, right: 26, zIndex: 5, display: "flex", gap: 8 }}>
           <button
-            className={`rb-btn rb-focus${homeArmed ? "" : " rb-onimg"}`}
+            className="rb-btn rb-focus"
             onClick={goHome}
             aria-current={view === "list" ? "page" : undefined}
             title={view === "list" ? "Back to the top" : "Back to all the recipes — your search and filters stay as they were"}
@@ -2581,7 +2523,7 @@ export default function RecipeBox() {
             onOpen={() => setMenuPane("main")}
             trigger={({ open, toggle }) => (
               <button
-                className="rb-btn rb-focus rb-onimg"
+                className="rb-btn rb-focus"
                 onClick={toggle}
                 aria-expanded={open}
                 aria-haspopup="dialog"
@@ -2629,12 +2571,6 @@ export default function RecipeBox() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                   {PALETTES.map((p) => swatchButton(p.id, p.id === palette.id, () => choosePalette(p.id), swatchFor(p, theme), p.name))}
                 </div>
-                <p style={{ ...menuLabel, margin: "16px 4px 4px" }}>Background</p>
-                <p style={{ font: `400 12.5px/1.45 ${UI}`, color: "var(--card-muted)", margin: "0 4px 8px" }}>Shown behind your colours, as it is.</p>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                  {swatchButton("none", !texture, () => chooseTexture(null), swatchFor(palette, theme), "Plain")}
-                  {TEXTURES.map((t) => swatchButton(t.id, texture?.id === t.id, () => chooseTexture(t.id), `url("${t.thumb}") center / cover`, t.name))}
-                </div>
                 <p style={{ font: `400 12px/1.45 ${UI}`, color: "var(--card-muted)", margin: "12px 4px 2px" }}>Just for this device — everyone picks their own.</p>
               </>
             ) : (
@@ -2651,10 +2587,10 @@ export default function RecipeBox() {
                       aria-hidden
                       style={{
                         flex: "none", width: 18, height: 18, borderRadius: "50%", boxShadow: "inset 0 0 0 1px rgba(0,0,0,.15)",
-                        background: texture ? `url("${texture.thumb}") center / cover` : swatchFor(palette, theme),
+                        background: swatchFor(palette, theme),
                       }}
                     />
-                    Colours & background
+                    Colours
                   </span>
                   <span aria-hidden style={{ color: "var(--card-muted)" }}>›</span>
                 </button>
@@ -2687,17 +2623,17 @@ export default function RecipeBox() {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 22, alignItems: "flex-end", justifyContent: "space-between" }}>
           <div style={{ minWidth: 260 }}>
             <h1 style={{ font: `300 clamp(34px, 6vw, 52px)/1.02 ${DISPLAY}`, margin: 0, letterSpacing: "-0.015em", color: "rgb(var(--on-page))" }}>
-              <span className="rb-strip">{activeBox ? `${activeBox}'s Recipes` : SITE_NAME}</span>
+              {activeBox ? `${activeBox}'s Recipes` : SITE_NAME}
             </h1>
             <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.58 * var(--ink-k)))", margin: "12px 0 0", maxWidth: "46ch" }}>
-              <span className="rb-strip">{activeBox
+              {activeBox
                 ? `${boxCount(activeBox)} ${boxCount(activeBox) === 1 ? "recipe" : "recipes"} from ${activeBox}.`
-                : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}</span>
+                : `${box.recipes.length} ${box.recipes.length === 1 ? "recipe" : "recipes"} kept here, for whoever asks next.`}
             </p>
 
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button className="rb-btn rb-focus rb-onimg" style={btnGhost} onClick={openShopping}>
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={openShopping}>
               <span aria-hidden style={{ marginRight: 7 }}>🛒</span>Shopping list{toBuy ? ` (${toBuy})` : ""}
             </button>
 
@@ -2717,8 +2653,8 @@ export default function RecipeBox() {
       </header>
 
       <main className="rb-main" style={{ position: "relative", maxWidth: 1120, margin: "0 auto", padding: "30px 26px 0" }}>
-        {status && <p className="rb-noprint" style={{ font: `500 13px/1.4 ${UI}`, color: "var(--page-accent)", margin: "0 0 18px" }}><span className="rb-strip">{status}</span></p>}
-        {loading && <p style={{ font: `400 15px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))" }}><span className="rb-strip">Opening the box…</span></p>}
+        {status && <p className="rb-noprint" style={{ font: `500 13px/1.4 ${UI}`, color: "var(--page-accent)", margin: "0 0 18px" }}>{status}</p>}
+        {loading && <p style={{ font: `400 15px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))" }}>Opening the box…</p>}
 
         {/* ═══════ LIST ═══════ */}
         {!loading && view === "list" && (
@@ -2734,7 +2670,7 @@ export default function RecipeBox() {
               const chip = (key, label, onClear) => (
                 <button
                   key={key}
-                  className="rb-focus rb-onimg"
+                  className="rb-focus"
                   onClick={onClear}
                   aria-label={`Remove filter: ${label}`}
                   style={{
@@ -2754,7 +2690,7 @@ export default function RecipeBox() {
                       width={300}
                       label="Recipe boxes"
                       trigger={({ open, toggle }) => (
-                        <button className="rb-focus rb-onimg" onClick={toggle} aria-expanded={open} aria-haspopup="dialog" style={{ ...toolbarButton, maxWidth: "100%" }}>
+                        <button className="rb-focus" onClick={toggle} aria-expanded={open} aria-haspopup="dialog" style={{ ...toolbarButton, maxWidth: "100%" }}>
                           <span style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start", minWidth: 0 }}>
                             <span style={{ font: `400 17px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "min(60vw, 340px)" }}>
                               {current.name}
@@ -2820,7 +2756,7 @@ export default function RecipeBox() {
                       onChange={(e) => setQuery(e.target.value)}
                       placeholder={SCOPES.find((s2) => s2.id === scope).placeholder}
                       aria-label="Search recipes"
-                      className="rb-focus rb-onimg"
+                      className="rb-focus"
                       style={{
                         flex: "1 1 200px", minWidth: 0, minHeight: 50, font: `400 15px/1.5 ${UI}`, padding: "12px 15px", borderRadius: 2,
                         border: `1px solid rgba(var(--on-page), calc(.22 * var(--ink-k)))`, background: "rgba(var(--on-page), calc(.06 * var(--ink-k)))", color: "rgb(var(--on-page))",
@@ -2832,7 +2768,7 @@ export default function RecipeBox() {
                       width={340}
                       label="Filters"
                       trigger={({ open, toggle }) => (
-                        <button className="rb-focus rb-onimg" onClick={toggle} aria-expanded={open} aria-haspopup="dialog" style={toolbarButton}>
+                        <button className="rb-focus" onClick={toggle} aria-expanded={open} aria-haspopup="dialog" style={toolbarButton}>
                           <span style={{ font: `600 13.5px/1 ${UI}`, color: "rgb(var(--on-page))" }}>Filters</span>
                           {activeFilters > 0 && (
                             <span style={{ font: `700 11px/1 ${UI}`, padding: "3px 7px", borderRadius: 999, background: "var(--page-accent)", color: "var(--on-accent)" }}>{activeFilters}</span>
@@ -2906,7 +2842,7 @@ export default function RecipeBox() {
 
                   {scope === "ingredient" && (
                     <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.5 * var(--ink-k)))", margin: "12px 0 0" }}>
-                      <span className="rb-strip">Separate ingredients with commas to find recipes that use all of them — “lime, tequila”.</span>
+                      Separate ingredients with commas to find recipes that use all of them — “lime, tequila”.
                     </p>
                   )}
                 </div>
@@ -2914,7 +2850,7 @@ export default function RecipeBox() {
             })()}
 
             {visible.length === 0 ? (
-              <div className="rb-onimg" style={{ border: `1px dashed rgba(var(--on-page), calc(.28 * var(--ink-k)))`, borderRadius: 3, padding: "56px 30px", textAlign: "center" }}>
+              <div style={{ border: `1px dashed rgba(var(--on-page), calc(.28 * var(--ink-k)))`, borderRadius: 3, padding: "56px 30px", textAlign: "center" }}>
                 <p style={{ font: `300 26px/1.35 ${DISPLAY}`, margin: "0 0 10px" }}>Nothing in the box yet.</p>
                 <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "rgba(var(--on-page), calc(.62 * var(--ink-k)))", margin: "0 0 22px" }}>
                   {box.recipes.length === 0
@@ -2957,7 +2893,7 @@ export default function RecipeBox() {
 
             <div className="rb-noprint" style={{ marginTop: 50, paddingTop: 24, borderTop: `1px solid rgba(var(--on-page), calc(.16 * var(--ink-k)))` }}>
               <p style={{ font: `400 12.5px/1.65 ${UI}`, color: "rgba(var(--on-page), calc(.48 * var(--ink-k)))", margin: 0, maxWidth: 460 }}>
-                <span className="rb-strip">Everyone shares one box. Whoever has the link can add, change, or remove anything in it.</span>
+                Everyone shares one box. Whoever has the link can add, change, or remove anything in it.
               </p>
             </div>
           </>

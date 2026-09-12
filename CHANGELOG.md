@@ -7,6 +7,7 @@ leave the plumbing out unless they would notice it.
 
 ## 2026-09-11
 
+- **Backgrounds are gone.** The patterned backdrops behind the site have been taken out. The colour schemes stay.
 - **Sharper photos in the box.** Previews are cut more than twice as large now, so a photo looks as good in the list as it does with the recipe open. Photos added before this keep their old preview until you pick "Sharpen photo previews" in the menu, which recuts them from the full-size copy already saved.
 - **A new look.** The site is lighter, and photographs lead. A recipe in the box is now its picture with the name underneath, and a recipe page puts the title, who it came from and what it is above the photo, with the serving, time and step counts in a row beneath it.
 - **New lettering.** Titles are set in Jost, the words you read while cooking in Radley, and the buttons in Inter — the arrangement Bon Appétit uses, picked after looking at what a dozen recipe sites actually serve.
@@ -14,7 +15,7 @@ leave the plumbing out unless they would notice it.
 - **Your shopping list follows you.** Build a list on the computer and it is waiting on your phone at the shop. It is yours alone — nobody else in the family can see or change it, and ticking something off still works with no signal.
 - **Timers for short steps.** A step that says to blend for 60 seconds now gets its own timer button, not just the long bakes and simmers.
 - **The photo button behaves.** Clicking in the empty space beside "Choose a photo" no longer opens the file picker.
-- **Colours, textures and a proper dark mode.** Pick a colour scheme and a background for the site, and dark mode now covers the whole page rather than just the cards. Those stay on the device you chose them on.
+- **Colours and a proper dark mode.** Pick a colour scheme for the site, and dark mode now covers the whole page rather than just the cards. Both stay on the device you chose them on.
 - **A new name.** The recipe box became The Hackwith Table.
 
 ## 2026-09-10
