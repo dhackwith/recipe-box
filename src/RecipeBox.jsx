@@ -422,11 +422,88 @@ const itemKey = (unit, name) => {
   return `${unit || ""}|${words.join(" ")}`;
 };
 
+/* What you write in a recipe is not always what you ask a shop for. "Melted
+   butter" is butter you melt; "frozen banana" is a banana you freeze. The list
+   is for the shop, so the doing-words come off the front.
+
+   The catch is that some of those words are how a thing is sold. Frozen peas
+   are bought frozen, ground cinnamon is bought ground, and shredded mozzarella
+   comes out of the bag shredded — so those words are only removed when what
+   follows them is not one of the things that genuinely arrives that way.
+   Anything not listed is treated as prep, which is the safer way round: buying
+   a plain banana and freezing it works, buying a fresh pea and freezing it is
+   a different evening. */
+const DEGREE = new Set([
+  "finely", "coarsely", "roughly", "thinly", "thickly", "lightly", "firmly",
+  "freshly", "well", "very", "fine", "coarse", "packed",
+]);
+
+/* Never how a thing is sold — always something done to it. */
+const PREP = new Set([
+  "melted", "softened", "soft", "cooked", "uncooked", "cooled", "warmed",
+  "chilled", "beaten", "whisked", "sifted", "peeled", "cored", "seeded",
+  "pitted", "stemmed", "trimmed", "rinsed", "washed", "drained", "halved",
+  "quartered", "cubed", "diced", "chopped", "minced", "shaved", "torn",
+  "mashed", "pureed", "zested", "juiced", "thawed", "defrosted", "boiled",
+  "boiling", "scrubbed", "deveined", "shelled", "husked", "pounded",
+]);
+
+/* Sometimes the word is the product. Kept when the rest of the name mentions
+   one of these; removed otherwise. */
+const SOLD_AS = {
+  frozen: ["pea", "spinach", "corn", "berr", "berries", "edamame", "puff pastry",
+    "pie crust", "fries", "waffle", "mixed vegetable", "concentrate"],
+  ground: ["beef", "pork", "turkey", "chicken", "lamb", "veal", "sausage", "meat",
+    "cinnamon", "cumin", "coriander", "ginger", "nutmeg", "clove", "allspice",
+    "mustard", "pepper", "cardamom", "paprika", "almond", "coffee", "flax"],
+  shredded: ["cheese", "mozzarella", "cheddar", "parmesan", "monterey", "gruyere",
+    "coconut", "hash brown"],
+  grated: ["cheese", "parmesan", "pecorino", "coconut", "romano"],
+  crushed: ["tomato", "ice", "red pepper", "pineapple"],
+  sliced: ["almond", "bread", "cheese", "pepperoni", "olive", "salami"],
+  toasted: ["sesame oil", "coconut", "breadcrumb", "bread crumb"],
+  crumbled: ["feta", "goat cheese", "blue cheese", "cheese", "sausage"],
+  rolled: ["oat"],
+};
+
+/* Left alone on purpose: fresh, dried, smoked, canned, salted, unsalted, raw,
+   whole, ripe. Every one of those separates two things a shop sells side by
+   side, and dropping it would send somebody home with the wrong jar. */
+function shoppingName(name) {
+  let words = String(name || "").trim().split(/\s+/);
+  if (words.length < 2) return String(name || "").trim();
+
+  /* "room temperature eggs" — the only two-word prefix worth special-casing. */
+  const lead = fold(words.slice(0, 2).join(" "));
+  if (lead === "room temperature" && words.length > 2) words = words.slice(2);
+
+  for (let guard = 0; guard < 6 && words.length > 1; guard++) {
+    const head = fold(words[0]).replace(/[^a-z]/g, "");
+    if (DEGREE.has(head) || PREP.has(head)) { words = words.slice(1); continue; }
+    /* "peeled and deveined shrimp" — step over the joiner, but only when what
+       follows it is another doing-word, so "salt and pepper" stays whole. */
+    if (head === "and" && words.length > 2) {
+      const next = fold(words[1]).replace(/[^a-z]/g, "");
+      if (DEGREE.has(next) || PREP.has(next) || SOLD_AS[next]) { words = words.slice(1); continue; }
+    }
+    const keep = SOLD_AS[head];
+    if (keep) {
+      const rest = fold(words.slice(1).join(" "));
+      if (keep.some((k) => rest.includes(k))) break;
+      words = words.slice(1);
+      continue;
+    }
+    break;
+  }
+  return words.join(" ");
+}
+
 function parseLine(line) {
   const [qty, rest] = splitQty(String(line));
   /* What comes before the first comma is what you shop for: "onion, diced"
-     and "onion, sliced" are the same onion at the store. */
-  const name = clean(String(rest).split(",")[0]) || clean(rest);
+     and "onion, sliced" are the same onion at the store. Whatever is left then
+     loses any prep words in front of it, so "frozen banana" joins the bananas. */
+  const name = shoppingName(clean(String(rest).split(",")[0]) || clean(rest));
   if (!qty) return { amount: null, unit: null, name, qtyText: null };
   const um = qty.match(/^(.*?)\s+([A-Za-z]+\.?)$/);
   const unit = um && UNITS.has(um[2].toLowerCase().replace(/\.$/, "")) ? canonUnit(um[2]) : null;
