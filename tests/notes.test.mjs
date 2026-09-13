@@ -292,7 +292,19 @@ await call("DELETE", `?id=${enc(soupQ.data.entry.id)}`, devon);
 const feedNow = await call("GET", "?recent=2", devon);
 is("the feed skips placeholders", feedNow.data.entries.some((e) => e.deleted || e.id === soupQ.data.entry.id), false);
 is("...and still fills its count from further back", feedNow.data.entries.length, 2);
-is("...and says which entries are replies", feedNow.data.entries[0].id === soupA.data.entry.id && feedNow.data.entries[0].parent, soupQ.data.entry.id);
+/* found by id: two entries written in the same millisecond have no set order */
+const soupReply = feedNow.data.entries.find((e) => e.id === soupA.data.entry.id);
+is("...and says which entries are replies", soupReply?.parent, soupQ.data.entry.id);
+is("...naming nobody when the note it answered has been removed", soupReply?.parentName, "");
+
+const cakeQ = await call("POST", "", tracey, { recipe: "cake", text: "Can I use oil instead of butter?" });
+const cakeA = await call("POST", "", devon, { recipe: "cake", text: "Yes, a light one", parent: cakeQ.data.entry.id });
+const feedCake = await call("GET", "?recent=2", devon);
+const askerName = (await call("GET", "?recipe=cake", devon)).data.entries.find((e) => e.id === cakeQ.data.entry.id).name;
+is("a reply in the feed names whose note it answers",
+  feedCake.data.entries.find((e) => e.id === cakeA.data.entry.id)?.parentName, askerName);
+is("...and a note that isn't a reply carries no such name",
+  "parentName" in (feedCake.data.entries.find((e) => e.id === cakeQ.data.entry.id) || {}), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

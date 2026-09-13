@@ -33,7 +33,8 @@
  * nothing else — and is cleared away once nothing hangs from it.
  *
  * GET ?recipe=<id>   everything said about one recipe
- * GET ?recent=<n>    the newest few from across the whole box, for the feed
+ * GET ?recent=<n>    the newest few from across the whole box, for the feed;
+ *                    a reply also says whose note it answers (parentName)
  * GET ?photo=<noteId>  the full-size picture, as an image rather than as JSON
  *
  * Requires the same RECIPES binding as /api/storage.
@@ -215,7 +216,17 @@ export async function onRequest({ request, env }) {
           let e;
           try { e = JSON.parse(raw); } catch { continue; }
           if (e.deleted) continue;
-          entries.push({ ...present(k.name, e, email), recipe: k.recipe });
+          const shown = { ...present(k.name, e, email), recipe: k.recipe };
+          /* A reply in the feed says whose note it answers, so it reads as a
+             reply and can take somebody to that note. One more read, and only
+             for the replies among the handful shown. An empty name means the
+             note it answered has since been removed. */
+          if (shown.parent) {
+            let answered = null;
+            try { answered = JSON.parse((await env.RECIPES.get(shown.parent)) || "null"); } catch { answered = null; }
+            shown.parentName = answered && !answered.deleted ? displayName(answered.email || "") : "";
+          }
+          entries.push(shown);
         }
         return json({ entries });
       }

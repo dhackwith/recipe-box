@@ -2283,6 +2283,17 @@ export default function RecipeBox() {
      time: opening another reply box closes the first. */
   const [replyTo, setReplyTo] = useState(null);
   const [replyText, setReplyText] = useState("");
+  /* A note to bring into view once the recipe's notes are on the page, when it
+     was opened from the Lately feed: { target, ids } — the note to scroll to,
+     and the notes to light up for a moment. */
+  const [noteFocus, setNoteFocus] = useState(null);
+  useEffect(() => {
+    if (!noteFocus || notes === null) return;
+    const el = document.getElementById(`note-${noteFocus.target}`);
+    if (el) el.scrollIntoView({ block: "center" });
+    const t = setTimeout(() => setNoteFocus(null), 2600);
+    return () => clearTimeout(t);
+  }, [notes, noteFocus]);
   const [notePhoto, setNotePhoto] = useState(null);   // { full, shot } waiting to be posted
   const [photoBusyNote, setPhotoBusyNote] = useState(false);
   const [lightbox, setLightbox] = useState(null);     // the entry being looked at full size
@@ -2420,6 +2431,14 @@ export default function RecipeBox() {
     setFactor(1);
     setView("detail");
     window.scrollTo(0, 0);
+  };
+
+  /* A Lately entry opens its recipe at the conversation rather than at the top:
+     a reply at the note it answers, with the reply just beneath, and anything
+     else at itself. */
+  const openFromFeed = (entry, recipe) => {
+    setNoteFocus({ target: entry.parent || entry.id, ids: [entry.parent, entry.id].filter(Boolean) });
+    openCard(recipe.id);
   };
 
   const goBack = () => {
@@ -3547,6 +3566,18 @@ export default function RecipeBox() {
     .rb-entry-gone { border-left-style: dashed; }
     .rb-entry-who > .rb-entry-removed { font-weight: 500; font-style: italic; color: var(--card-muted); }
     .rb-reply-box { margin-top: 10px; max-width: 540px; }
+    /* The note somebody arrived at from Lately, lit for a moment. Only its own
+       lines are lit, not the replies nested inside it, so the eye lands on the
+       note and the reply rather than on the whole thread. */
+    .rb-entry-flash { border-left-color: var(--card-accent); }
+    .rb-entry-flash > .rb-entry-who, .rb-entry-flash > .rb-entry-text { animation: rb-note-flash 2.6s ease-out; }
+    @keyframes rb-note-flash {
+      0%, 40% { background: color-mix(in srgb, var(--card-accent) 18%, transparent); }
+      100% { background: transparent; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .rb-entry-flash > .rb-entry-who, .rb-entry-flash > .rb-entry-text { animation: none; background: color-mix(in srgb, var(--card-accent) 14%, transparent); }
+    }
     /* Something you can catch from the other side of the room without it
        covering what you are reading: a band of the theme's accent around the
        edge of the window, breathing rather than blinking.
@@ -3572,6 +3603,9 @@ export default function RecipeBox() {
     .rb-lately-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font: 400 12.5px/1.5 ${UI}; color: rgba(var(--on-page), calc(.6 * var(--ink-k))); }
     .rb-lately-name { font-weight: 600; color: rgb(var(--on-page)); }
     .rb-lately-what { color: var(--page-accent); font-weight: 600; }
+    /* whose note a reply answers: styled as the link it is, since tapping the
+       row lands on that note */
+    .rb-lately-to { color: var(--page-accent); text-decoration: underline; text-underline-offset: 2px; }
     .rb-lately-text { display: block; margin-top: 5px; font: 400 14.5px/1.65 ${PROSE}; color: rgba(var(--on-page), calc(.88 * var(--ink-k))); }
     /* The feed's own copy of a photograph. Tapping it opens the recipe rather
        than the picture: the row is one target, and somebody who has just seen
@@ -4353,14 +4387,30 @@ export default function RecipeBox() {
                         <button
                           type="button"
                           className="rb-focus rb-lately-open"
-                          onClick={() => r && openCard(r.id)}
+                          onClick={() => r && openFromFeed(e, r)}
                           disabled={!r}
-                          aria-label={r ? `Open ${r.title}` : "That recipe is no longer in the box"}
+                          aria-label={
+                            !r ? "That recipe is no longer in the box"
+                              : e.parent ? `Open ${r.title} at the note ${e.name} replied to`
+                              : `Open ${r.title} at what ${e.name} wrote`
+                          }
                         >
                           <span className="rb-lately-who">
                             <span className="rb-lately-name">{e.name}</span>
                             <span aria-hidden>·</span>
-                            <span>{e.kind === "made" ? "made" : e.parent ? "replied on" : "wrote about"}</span>
+                            <span>
+                              {e.kind === "made" ? "made"
+                                : e.parent ? (
+                                  <>
+                                    replied to{" "}
+                                    <span className="rb-lately-to">
+                                      {e.parentName ? `${e.parentName}'s note` : e.parentName === "" ? "a removed note" : "a note"}
+                                    </span>{" "}
+                                    on
+                                  </>
+                                )
+                                : "wrote about"}
+                            </span>
                             <span className="rb-lately-what">{r ? r.title : "a recipe since removed"}</span>
                             <span aria-hidden>·</span>
                             <span>{whenLabel(e.at)}</span>
@@ -5467,7 +5517,8 @@ export default function RecipeBox() {
                     return (
                       <li
                         key={e.id}
-                        className={e.deleted ? "rb-entry rb-entry-gone" : e.kind === "made" ? "rb-entry rb-entry-made" : "rb-entry"}
+                        id={`note-${e.id}`}
+                        className={`${e.deleted ? "rb-entry rb-entry-gone" : e.kind === "made" ? "rb-entry rb-entry-made" : "rb-entry"}${noteFocus?.ids.includes(e.id) ? " rb-entry-flash" : ""}`}
                       >
                         {e.deleted ? (
                           <p className="rb-entry-who">
