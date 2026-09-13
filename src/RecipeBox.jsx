@@ -27,6 +27,7 @@ import { whenAt, whenFull } from "./when.js";
 import { hasHate, newHate, HATE_MESSAGE } from "../shared/hate.js";
 import { asFavorites, emptyFavorites, isFavorite, setFavorite, mergeFavorites } from "./favorites.js";
 import { QUICK_EMOJI, DEFAULT_QUICK_EMOJI, asQuickEmoji, emojiOnly } from "./emoji.js";
+import { gifUrl, isGifMessage } from "../shared/gif.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -1098,6 +1099,91 @@ function Clip({ size = 18 }) {
   );
 }
 
+/* Searching KLIPY for a GIF (functions/api/gifs.js). With nothing typed it
+   shows what is popular. Typing waits for a pause before it asks, so a word
+   costs one search rather than one a letter — a test key allows a hundred an
+   hour. "Powered by KLIPY" is their condition for using the library free. */
+const GIFS_API = "/api/gifs";
+const GIF_SEARCH_PAUSE_MS = 450;
+
+function GifPicker({ onPick, onClose, busy }) {
+  const [q, setQ] = useState("");
+  const [gifs, setGifs] = useState([]);
+  const [state, setState] = useState("loading");
+  const [note, setNote] = useState("");
+  const searchRef = useRef(null);
+  useEffect(() => { searchRef.current?.focus(); }, []);
+
+  useEffect(() => {
+    const words = q.trim();
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      setState("loading");
+      try {
+        const res = await fetch(`${GIFS_API}${words ? `?q=${encodeURIComponent(words)}` : ""}`, {
+          credentials: "same-origin",
+          signal: ctrl.signal,
+        });
+        let data = null;
+        try { data = await res.json(); } catch { data = null; }
+        if (!res.ok) throw new Error((data && data.error) || `Couldn't search for GIFs (${res.status})`);
+        if (data === null) throw new Error("GIF search isn't available here — this needs the deployed site");
+        setGifs(data.gifs || []);
+        setNote("");
+        setState("ready");
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        setGifs([]);
+        setNote(String(err.message || err));
+        setState("error");
+      }
+    }, words ? GIF_SEARCH_PAUSE_MS : 0);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [q]);
+
+  return (
+    <div
+      className="rb-gif-panel"
+      role="group"
+      aria-label="Choose a GIF"
+      onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } }}
+    >
+      <div className="rb-gif-search">
+        <input
+          ref={searchRef}
+          type="search"
+          className="rb-focus"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          maxLength={80}
+          placeholder="Search KLIPY"
+          aria-label="Search KLIPY for a GIF"
+          style={{ ...input, padding: "6px 9px", font: `400 13.5px/1.4 ${SOCIAL}` }}
+        />
+        <button type="button" className="rb-chatwin-ctl rb-focus" onClick={onClose} aria-label="Close the GIF search" title="Close">
+          <span aria-hidden>×</span>
+        </button>
+      </div>
+      {state === "error" ? (
+        <p className="rb-gif-note">{note}</p>
+      ) : state === "ready" && !gifs.length ? (
+        <p className="rb-gif-note">No GIFs found for that.</p>
+      ) : (
+        <ul className="rb-gif-grid" aria-busy={state === "loading"}>
+          {gifs.map((g) => (
+            <li key={g.id}>
+              <button type="button" className="rb-focus" disabled={busy} onClick={() => onPick(g)} aria-label={`Send GIF: ${g.title}`} title={g.title}>
+                <img src={g.preview.url} alt="" loading="lazy" referrerPolicy="no-referrer" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="rb-gif-credit">{state === "loading" ? "Looking… · " : ""}Powered by KLIPY</p>
+    </div>
+  );
+}
+
 function ChatWindow({
   id, name, minimized, focusAt, unread, blocked, owner,
   face, faceWithLight, statusFor,
@@ -1113,6 +1199,7 @@ function ChatWindow({
   const threadRef = useRef(null);
   const typeRef = useRef(null);
   const fileRef = useRef(null);
+  const [gifOpen, setGifOpen] = useState(false);
 
   /* The quick emoji beside Send. A tap sends it. Pressing and holding opens a
      small menu to choose a different one, which then stands in its place in
@@ -1151,6 +1238,24 @@ function ChatWindow({
       const { message } = await messagesCall("POST", "", { to: id, text: quickEmoji });
       setMessages((all) => mergeById(all, [message]));
       onSent();
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  /* A GIF goes the moment it is chosen, as in any messenger, and travels as
+     its address on KLIPY's file server (shared/gif.js). */
+  const sendGif = async (gif) => {
+    if (busy || blocked) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { message } = await messagesCall("POST", "", { to: id, text: gif.url });
+      setMessages((all) => mergeById(all, [message]));
+      setGifOpen(false);
+      onSent();
+      typeRef.current?.focus();
     } catch (err) {
       setError(String(err.message || err));
     } finally {
@@ -1252,7 +1357,7 @@ function ChatWindow({
   const send = async () => {
     const text = draft.trim();
     if ((!text && !pending) || busy) return;
-    if (hasHate(text)) { setError(HATE_MESSAGE); return; }
+    if (!isGifMessage(text) && hasHate(text)) { setError(HATE_MESSAGE); return; }
     setBusy(true);
     setError("");
     try {
@@ -1336,10 +1441,21 @@ function ChatWindow({
               /* Their face beside the last of a run of their messages, as
                  most messengers do, rather than beside every line. */
               const endsRun = !m.mine && (!messages[i + 1] || messages[i + 1].mine);
+              const gif = !m.deleted && !m.attachment ? gifUrl(m.text) : null;
               return (
                 <li key={m.id} className={`rb-msg-row${m.mine ? " is-mine" : ""}`}>
                   {!m.mine && (endsRun ? face(id, name, 24) : <span className="rb-face-gap" aria-hidden />)}
-                  <div className={`rb-msg${m.mine ? " is-mine" : ""}${m.attachment?.picture && !m.deleted ? " has-photo" : ""}${!m.deleted && !m.attachment && emojiOnly(m.text) ? " is-emoji" : ""}`}>
+                  <div className={`rb-msg${m.mine ? " is-mine" : ""}${(m.attachment?.picture && !m.deleted) || gif ? " has-photo" : ""}${!m.deleted && !m.attachment && emojiOnly(m.text) ? " is-emoji" : ""}`}>
+                    {gif && (
+                      <button
+                        type="button"
+                        className="rb-msg-photo rb-focus"
+                        onClick={() => onOpenPhoto({ src: gif, alt: "GIF", caption: "GIF via KLIPY" })}
+                        aria-label="See this GIF full size"
+                      >
+                        <img src={gif} alt="GIF" loading="lazy" referrerPolicy="no-referrer" onLoad={keepAtBottom} />
+                      </button>
+                    )}
                     {m.attachment && !m.deleted && (m.attachment.picture ? (
                       <button
                         type="button"
@@ -1358,7 +1474,7 @@ function ChatWindow({
                         </span>
                       </a>
                     ))}
-                    {(m.deleted || m.text) && (
+                    {(m.deleted || (m.text && !gif)) && (
                       <p className={m.deleted ? "rb-msg-text rb-msg-gone" : "rb-msg-text"}>
                         {m.deleted ? (m.removed ? "Removed" : "Taken back") : m.text}
                       </p>
@@ -1385,6 +1501,13 @@ function ChatWindow({
       </div>
 
       <div className="rb-chatwin-compose">
+        {gifOpen && !blocked && (
+          <GifPicker
+            busy={busy}
+            onPick={sendGif}
+            onClose={() => { setGifOpen(false); typeRef.current?.focus(); }}
+          />
+        )}
         {pending && (
           <div className="rb-chat-pending">
             {pending.preview
@@ -1401,6 +1524,10 @@ function ChatWindow({
         )}
         <textarea
           ref={typeRef}
+          /* Put away while a GIF is being chosen, when the search box is where
+             the typing goes: a chat window has no room for both and the
+             conversation. The draft is kept. */
+          hidden={gifOpen && !blocked}
           /* A picture pasted into the box is attached, as in any messenger. */
           onPaste={(e) => {
             const pasted = [...(e.clipboardData?.files || [])][0];
@@ -1439,6 +1566,17 @@ function ChatWindow({
               hidden
               onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ""; }}
             />
+            <button
+              type="button"
+              className="rb-chatwin-ctl rb-gif-btn rb-focus"
+              onClick={() => setGifOpen((open) => !open)}
+              disabled={blocked}
+              aria-expanded={gifOpen}
+              aria-label="Send a GIF"
+              title="Send a GIF"
+            >
+              GIF
+            </button>
             <button type="button" className="rb-entry-x rb-focus" onClick={() => onBlock(!blocked)}>
               {blocked ? `Unblock ${first}` : `Block ${first}`}
             </button>
@@ -4937,6 +5075,15 @@ export default function RecipeBox() {
     .rb-emoji-menu button { width: 38px; height: 38px; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; font-size: 22px; line-height: 1; }
     .rb-emoji-menu button:hover, .rb-emoji-menu button:focus-visible { background: var(--card-lift); outline: none; }
     .rb-emoji-menu button[aria-checked="true"] { background: color-mix(in srgb, var(--card-accent) 24%, transparent); }
+    .rb-gif-btn { width: auto; padding: 0 7px; border-radius: 6px; font: 700 11.5px/1 ${SOCIAL}; letter-spacing: .06em; }
+    .rb-gif-panel { display: flex; flex-direction: column; gap: 6px; }
+    .rb-gif-search { display: flex; align-items: center; gap: 4px; }
+    .rb-gif-grid { height: min(150px, 28vh); overflow-y: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 92px; gap: 4px; margin: 0; padding: 0; list-style: none; }
+    .rb-gif-grid button { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 4px; overflow: hidden; background: var(--card-lift); cursor: pointer; }
+    .rb-gif-grid button:disabled { cursor: default; opacity: .5; }
+    .rb-gif-grid img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .rb-gif-note { margin: 0; padding: 12px 4px; font: 400 12.5px/1.45 ${SOCIAL}; color: var(--card-muted); }
+    .rb-gif-credit { margin: 0; text-align: right; font: 600 10.5px/1.2 ${SOCIAL}; letter-spacing: .04em; color: var(--card-muted); }
     .rb-emoji-hint { grid-column: 1 / -1; margin: 2px 4px 4px; font: 600 10.5px/1.2 ${SOCIAL}; letter-spacing: .04em; color: var(--card-muted); }
     @media (prefers-reduced-motion: reduce) { .rb-emoji-btn { transition: none; } .rb-emoji-btn:hover:not(:disabled), .rb-emoji-btn:active:not(:disabled) { transform: none; } }
     /* On a phone an open chat takes the width of the screen above the dock,
@@ -7613,7 +7760,7 @@ export default function RecipeBox() {
                               <span className="rb-chat-last">
                                 {t.last.mine ? "You: " : ""}
                                 {t.last.deleted ? (t.last.removed ? "message removed" : "message taken back")
-                                  : t.last.text || (t.last.attachment ? (t.last.attachment.picture ? "Sent a photo" : `Sent ${t.last.attachment.name}`) : "")}
+                                  : (isGifMessage(t.last.text) ? "Sent a GIF" : t.last.text) || (t.last.attachment ? (t.last.attachment.picture ? "Sent a photo" : `Sent ${t.last.attachment.name}`) : "")}
                               </span>
                             ) : null}
                             {seen ? <span className="rb-chat-seen">{seen}</span> : null}
