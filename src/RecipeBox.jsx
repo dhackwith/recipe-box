@@ -3796,9 +3796,22 @@ export default function RecipeBox() {
 
     /* Step photos: a row under a step on the recipe, larger in cooking mode,
        and a row for each step in the form where they are added. */
-    .rb-stepshots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-    .rb-stepshot { padding: 0; border: 1px solid var(--card-edge); border-radius: 2px; background: var(--card-lift); cursor: zoom-in; line-height: 0; overflow: hidden; }
-    .rb-stepshot img { display: block; width: clamp(96px, 26vw, 180px); height: clamp(72px, 19.5vw, 135px); object-fit: cover; }
+    /* The row spans the step's text, one equal column per photo, so two photos
+       share the width rather than sitting small at its start. One photo on its
+       own is kept wide and short, or it would stand taller than the step. */
+    .rb-stepshots { display: grid; gap: 10px; margin-top: 14px; }
+    .rb-stepshot { display: block; width: 100%; padding: 0; border: 1px solid var(--card-edge); border-radius: 2px; background: var(--card-lift); cursor: zoom-in; line-height: 0; overflow: hidden; }
+    .rb-stepshot img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; }
+    .rb-stepshots[data-count="1"] .rb-stepshot img { aspect-ratio: 16 / 9; }
+    .rb-stepshots[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .rb-stepshots[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    /* Three across a phone is three thumbnails. There, the first takes the
+       width and the other two share the row beneath it. */
+    @media (max-width: 560px) {
+      .rb-stepshots[data-count="3"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .rb-stepshots[data-count="3"] .rb-stepshot:first-child { grid-column: 1 / -1; }
+      .rb-stepshots[data-count="3"] .rb-stepshot:first-child img { aspect-ratio: 16 / 9; }
+    }
     .rb-cookshots { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
     .rb-cookshot { padding: 0; border: 0; border-radius: 3px; background: rgba(0, 0, 0, .18); cursor: zoom-in; line-height: 0; overflow: hidden; }
     .rb-cookshot img { display: block; height: clamp(120px, 26vh, 240px); width: auto; max-width: 100%; object-fit: cover; }
@@ -5624,7 +5637,10 @@ export default function RecipeBox() {
                             {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
                             <p style={{ font: `400 16.5px/1.75 ${PROSE}`, color: "var(--card-text)", margin: 0 }}>{showText(text, factor, units)}</p>
                             {Array.isArray(s?.photos) && s.photos.length > 0 && (
-                              <div className="rb-stepshots rb-noprint">
+                              <div
+                                className="rb-stepshots rb-noprint"
+                                data-count={Math.min(s.photos.length, STEP_PHOTO_MAX)}
+                              >
                                 {s.photos.slice(0, STEP_PHOTO_MAX).map((id, k) => (
                                   <button
                                     key={id}
