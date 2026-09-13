@@ -37,7 +37,8 @@ const MESSAGES = {
     const stmt = sqlite.prepare(sql);
     let args = [];
     const api = {
-      bind: (...a) => { args = a; return api; },
+      /* D1 takes an ArrayBuffer for a BLOB; Node's SQLite wants a typed array. */
+      bind: (...a) => { args = a.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v)); return api; },
       all: async () => ({ results: stmt.all(...args) }),
       first: async () => stmt.get(...args) ?? null,
       run: async () => {
@@ -47,6 +48,19 @@ const MESSAGES = {
     };
     return api;
   },
+};
+/* D1's batch: every statement in one transaction, all or nothing. */
+MESSAGES.batch = async (statements) => {
+  sqlite.exec("BEGIN");
+  try {
+    const results = [];
+    for (const s of statements) results.push(await s.run());
+    sqlite.exec("COMMIT");
+    return results;
+  } catch (err) {
+    sqlite.exec("ROLLBACK");
+    throw err;
+  }
 };
 const env = { MESSAGES };
 
@@ -260,6 +274,88 @@ const promptly = await call("GET", "?waiting&wait=1&unread=-5", devon);
 is("a count it already disagrees with comes back immediately", Date.now() - started < 3000, true);
 is("...with what is actually waiting", promptly.data.waiting.some((w) => w.id === "tracey"), true);
 is("waiting needs a sign-in too", (await call("GET", "?waiting", null)).status, 403);
+
+/* ── attachments ──
+   A photo or a file rides along with a message. What matters most: only the
+   two people in the conversation can fetch it, and nothing uploaded comes back
+   as something a browser would run. */
+const upload = async (token, fields) => {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
+  const res = await onRequest({
+    env,
+    request: new Request("https://thehackwithtable.com/api/messages", {
+      method: "POST",
+      headers: token ? { "Cf-Access-Jwt-Assertion": token } : {},
+      body: form,
+    }),
+  });
+  let data = null;
+  try { data = JSON.parse(await res.text()); } catch { data = null; }
+  return { status: res.status, data };
+};
+const fetchFile = (id, token) =>
+  onRequest({
+    env,
+    request: new Request(`https://thehackwithtable.com/api/messages?attachment=${id}`, {
+      headers: token ? { "Cf-Access-Jwt-Assertion": token } : {},
+    }),
+  });
+const countPieces = (id) => sqlite.prepare("SELECT COUNT(*) AS n FROM attachment_pieces WHERE attachment = ?").get(id).n;
+
+const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1]);
+const photo = await upload(devon, { to: "nicholas", text: "the loaves", file: new File([JPEG_BYTES], "loaves.jpg", { type: "image/jpeg" }) });
+is("a photo is sent", photo.status, 201);
+is("...described as a picture", [photo.data.message.attachment.name, photo.data.message.attachment.size, photo.data.message.attachment.picture], ["loaves.jpg", 12, true]);
+const seenPhoto = (await call("GET", "?with=devon", nick)).data.messages.find((m) => m.id === photo.data.message.id);
+is("the other end sees the words and the photo", [seenPhoto.text, seenPhoto.attachment?.name, seenPhoto.attachment?.picture], ["the loaves", "loaves.jpg", true]);
+
+const gotPhoto = await fetchFile(photo.data.message.attachment.id, nick);
+is("the other end can fetch it", gotPhoto.status, 200);
+is("...as a picture", gotPhoto.headers.get("content-type"), "image/jpeg");
+is("...shown in the page", gotPhoto.headers.get("content-disposition").startsWith("inline"), true);
+is("...never second-guessed as something else", gotPhoto.headers.get("x-content-type-options"), "nosniff");
+is("...byte for byte", [...new Uint8Array(await gotPhoto.arrayBuffer())], [...JPEG_BYTES]);
+is("somebody outside the conversation cannot fetch it", (await fetchFile(photo.data.message.attachment.id, michael)).status, 404);
+is("...nor anybody signed out", (await fetchFile(photo.data.message.attachment.id, null)).status, 403);
+is("an id that doesn't exist looks the same as one that isn't yours", (await fetchFile(999999, nick)).status, 404);
+
+const sneaky = await upload(devon, { to: "nicholas", file: new File(["<script>alert(1)</script>"], "cute.jpg", { type: "image/jpeg" }) });
+is("a file with no words is still a message", sneaky.status, 201);
+is("...and a page calling itself a photo is not called a picture", sneaky.data.message.attachment.picture, false);
+const gotSneaky = await fetchFile(sneaky.data.message.attachment.id, nick);
+is("...and only ever goes out as a download",
+  [gotSneaky.headers.get("content-type"), gotSneaky.headers.get("content-disposition").startsWith("attachment")],
+  ["application/octet-stream", true]);
+
+const big = new Uint8Array(1_300_000).map((_, i) => (i * 7) % 251);
+const doc = await upload(devon, { to: "nicholas", file: new File([big], "../../menu plan.pdf", { type: "application/pdf" }) });
+is("a file larger than one piece is sent", doc.status, 201);
+is("...under its own name, without any folders", doc.data.message.attachment.name, "menu plan.pdf");
+is("...kept in pieces", countPieces(doc.data.message.attachment.id), 3);
+const gotDoc = new Uint8Array(await (await fetchFile(doc.data.message.attachment.id, nick)).arrayBuffer());
+is("...and comes back whole",
+  [gotDoc.length, gotDoc[0], gotDoc[600_000], gotDoc[1_299_999]],
+  [big.length, big[0], big[600_000], big[1_299_999]]);
+is("the inbox says what the last message carried",
+  (await call("GET", "?inbox", nick)).data.threads.find((t) => t.with === "devon").last.attachment?.name, "menu plan.pdf");
+
+is("a file over the limit is refused",
+  (await upload(devon, { to: "nicholas", file: new File([new Uint8Array(5 * 1024 * 1024 + 1)], "huge.bin") })).status, 413);
+is("an empty file is refused", (await upload(devon, { to: "nicholas", file: new File([], "nothing.txt") })).status, 400);
+is("a slur in a file's name is refused", (await upload(devon, { to: "nicholas", file: new File(["x"], `${TERMS[0]}.txt`) })).status, 400);
+is("nobody the box doesn't know can be sent one", (await upload(devon, { to: "stranger", file: new File(["x"], "a.txt") })).status, 400);
+await call("POST", "", nick, { block: "devon" });
+is("a block stops files too", (await upload(devon, { to: "nicholas", file: new File(["x"], "a.txt") })).status, 403);
+await call("POST", "", nick, { unblock: "devon" });
+is("nothing refused left a file behind", sqlite.prepare("SELECT COUNT(*) AS n FROM attachments WHERE message = 0").get().n, 0);
+
+const oops = await upload(devon, { to: "nicholas", file: new File([JPEG_BYTES], "wrong.jpg") });
+is("taking back a message with a file works", (await call("DELETE", `?id=${oops.data.message.id}`, devon)).status, 200);
+is("...and its file can no longer be fetched", (await fetchFile(oops.data.message.attachment.id, nick)).status, 404);
+is("...because it is gone, pieces and all", countPieces(oops.data.message.attachment.id), 0);
+is("...and the gap left behind carries no file",
+  (await call("GET", "?with=devon", nick)).data.messages.find((m) => m.id === oops.data.message.id).attachment, null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

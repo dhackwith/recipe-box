@@ -13,6 +13,8 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **Answer with an emoji.** Every chat has a 👍 beside Send, and one tap sends it. Press and hold it to choose a different emoji from a small menu. Your choice takes the thumbs up's place in all your chats. A message that's only an emoji or three shows up large.
+- **Send photos and files in Messenger.** Tap the paperclip in a chat to attach a photo or a file up to 5 MB, or paste a picture straight into the message box. Photos show up in the conversation, and you can tap one to see it full size. Other files show as a card to download. Only the two of you can open what's sent, and taking a message back takes its file with it.
 - **Star your favorites.** Tap the star on any recipe, on its tile or beside its title, to keep it as a favorite. Filters → Favorites only shows just those. Your stars are your own, and they follow you to your other devices.
 - **See who's on at a glance.** Open Messenger and the friends list is split into Online and Offline, with whoever you've talked to most recently at the top of each. It keeps itself in order while it's open, so somebody who has just written moves up straight away.
 - **A minute to take a message back.** Take back is there for a minute after you send something. After that the message stays. Devon, who looks after the site, can remove anyone's message or note. A message removed that way says "Removed" rather than "Taken back", so nobody thinks the sender changed their mind.

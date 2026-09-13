@@ -26,6 +26,7 @@ import { whenAt, whenFull } from "./when.js";
 /* The one thing the box will not keep — see shared/hate.js. */
 import { hasHate, newHate, HATE_MESSAGE } from "../shared/hate.js";
 import { asFavorites, emptyFavorites, isFavorite, setFavorite, mergeFavorites } from "./favorites.js";
+import { QUICK_EMOJI, DEFAULT_QUICK_EMOJI, asQuickEmoji, emojiOnly } from "./emoji.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -957,6 +958,54 @@ async function messagesCall(method, query = "", body) {
   return data;
 }
 
+/* Sending a photo or a file goes as a form, so the file travels as bytes rather
+   than swollen into text (functions/api/messages.js). */
+async function messagesUpload(fields) {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) if (v != null) form.append(k, v);
+  const res = await fetch(MESSAGES_API, { method: "POST", credentials: "same-origin", body: form });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok) throw new Error((data && data.error) || (res.status === 413 ? "That file is too big to send" : `Couldn't send that (${res.status})`));
+  if (data === null) throw new Error("Messages aren't available here — this needs the deployed site");
+  return data;
+}
+
+/* The same ceiling the server holds, so a file too big is refused before
+   anybody waits for it to upload. */
+const ATTACH_MAX = 5 * 1024 * 1024;
+const attachmentUrl = (id) => `${MESSAGES_API}?attachment=${encodeURIComponent(id)}`;
+const sizeLabel = (n) =>
+  n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
+
+/* A photo is shrunk before it is sent, as a note's is: nobody needs a phone's
+   full resolution in a chat window. Anything the browser can't redraw — a PDF,
+   a HEIC it doesn't know, a GIF, whose animation a redraw would lose — goes as
+   it came, and so does a picture that the redraw would only make bigger. */
+const CHAT_PHOTO_MAX = 1600;
+async function prepChatFile(file) {
+  if (/^image\/(jpeg|png|webp)$/i.test(file.type)) {
+    try {
+      const source = await loadBitmap(file);
+      const scale = Math.min(1, CHAT_PHOTO_MAX / Math.max(source.width, source.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(source.width * scale));
+      canvas.height = Math.max(1, Math.round(source.height * scale));
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";   // a transparent PNG would otherwise come out black as a JPEG
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((done) => canvas.toBlob(done, "image/jpeg", 0.82));
+      if (blob && blob.size < file.size) {
+        const base = String(file.name || "photo").replace(/\.[^.]+$/, "") || "photo";
+        return new File([blob], `${base}.jpg`, { type: "image/jpeg" });
+      }
+    } catch { /* not drawable here: send it as it came */ }
+  }
+  return file;
+}
+
 const PROFILE_API = "/api/profile";
 
 /* Profile pictures (functions/api/profile.js). Same shape as notesCall. */
@@ -1014,6 +1063,10 @@ const mergeById = (all, incoming) => {
    how many may be open rather than minimised — three where the screen has
    room, one on a phone, where an open chat takes the width of the screen. */
 const CHATS_KEY = "recipe-box-chats";
+/* the emoji the quick button beside Send sends, remembered on this device */
+const QUICK_EMOJI_KEY = "recipe-box-quick-emoji";
+/* how long a press on the quick emoji is held before it opens the menu instead */
+const HOLD_MS = 450;
 const MAX_CHATS = 5;
 /* How long Take back is offered after sending. The server holds the same line
    by its own clock (functions/api/messages.js). */
@@ -1029,10 +1082,27 @@ const roomForChats = () => {
    the expensive part, and a browser allows only a handful at once — keeps its
    draft, and flashes when the friends list's own loop says something unread
    has arrived. Opened again, it catches up from the last message it had. */
+/* A paperclip, for attaching a file and for showing one. */
+function Clip({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M21.4 11.1l-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function ChatWindow({
   id, name, minimized, focusAt, unread, blocked, owner,
   face, faceWithLight, statusFor,
-  onMinimize, onRestore, onClose, onBlock, onRead, onSent,
+  onMinimize, onRestore, onClose, onBlock, onRead, onSent, onOpenPhoto,
+  quickEmoji, onQuickEmoji,
 }) {
   const [messages, setMessages] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -1042,6 +1112,80 @@ function ChatWindow({
   const since = useRef(0);
   const threadRef = useRef(null);
   const typeRef = useRef(null);
+  const fileRef = useRef(null);
+
+  /* The quick emoji beside Send. A tap sends it. Pressing and holding opens a
+     small menu to choose a different one, which then stands in its place in
+     every chat — and so does a right-click, or the up arrow for somebody on a
+     keyboard. `held` swallows the click that the end of a long press makes, so
+     choosing never also sends. */
+  const [emojiMenu, setEmojiMenu] = useState(false);
+  const holdTimer = useRef(null);
+  const held = useRef(false);
+  const emojiRef = useRef(null);
+  useEffect(() => () => clearTimeout(holdTimer.current), []);
+  useEffect(() => {
+    if (!emojiMenu) { held.current = false; return; }
+    /* the current choice takes focus first, so the arrow keys start from it */
+    emojiRef.current?.querySelector('[role="menuitemradio"][aria-checked="true"]')?.focus();
+    const away = (e) => { if (!emojiRef.current?.contains(e.target)) setEmojiMenu(false); };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [emojiMenu]);
+  const openEmojiMenu = (byPointer) => {
+    clearTimeout(holdTimer.current);
+    if (byPointer) held.current = true;
+    setEmojiMenu(true);
+  };
+  const emojiButton = () => emojiRef.current?.querySelector(".rb-emoji-btn");
+  const pickEmoji = (emoji) => {
+    onQuickEmoji(emoji);
+    setEmojiMenu(false);
+    emojiButton()?.focus();
+  };
+  const sendEmoji = async () => {
+    if (busy || blocked) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { message } = await messagesCall("POST", "", { to: id, text: quickEmoji });
+      setMessages((all) => mergeById(all, [message]));
+      onSent();
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const emojiMenuKeys = (e) => {
+    const items = [...emojiRef.current.querySelectorAll('[role="menuitemradio"]')];
+    const at = items.indexOf(document.activeElement);
+    const move = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 4, ArrowUp: -4 }[e.key];
+    if (e.key === "Escape") { e.preventDefault(); setEmojiMenu(false); emojiButton()?.focus(); }
+    else if (move) { e.preventDefault(); items[(at + move + items.length) % items.length]?.focus(); }
+  };
+  /* A photo or file waiting to go with the next message: { file, preview },
+     the preview being a picture's own local address while it is shown. */
+  const [pending, setPending] = useState(null);
+  useEffect(() => () => { if (pending?.preview) URL.revokeObjectURL(pending.preview); }, [pending]);
+  const choose = async (file) => {
+    if (!file) return;
+    setError("");
+    const ready = await prepChatFile(file);
+    if (ready.size > ATTACH_MAX) {
+      setError(`That file is too big to send — the most is ${sizeLabel(ATTACH_MAX)}`);
+      return;
+    }
+    setPending({ file: ready, preview: /^image\//.test(ready.type) ? URL.createObjectURL(ready) : null });
+    typeRef.current?.focus();
+  };
+  /* A photo arriving after the thread was scrolled to the bottom pushes the
+     last line out of view; this puts it back, unless somebody has scrolled up
+     to read something older. */
+  const keepAtBottom = () => {
+    const el = threadRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 320) el.scrollTop = el.scrollHeight;
+  };
   const first = String(name || "").split(" ")[0] || name;
 
   useEffect(() => {
@@ -1107,14 +1251,17 @@ function ChatWindow({
      theirs that arrived a moment earlier and has not been fetched yet. */
   const send = async () => {
     const text = draft.trim();
-    if (!text || busy) return;
+    if ((!text && !pending) || busy) return;
     if (hasHate(text)) { setError(HATE_MESSAGE); return; }
     setBusy(true);
     setError("");
     try {
-      const { message } = await messagesCall("POST", "", { to: id, text });
+      const { message } = pending
+        ? await messagesUpload({ to: id, text, file: pending.file })
+        : await messagesCall("POST", "", { to: id, text });
       setMessages((all) => mergeById(all, [message]));
       setDraft("");
+      setPending(null);
       onSent();
     } catch (err) {
       setError(String(err.message || err));
@@ -1192,10 +1339,30 @@ function ChatWindow({
               return (
                 <li key={m.id} className={`rb-msg-row${m.mine ? " is-mine" : ""}`}>
                   {!m.mine && (endsRun ? face(id, name, 24) : <span className="rb-face-gap" aria-hidden />)}
-                  <div className={`rb-msg${m.mine ? " is-mine" : ""}`}>
-                    <p className={m.deleted ? "rb-msg-text rb-msg-gone" : "rb-msg-text"}>
-                      {m.deleted ? (m.removed ? "Removed" : "Taken back") : m.text}
-                    </p>
+                  <div className={`rb-msg${m.mine ? " is-mine" : ""}${m.attachment?.picture && !m.deleted ? " has-photo" : ""}${!m.deleted && !m.attachment && emojiOnly(m.text) ? " is-emoji" : ""}`}>
+                    {m.attachment && !m.deleted && (m.attachment.picture ? (
+                      <button
+                        type="button"
+                        className="rb-msg-photo rb-focus"
+                        onClick={() => onOpenPhoto({ src: attachmentUrl(m.attachment.id), alt: m.attachment.name, caption: m.attachment.name })}
+                        aria-label={`See ${m.attachment.name} full size`}
+                      >
+                        <img src={attachmentUrl(m.attachment.id)} alt={m.attachment.name} loading="lazy" onLoad={keepAtBottom} />
+                      </button>
+                    ) : (
+                      <a className="rb-msg-file rb-focus" href={attachmentUrl(m.attachment.id)} download={m.attachment.name}>
+                        <span className="rb-chat-fileicon" aria-hidden><Clip size={16} /></span>
+                        <span className="rb-msg-file-name">
+                          {m.attachment.name}
+                          <span>{sizeLabel(m.attachment.size)} · download</span>
+                        </span>
+                      </a>
+                    ))}
+                    {(m.deleted || m.text) && (
+                      <p className={m.deleted ? "rb-msg-text rb-msg-gone" : "rb-msg-text"}>
+                        {m.deleted ? (m.removed ? "Removed" : "Taken back") : m.text}
+                      </p>
+                    )}
                     <p className="rb-msg-when">
                       <When iso={m.at} />
                       {!m.deleted && (m.mine && Date.now() - Date.parse(m.at) < TAKE_BACK_MS ? (
@@ -1218,8 +1385,27 @@ function ChatWindow({
       </div>
 
       <div className="rb-chatwin-compose">
+        {pending && (
+          <div className="rb-chat-pending">
+            {pending.preview
+              ? <img src={pending.preview} alt="" />
+              : <span className="rb-chat-fileicon" aria-hidden><Clip size={16} /></span>}
+            <span className="rb-chat-pending-name">
+              {pending.file.name}
+              <span>{sizeLabel(pending.file.size)} · sends with your message</span>
+            </span>
+            <button type="button" className="rb-chatwin-ctl rb-focus" onClick={() => setPending(null)} aria-label={`Don't send ${pending.file.name}`} title="Don't send this">
+              <span aria-hidden>×</span>
+            </button>
+          </div>
+        )}
         <textarea
           ref={typeRef}
+          /* A picture pasted into the box is attached, as in any messenger. */
+          onPaste={(e) => {
+            const pasted = [...(e.clipboardData?.files || [])][0];
+            if (pasted && !blocked) { e.preventDefault(); choose(pasted); }
+          }}
           className="rb-focus"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -1236,17 +1422,83 @@ function ChatWindow({
           style={{ ...input, resize: "none", padding: "8px 10px", font: `400 14px/1.45 ${SOCIAL}` }}
         />
         <div className="rb-chatwin-actions">
-          <button type="button" className="rb-entry-x rb-focus" onClick={() => onBlock(!blocked)}>
-            {blocked ? `Unblock ${first}` : `Block ${first}`}
-          </button>
-          <button
-            className="rb-btn rb-focus"
-            style={{ ...btnPrimary, padding: "7px 14px", fontSize: 13 }}
-            onClick={send}
-            disabled={busy || blocked || !draft.trim()}
-          >
-            {busy ? "Sending…" : "Send"}
-          </button>
+          <span className="rb-chatwin-tools">
+            <button
+              type="button"
+              className="rb-chatwin-ctl rb-focus"
+              onClick={() => fileRef.current?.click()}
+              disabled={blocked || busy}
+              aria-label="Attach a photo or file"
+              title="Attach a photo or file"
+            >
+              <Clip />
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              hidden
+              onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ""; }}
+            />
+            <button type="button" className="rb-entry-x rb-focus" onClick={() => onBlock(!blocked)}>
+              {blocked ? `Unblock ${first}` : `Block ${first}`}
+            </button>
+          </span>
+          <span className="rb-chatwin-send">
+            <span className="rb-emoji-wrap" ref={emojiRef}>
+              {emojiMenu && (
+                <div className="rb-emoji-menu" role="menu" aria-label="Choose your quick emoji" onKeyDown={emojiMenuKeys}>
+                  <p className="rb-emoji-hint" aria-hidden>Your quick emoji</p>
+                  {QUICK_EMOJI.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={emoji === quickEmoji}
+                      onClick={() => pickEmoji(emoji)}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button
+                type="button"
+                className="rb-emoji-btn rb-focus"
+                disabled={busy || blocked}
+                aria-label={`Send ${quickEmoji} — press and hold, or press the up arrow, to choose a different emoji`}
+                aria-haspopup="menu"
+                aria-expanded={emojiMenu}
+                title="Send — press and hold to choose another"
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  held.current = false;
+                  clearTimeout(holdTimer.current);
+                  holdTimer.current = setTimeout(() => openEmojiMenu(true), HOLD_MS);
+                }}
+                onPointerUp={() => clearTimeout(holdTimer.current)}
+                onPointerLeave={() => clearTimeout(holdTimer.current)}
+                onPointerCancel={() => clearTimeout(holdTimer.current)}
+                /* a long press on a phone, or a right-click */
+                onContextMenu={(e) => { e.preventDefault(); openEmojiMenu(e.pointerType !== "mouse" && e.button !== 2); }}
+                onKeyDown={(e) => { if (e.key === "ArrowUp") { e.preventDefault(); openEmojiMenu(false); } }}
+                onClick={() => {
+                  if (held.current) { held.current = false; return; }
+                  if (emojiMenu) { setEmojiMenu(false); return; }
+                  sendEmoji();
+                }}
+              >
+                {quickEmoji}
+              </button>
+            </span>
+            <button
+              className="rb-btn rb-focus"
+              style={{ ...btnPrimary, padding: "7px 14px", fontSize: 13 }}
+              onClick={send}
+              disabled={busy || blocked || (!draft.trim() && !pending)}
+            >
+              {busy ? "Sending…" : "Send"}
+            </button>
+          </span>
         </div>
       </div>
     </section>
@@ -2671,6 +2923,15 @@ export default function RecipeBox() {
      remembered on this device, and come back minimised, so a reload neither
      loses them nor opens a handful of windows over the page. */
   const [listOpen, setListOpen] = useState(false);
+  /* The emoji the quick button in every chat sends: a thumbs up until chosen. */
+  const [quickEmoji, setQuickEmoji] = useState(() => {
+    try { return asQuickEmoji(localStorage.getItem(QUICK_EMOJI_KEY)); } catch { return DEFAULT_QUICK_EMOJI; }
+  });
+  const chooseQuickEmoji = (emoji) => {
+    const next = asQuickEmoji(emoji);
+    setQuickEmoji(next);
+    try { localStorage.setItem(QUICK_EMOJI_KEY, next); } catch { /* chosen for this visit, then */ }
+  };
   const [listError, setListError] = useState("");
   const [waiting, setWaiting] = useState([]);
   const [chats, setChats] = useState(() => {
@@ -4640,6 +4901,44 @@ export default function RecipeBox() {
     .rb-chatwin .rb-msg-text { font-size: 14px; line-height: 1.5; }
     .rb-chatwin-compose { display: flex; flex-direction: column; gap: 7px; padding: 8px 10px 10px; border-top: 1px solid var(--card-edge); }
     .rb-chatwin-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .rb-chatwin-tools { display: inline-flex; align-items: center; gap: 6px; }
+    .rb-chatwin-ctl:disabled { cursor: default; opacity: .35; }
+    /* Attachments: a photo as itself, a file as a card to download, and one
+       waiting to be sent shown above the box. */
+    .rb-chatwin .rb-msg.has-photo { padding: 4px; }
+    .rb-chatwin .rb-msg.has-photo > .rb-msg-text, .rb-chatwin .rb-msg.has-photo > .rb-msg-when { padding: 0 6px; }
+    .rb-chatwin .rb-msg.has-photo > .rb-msg-when { padding-bottom: 3px; }
+    .rb-msg-photo { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; line-height: 0; border-radius: 2px; overflow: hidden; }
+    .rb-msg-photo img { display: block; max-width: 100%; max-height: 240px; width: auto; height: auto; object-fit: contain; }
+    .rb-msg-photo + .rb-msg-text { margin-top: 6px; }
+    .rb-msg-file { display: flex; align-items: center; gap: 9px; margin: 0 0 6px; padding: 7px 9px; border: 1px solid var(--card-edge); border-radius: 3px; background: var(--card-bg); color: var(--card-text); text-decoration: none; }
+    .rb-msg-file:hover { border-color: var(--card-accent); }
+    .rb-msg-file-name { min-width: 0; display: flex; flex-direction: column; font: 600 13px/1.3 ${SOCIAL}; overflow-wrap: anywhere; }
+    .rb-msg-file-name > span { font: 400 11.5px/1.3 ${SOCIAL}; color: var(--card-muted); }
+    .rb-chat-fileicon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: var(--card-lift); color: var(--card-accent); }
+    .rb-chat-pending { display: flex; align-items: center; gap: 9px; padding: 5px 3px 5px 5px; border: 1px dashed var(--card-edge); border-radius: 4px; color: var(--card-text); }
+    .rb-chat-pending img { flex: none; width: 40px; height: 40px; object-fit: cover; border-radius: 3px; }
+    .rb-chat-pending-name { flex: 1; min-width: 0; display: flex; flex-direction: column; font: 600 12.5px/1.3 ${SOCIAL}; overflow-wrap: anywhere; }
+    .rb-chat-pending-name > span { font: 400 11px/1.3 ${SOCIAL}; color: var(--card-muted); }
+    /* A message that is only an emoji or three is shown large, without a
+       bubble, as messengers do. */
+    .rb-chatwin .rb-msg.is-emoji { padding: 0 2px; border-color: transparent; background: transparent; }
+    .rb-chatwin .rb-msg.is-emoji > .rb-msg-text { font-size: 34px; line-height: 1.15; }
+    /* The quick emoji beside Send, and the small menu that a press and hold
+       opens above it. The button can't be selected or called up as a
+       phone's own long-press menu, or holding it would do that instead. */
+    .rb-chatwin-send { display: inline-flex; align-items: center; gap: 6px; }
+    .rb-emoji-wrap { position: relative; display: inline-flex; }
+    .rb-emoji-btn { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; font-size: 21px; line-height: 1; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; transition: transform 120ms ease; }
+    .rb-emoji-btn:hover:not(:disabled) { transform: scale(1.12); background: color-mix(in srgb, var(--card-text) 8%, transparent); }
+    .rb-emoji-btn:active:not(:disabled) { transform: scale(.92); }
+    .rb-emoji-btn:disabled { cursor: default; opacity: .4; }
+    .rb-emoji-menu { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 2; display: grid; grid-template-columns: repeat(4, 38px); gap: 2px; padding: 6px; border: 1px solid var(--card-edge); border-radius: 12px; background: var(--card-bg); box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); }
+    .rb-emoji-menu button { width: 38px; height: 38px; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; font-size: 22px; line-height: 1; }
+    .rb-emoji-menu button:hover, .rb-emoji-menu button:focus-visible { background: var(--card-lift); outline: none; }
+    .rb-emoji-menu button[aria-checked="true"] { background: color-mix(in srgb, var(--card-accent) 24%, transparent); }
+    .rb-emoji-hint { grid-column: 1 / -1; margin: 2px 4px 4px; font: 600 10.5px/1.2 ${SOCIAL}; letter-spacing: .04em; color: var(--card-muted); }
+    @media (prefers-reduced-motion: reduce) { .rb-emoji-btn { transition: none; } .rb-emoji-btn:hover:not(:disabled), .rb-emoji-btn:active:not(:disabled) { transform: none; } }
     /* On a phone an open chat takes the width of the screen above the dock,
        and a minimised one gives up its name and keeps its face. */
     @media (max-width: 699px) {
@@ -7313,7 +7612,8 @@ export default function RecipeBox() {
                             ) : t?.last ? (
                               <span className="rb-chat-last">
                                 {t.last.mine ? "You: " : ""}
-                                {t.last.deleted ? (t.last.removed ? "message removed" : "message taken back") : t.last.text}
+                                {t.last.deleted ? (t.last.removed ? "message removed" : "message taken back")
+                                  : t.last.text || (t.last.attachment ? (t.last.attachment.picture ? "Sent a photo" : `Sent ${t.last.attachment.name}`) : "")}
                               </span>
                             ) : null}
                             {seen ? <span className="rb-chat-seen">{seen}</span> : null}
@@ -7362,6 +7662,9 @@ export default function RecipeBox() {
             unread={waiting.find((w) => w.id === c.id)?.unread || 0}
             blocked={blockedIds.includes(c.id)}
             owner={!!profile?.owner}
+            onOpenPhoto={setLightbox}
+            quickEmoji={quickEmoji}
+            onQuickEmoji={chooseQuickEmoji}
             face={face}
             faceWithLight={faceWithLight}
             statusFor={statusFor}

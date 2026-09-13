@@ -45,3 +45,25 @@ CREATE TABLE IF NOT EXISTS presence (
   person TEXT PRIMARY KEY,
   at     TEXT NOT NULL
 );
+
+-- Photos and files sent with a message. The endpoint also creates these if they
+-- are missing, so a database set up before attachments needs nothing run by hand.
+-- A file belongs to message 0 until its message is written, in the same
+-- transaction that links the two, so nobody sees a message whose file is still
+-- arriving. Its bytes are kept in pieces well inside D1's row size limit.
+CREATE TABLE IF NOT EXISTS attachments (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  message INTEGER NOT NULL DEFAULT 0,
+  name    TEXT    NOT NULL,
+  type    TEXT    NOT NULL,
+  size    INTEGER NOT NULL,
+  pieces  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS attachments_by_message ON attachments (message);
+
+CREATE TABLE IF NOT EXISTS attachment_pieces (
+  attachment INTEGER NOT NULL,
+  n          INTEGER NOT NULL,
+  data       BLOB    NOT NULL,
+  PRIMARY KEY (attachment, n)
+);
