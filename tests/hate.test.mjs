@@ -51,6 +51,8 @@ const FINE = [
   "Pakistani street food", "chinking the ice in the glass", "Scunthorpe pudding", "Van Dyke's brownies",
   "homogenised milk", "frijoles negros", "cracker crumbs", "retard the dough overnight in the fridge",
   "jeweled rice with barberries", "yiddish bakery classics",
+  /* the short terms are why whole-word matching matters most */
+  "nigella seeds, toasted", "Niger seed and millet", "Nigerian jollof rice", "monkey bread with pecans",
 ];
 for (const line of FINE) is(`allowed: "${line.slice(0, 34)}"`, hasHate(line), false);
 /* One term on the list is also a surname, in one exact form only. */
