@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE INDEX IF NOT EXISTS attachments_by_message ON attachments (message);
 
+-- Hearts on messages (kind 'm', target = message id, pair = its conversation)
+-- and on notes (kind 'n', target = the note's KV key, pair = ''). One row per
+-- person per thing, switched on and off; every change takes the next seq, so a
+-- conversation can ask for what changed since it last looked. shared/loves.js
+-- also creates this if it is missing.
+CREATE TABLE IF NOT EXISTS loves (
+  kind   TEXT    NOT NULL,
+  target TEXT    NOT NULL,
+  person TEXT    NOT NULL,
+  pair   TEXT    NOT NULL DEFAULT '',
+  loved  INTEGER NOT NULL,
+  seq    INTEGER NOT NULL,
+  at     TEXT    NOT NULL,
+  PRIMARY KEY (kind, target, person)
+);
+CREATE INDEX IF NOT EXISTS loves_by_pair ON loves (pair, seq);
+
 CREATE TABLE IF NOT EXISTS attachment_pieces (
   attachment INTEGER NOT NULL,
   n          INTEGER NOT NULL,

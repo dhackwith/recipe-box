@@ -905,6 +905,13 @@ const REPLY_INDENTS = 3;
 /* Notes arrive flat, oldest first; replies hang under what they answer, in the
    order they were written. An entry whose parent isn't in the list — past the
    listing limit, say — is shown at the top rather than lost. */
+/* "you", "you and Tracey Hackwith", "you, Tracey Hackwith and Nicholas Heyer":
+   who loves a note, the reader first. */
+function lovedBy(loves) {
+  const names = [...loves].sort((a, b) => (b.you ? 1 : 0) - (a.you ? 1 : 0)).map((l) => (l.you ? "you" : l.name));
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 function threadNotes(entries) {
   const ids = new Set(entries.map((e) => e.id));
   const kids = new Map();
@@ -1196,6 +1203,9 @@ function ChatWindow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const since = useRef(0);
+  /* How far through this conversation's hearts the window is, so a love on a
+     message it already shows still reaches it (functions/api/messages.js). */
+  const loveSince = useRef(0);
   const threadRef = useRef(null);
   const typeRef = useRef(null);
   const fileRef = useRef(null);
@@ -1322,7 +1332,7 @@ function ChatWindow({
             await new Promise((r) => setTimeout(r, 1500));
             continue;
           }
-          const got = await messagesCall("GET", `?with=${encodeURIComponent(id)}&since=${since.current}${wait ? "&wait=1" : ""}`);
+          const got = await messagesCall("GET", `?with=${encodeURIComponent(id)}&since=${since.current}&loves=${loveSince.current}${wait ? "&wait=1" : ""}`);
           if (stop) return;
           setLoaded(true);
           setError("");
@@ -1330,6 +1340,11 @@ function ChatWindow({
             since.current = Math.max(since.current, lastMessageId(got.messages));
             setMessages((all) => mergeById(all, got.messages));
             onRead(id, since.current);
+          }
+          if (typeof got.loveSeq === "number") loveSince.current = Math.max(loveSince.current, got.loveSeq);
+          if (got.loved && got.loved.length) {
+            const hearts = new Map(got.loved.map((l) => [l.id, l]));
+            setMessages((all) => all.map((m) => (hearts.has(m.id) ? { ...m, loves: hearts.get(m.id).loves, loved: hearts.get(m.id).loved } : m)));
           }
           wait = true;
         } catch (err) {
@@ -1390,6 +1405,18 @@ function ChatWindow({
       setError(String(err.message || err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /* A heart on one of their messages, or taking it back. Both ends see it:
+     theirs finds out through its waiting request. */
+  const toggleLove = async (m) => {
+    setError("");
+    try {
+      const res = await messagesCall("POST", "", { love: m.id, on: !m.loved });
+      setMessages((all) => all.map((x) => (x.id === res.id ? { ...x, loves: res.loves, loved: res.loved } : x)));
+    } catch (err) {
+      setError(String(err.message || err));
     }
   };
 
@@ -1487,7 +1514,7 @@ function ChatWindow({
               return (
                 <li key={m.id} className={`rb-msg-row${m.mine ? " is-mine" : ""}`}>
                   {!m.mine && (endsRun ? face(id, name, 24) : <span className="rb-face-gap" aria-hidden />)}
-                  <div className={`rb-msg${m.mine ? " is-mine" : ""}${(m.attachment?.picture && !m.deleted) || gif ? " has-photo" : ""}${!m.deleted && !m.attachment && emojiOnly(m.text) ? " is-emoji" : ""}`}>
+                  <div className={`rb-msg${m.mine ? " is-mine" : ""}${(m.attachment?.picture && !m.deleted) || gif ? " has-photo" : ""}${!m.deleted && !m.attachment && emojiOnly(m.text) ? " is-emoji" : ""}${!m.deleted && m.loves?.length ? " has-love" : ""}`}>
                     {gif && (
                       <button
                         type="button"
@@ -1523,6 +1550,11 @@ function ChatWindow({
                     )}
                     <p className="rb-msg-when">
                       <When iso={m.at} />
+                      {!m.mine && !m.deleted && !blocked && (
+                        <button type="button" className="rb-entry-x rb-focus" onClick={() => toggleLove(m)} aria-pressed={!!m.loved}>
+                          {m.loved ? "Unlove" : "Love"}
+                        </button>
+                      )}
                       {!m.deleted && (m.mine && Date.now() - Date.parse(m.at) < TAKE_BACK_MS ? (
                         <button type="button" className="rb-entry-x rb-focus" onClick={() => takeBack(m.id)}>
                           Take back
@@ -1533,6 +1565,16 @@ function ChatWindow({
                         </button>
                       ) : null)}
                     </p>
+                    {!m.deleted && m.loves?.length > 0 && (
+                      <span
+                        className="rb-love-badge"
+                        role="img"
+                        aria-label={m.mine ? `${first} loved this` : "You loved this"}
+                        title={m.mine ? `${first} loved this` : "You loved this"}
+                      >
+                        ❤️
+                      </span>
+                    )}
                   </div>
                 </li>
               );
@@ -3471,6 +3513,17 @@ export default function RecipeBox() {
     }
   };
 
+  /* A heart on somebody else's note, which everybody reading the recipe sees. */
+  const loveNote = async (entry) => {
+    setNotesError("");
+    try {
+      const res = await notesCall("POST", "", { love: entry.id, on: !entry.loved });
+      setNotes((list) => (list || []).map((e) => (e.id === res.id ? { ...e, loves: res.loves, loved: res.loved } : e)));
+    } catch (err) {
+      setNotesError(String(err.message || err));
+    }
+  };
+
   const addReply = async (parent) => {
     const text = replyText.trim();
     if (!text) return;
@@ -5120,6 +5173,10 @@ export default function RecipeBox() {
     .rb-emoji-menu button { width: 38px; height: 38px; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; font-size: 22px; line-height: 1; }
     .rb-emoji-menu button:hover, .rb-emoji-menu button:focus-visible { background: var(--card-lift); outline: none; }
     .rb-emoji-menu button[aria-checked="true"] { background: color-mix(in srgb, var(--card-accent) 24%, transparent); }
+    .rb-msg.has-love { position: relative; margin-bottom: 10px; }
+    .rb-love-badge { position: absolute; right: -5px; bottom: -11px; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid var(--card-edge); border-radius: 50%; background: var(--card-bg); font-size: 11.5px; line-height: 1; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .5); }
+    .rb-love-line { margin: 5px 0 0; font: 500 12.5px/1.4 ${SOCIAL}; color: var(--card-muted); }
+    .rb-entry-actions .rb-entry-x + .rb-entry-x { margin-left: 14px; }
     .rb-gif-btn { width: auto; padding: 0 7px; border-radius: 6px; font: 700 11.5px/1 ${SOCIAL}; letter-spacing: .06em; }
     .rb-gif-panel { display: flex; flex-direction: column; gap: 6px; }
     .rb-gif-search { display: flex; align-items: center; gap: 4px; }
@@ -7225,8 +7282,24 @@ export default function RecipeBox() {
                                 <img src={e.shot} alt={`Cooked by ${e.name}`} loading="lazy" />
                               </button>
                             )}
+                            {e.loves?.length > 0 && (
+                              <p className="rb-love-line">
+                                <span aria-hidden>❤️</span> Loved by {lovedBy(e.loves)}
+                              </p>
+                            )}
                             {replyTo !== e.id && (
                               <div className="rb-entry-actions rb-noprint">
+                                {e.canLove && (
+                                  <button
+                                    type="button"
+                                    className="rb-focus rb-entry-x"
+                                    onClick={() => loveNote(e)}
+                                    aria-pressed={!!e.loved}
+                                    aria-label={`${e.loved ? "Unlove" : "Love"} ${e.name}'s ${e.kind === "made" ? "entry" : "note"}`}
+                                  >
+                                    {e.loved ? "Unlove" : "Love"}
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   className="rb-focus rb-entry-x"

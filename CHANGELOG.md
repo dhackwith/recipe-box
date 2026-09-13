@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **Love a message or a note.** Tap Love beside the time on somebody's message and a ❤️ appears on it, for both of you. Under a recipe, tap Love beside Reply on somebody's note, and everyone reading the recipe sees who loved it. Tap Unlove to take it back.
 - **Block from the name at the top of a chat.** Tap the person's name in a chat window and a small menu drops down with Block, or Unblock if you've blocked them. It used to be a link under the message box. The _ button still shrinks the chat.
 - **Send a GIF.** Tap GIF beside the paperclip in any chat and search for one, or pick from what's popular right now. Tap a GIF and it's sent. The GIFs come from KLIPY, with the strictest family-safe setting on.
 - **Answer with an emoji.** Every chat has a 👍 beside Send, and one tap sends it. Press and hold it to choose a different emoji from a small menu. Your choice takes the thumbs up's place in all your chats. A message that's only an emoji or three shows up large.

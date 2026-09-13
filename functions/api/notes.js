@@ -36,12 +36,17 @@
  * GET ?recent=<n>    the newest few from across the whole box, for the feed;
  *                    a reply also says whose note it answers (parentName)
  * GET ?photo=<noteId>  the full-size picture, as an image rather than as JSON
+ * POST { love, on }  heart somebody else's entry, or stop — for everybody to see
+ *
+ * LOVES are kept in D1 (the MESSAGES binding), not beside the note in KV: see
+ * shared/loves.js. Without that binding the notes still work, just unloved.
  *
  * Requires the same RECIPES binding as /api/storage.
  */
 
-import { identity, displayName, personFor, isPerson, isOwner } from "../../shared/access.js";
+import { identity, displayName, personFor, personName, isPerson, isOwner } from "../../shared/access.js";
 import { hasHate } from "../../shared/hate.js";
+import { ensureLoves, setLove, lovesFor, dropLoves, NOTE } from "../../shared/loves.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -108,14 +113,42 @@ const authorOf = (email) => {
   const person = personFor(email);
   return person && isPerson(person.id) ? person.id : null;
 };
+/* Who has hearted an entry, by name, with the reader marked as `you`. */
+const lovers = (who, me) => who.map((id) => ({ id, name: personName(id), you: id === me }));
+
+/* The hearts on these entries, or none. A database that is missing or having
+   a bad moment costs the hearts, never the notes. */
+async function lovesOn(env, keys) {
+  if (!env.MESSAGES || !keys.length) return new Map();
+  try {
+    await ensureLoves(env.MESSAGES);
+    return await lovesFor(env.MESSAGES, NOTE, keys);
+  } catch {
+    return new Map();
+  }
+}
+async function forgetLoves(env, keys) {
+  if (!env.MESSAGES || !keys.length) return;
+  try {
+    await ensureLoves(env.MESSAGES);
+    await dropLoves(env.MESSAGES, NOTE, keys);
+  } catch { /* an orphaned heart on nothing is shown to nobody */ }
+}
+
 /* `canRemove` is whether the reader may take this entry away: their own, or
-   anybody's when the reader is the site's owner. A placeholder is nobody's. */
-function present(id, e, email, owner = false) {
+   anybody's when the reader is the site's owner. A placeholder is nobody's.
+   `canLove` is whether the reader may heart it: somebody on the roster, on
+   somebody else's entry, where hearts are switched on at all. */
+function present(id, e, email, owner = false, who = [], hearts = false) {
   const parent = okParent(e.parent) ? e.parent : null;
   if (e.deleted) {
-    return { id, kind: "note", text: "", at: e.at || "", name: "", who: null, mine: false, canRemove: false, shot: null, hasPhoto: false, parent, deleted: true };
+    return { id, kind: "note", text: "", at: e.at || "", name: "", who: null, mine: false, canRemove: false, shot: null, hasPhoto: false, parent, deleted: true, loves: [], loved: false, canLove: false };
   }
+  const me = authorOf(email);
   return {
+    loves: lovers(who, me),
+    loved: !!me && who.includes(me),
+    canLove: hearts && !!me && e.email !== email && authorOf(e.email || "") !== me,
     id,
     kind: e.kind === "made" ? "made" : "note",
     text: typeof e.text === "string" ? e.text : "",
@@ -247,20 +280,43 @@ export async function onRequest({ request, env }) {
       if (!okId(recipe)) return json({ error: "recipe required" }, 400);
 
       const listed = await env.RECIPES.list({ prefix: `note:${recipe}:`, limit: LIST_MAX });
-      const entries = [];
+      const stored = [];
       for (const k of listed.keys) {
         const raw = await env.RECIPES.get(k.name);
         if (!raw) continue;                       // deleted between listing and reading
         let e;
         try { e = JSON.parse(raw); } catch { continue; }
-        entries.push(present(k.name, e, email, owner));
+        stored.push([k.name, e]);
       }
+      /* Every entry's hearts in one query, not one each. */
+      const loves = await lovesOn(env, stored.map(([key]) => key));
+      const entries = stored.map(([key, e]) => present(key, e, email, owner, loves.get(key) || [], !!env.MESSAGES));
 
       return json({ me: { name: displayName(email) }, entries, truncated: listed.list_complete === false });
     }
 
     if (request.method === "POST") {
       const body = await request.json();
+
+      /* A heart on somebody else's entry, or taking it back. Stamped with the
+         reader's roster id from the token, like an author; somebody off the
+         roster has no name to show under a heart, so cannot give one. */
+      if (body && body.love !== undefined) {
+        if (!env.MESSAGES) return json({ error: "Loves aren't switched on for this site yet" }, 501);
+        const id = String(body.love);
+        if (!id.startsWith("note:")) return json({ error: "which note?" }, 400);
+        const me = authorOf(email);
+        if (!me) return json({ error: "Only the family can love a note" }, 403);
+        let e = null;
+        try { e = JSON.parse((await env.RECIPES.get(id)) || "null"); } catch { e = null; }
+        if (!e || e.deleted) return json({ error: "that note has been removed" }, 404);
+        if (e.email === email || authorOf(e.email || "") === me) return json({ error: "You can't love your own note" }, 400);
+        await ensureLoves(env.MESSAGES);
+        await setLove(env.MESSAGES, { kind: NOTE, target: id, person: me, on: body.on !== false });
+        const who = (await lovesFor(env.MESSAGES, NOTE, [id])).get(id) || [];
+        return json({ id, loves: lovers(who, me), loved: who.includes(me) });
+      }
+
       const recipe = body && body.recipe;
       if (!okId(recipe)) return json({ error: "recipe required" }, 400);
 
@@ -313,7 +369,7 @@ export async function onRequest({ request, env }) {
       await env.RECIPES.put(key, JSON.stringify({ kind, text, email, at, shot, hasPhoto: !!photo, ...(parent ? { parent } : {}) }));
 
       return json({
-        entry: { id: key, kind, text, at, name: displayName(email), who: authorOf(email), mine: true, canRemove: true, shot, hasPhoto: !!photo, parent, deleted: false },
+        entry: { id: key, kind, text, at, name: displayName(email), who: authorOf(email), mine: true, canRemove: true, shot, hasPhoto: !!photo, parent, deleted: false, loves: [], loved: false, canLove: false },
       }, 201);
     }
 
@@ -351,6 +407,7 @@ export async function onRequest({ request, env }) {
 
       if (answered(id)) {
         await env.RECIPES.put(id, JSON.stringify({ deleted: true, at: e.at || "", ...(e.parent ? { parent: e.parent } : {}) }));
+        await forgetLoves(env, [id]);
         return json({ id, deleted: true, placeholder: id, removed: [] });
       }
 
@@ -366,6 +423,7 @@ export async function onRequest({ request, env }) {
         removed.push(up);
         up = above.parent;
       }
+      await forgetLoves(env, removed);
       return json({ id, deleted: true, placeholder: null, removed });
     }
 
