@@ -11,6 +11,7 @@
  * read, and what comes back is the same shape either way, so nothing
  * downstream has to care which it was.
  * POST { url, kind: "image" }  -> the image bytes, for the recipe's photo
+ * POST { url, kind: "fill" }   -> { steps, equipment }  what the page didn't label, suggested by Workers AI
  *
  * It is deliberately not a general proxy: pages come back only as the parsed
  * recipe, never as HTML, and the image mode refuses anything that is not an
@@ -19,6 +20,7 @@
 
 import { findMicrodataRecipe } from "../../shared/microdata.js";
 import { findHRecipe } from "../../shared/hrecipe.js";
+import { suggest } from "../../shared/fill.js";
 
 const MAX_PAGE = 5 * 1024 * 1024;
 const MAX_IMAGE = 10 * 1024 * 1024;
@@ -124,7 +126,8 @@ export function fillGaps(recipe, extra) {
   return out;
 }
 
-async function page(url) {
+/* The page and the recipe on it, or a Response explaining why not. */
+async function load(url) {
   let res;
   try { res = await fetchFrom(url, "text/html,application/xhtml+xml"); }
   catch (err) {
@@ -152,7 +155,31 @@ async function page(url) {
   if (!recipe) {
     return json({ error: "That page doesn't publish a recipe this can read — try copying the recipe text into the paste box instead" }, 422);
   }
-  return json({ recipe, url: res.url || url.toString() });
+  return { recipe, html, from: res.url || url.toString() };
+}
+
+async function page(url) {
+  const got = await load(url);
+  return got instanceof Response ? got : json({ recipe: got.recipe, url: got.from });
+}
+
+/* Steps and equipment the page didn't label, suggested and checked against the
+   page by shared/fill.js. It needs a Workers AI binding named AI; without one
+   it says so, and the importer carries on without suggestions. The page is
+   fetched again rather than taken from the browser, so this can only ever be
+   pointed at a real recipe page and never used as a general-purpose model. */
+async function fill(url, env) {
+  if (!env || !env.AI) return json({ error: "Suggestions aren't switched on for this site" }, 501);
+  const got = await load(url);
+  if (got instanceof Response) return got;
+  try {
+    return json(await suggest(env.AI, got.recipe, got.html));
+  } catch (err) {
+    const why = String((err && err.message) || err);
+    return /4006|daily free allocation|neurons/i.test(why)
+      ? json({ error: "Today's free suggestions are used up — they come back at midnight UTC" }, 429)
+      : json({ error: "The suggestion service didn't give a usable answer" }, 502);
+  }
 }
 
 async function image(url) {
@@ -167,11 +194,13 @@ async function image(url) {
   return new Response(bytes, { headers: { "Content-Type": type, "Cache-Control": "no-store" } });
 }
 
-export async function onRequest({ request }) {
+export async function onRequest({ request, env }) {
   if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
   let body;
   try { body = await request.json(); } catch { return json({ error: "Send the address as JSON" }, 400); }
   const url = checkUrl(body && body.url);
   if (!url) return json({ error: "That doesn't look like a recipe page address" }, 400);
-  return body.kind === "image" ? image(url) : page(url);
+  if (body.kind === "image") return image(url);
+  if (body.kind === "fill") return fill(url, env);
+  return page(url);
 }

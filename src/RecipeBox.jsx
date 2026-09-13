@@ -1567,6 +1567,8 @@ function fromSchemaRecipe(node, pageUrl) {
     tags,
     ingredients: [].concat(node.recipeIngredient ?? node.ingredients ?? []).map(htmlToText).filter(Boolean),
     steps: schemaSteps(node.recipeInstructions),
+    /* the few sites that do list equipment publish it as tool */
+    equipment: [].concat(node.tool ?? []).map((t) => htmlToText(typeof t === "string" ? t : t?.name || t?.text)).filter(Boolean),
     nutrition: Object.keys(nutrition).length ? nutrition : null,
     /* the recipe's own note, when the site has one, above where it came from */
     notes: [
@@ -1988,6 +1990,11 @@ export default function RecipeBox() {
   const [pasteText, setPasteText] = useState("");
   const [linkText, setLinkText] = useState("");
   const [linkBusy, setLinkBusy] = useState(false);
+  /* The import a suggestion is for. Bumped whenever the form starts over, so a
+     suggestion that arrives late for an earlier import is dropped, not pasted
+     into a different recipe. */
+  const importRun = useRef(0);
+  const [suggesting, setSuggesting] = useState(0);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [hero, setHero] = useState("");        // full-size photo for the open recipe
   /* "" wide, "mid" squarish, "tall" portrait. Cleared with every recipe, or the
@@ -3178,6 +3185,7 @@ export default function RecipeBox() {
     setPasteText("");
     setLinkText("");
     setEditingId(null);
+    importRun.current += 1;
     setView("form");
   };
   const startEdit = (r) => {
@@ -3188,7 +3196,7 @@ export default function RecipeBox() {
       ingredientText: r.ingredients.join("\n"), equipmentText: (r.equipment || []).join("\n"),
       stepText: r.steps.map(stepLine).join("\n"), notes: r.notes || "", nutrition: r.nutrition || null,
     });
-    setEditingId(r.id); setView("form");
+    setEditingId(r.id); importRun.current += 1; setView("form");
   };
 
   const fillFormFrom = (p) =>
@@ -3225,6 +3233,7 @@ export default function RecipeBox() {
       fetch("/api/fetch-recipe", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin",
       });
+    const run = ++importRun.current;
     setLinkBusy(true);
     try {
       const res = await ask({ url });
@@ -3250,10 +3259,46 @@ export default function RecipeBox() {
       }
       const host = new URL(from).hostname.replace(/^www\./, "");
       flash(`Filled in from ${host}${src && !gotPhoto ? " (the photo wouldn't come through)" : ""} — check it over, then add it`, 5000);
+      const missing = [!p.steps.length && "steps", !p.equipment.length && "equipment"].filter(Boolean);
+      if (missing.length) suggestGaps(from, run, missing);
     } catch {
       flash("Couldn't reach that page — check the link and your connection", 7000);
     } finally {
       setLinkBusy(false);
+    }
+  };
+
+  /* Steps and equipment the page didn't label, suggested by Workers AI and
+     checked against the page on the server. The form is already filled by the
+     time this starts, so a slow or failed answer costs only the suggestion; and
+     it fills only a field that is still empty, never one somebody has started
+     typing in. */
+  const suggestGaps = async (url, run, missing) => {
+    setSuggesting(run);
+    try {
+      const res = await fetch("/api/fetch-recipe", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, kind: "fill" }), credentials: "same-origin",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (run !== importRun.current) return;
+      if (res.status === 501) return;                 // not switched on for this deployment: say nothing
+      if (!res.ok) return flash(data.error || `Couldn't suggest the ${missing.join(" or ")} for this one`, 6000);
+      const lines = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.trim()) : []);
+      const steps = missing.includes("steps") ? lines(data.steps) : [];
+      const equipment = missing.includes("equipment") ? lines(data.equipment) : [];
+      if (!steps.length && !equipment.length) return;
+      setForm((f) => ({
+        ...f,
+        stepText: steps.length && !f.stepText.trim() ? steps.join("\n") : f.stepText,
+        equipmentText: equipment.length && !f.equipmentText.trim() ? equipment.join("\n") : f.equipmentText,
+      }));
+      const what = [steps.length && "steps", equipment.length && "equipment"].filter(Boolean).join(" and ");
+      flash(`Suggested the ${what} from the page — check ${steps.length ? "them" : "it"} over`, 6000);
+    } catch {
+      /* the recipe is already in the form; a suggestion was only ever extra */
+    } finally {
+      setSuggesting((s) => (s === run ? 0 : s));
     }
   };
 
@@ -3275,6 +3320,7 @@ export default function RecipeBox() {
 
   const saveRecipe = () => {
     if (!form.title.trim()) return;
+    importRun.current += 1;
     const recipe = {
       id: editingId || `r-${Date.now()}`,
       thumb: form.thumb || "",
@@ -5459,6 +5505,11 @@ export default function RecipeBox() {
                       {linkBusy ? "Fetching…" : "Get recipe"}
                     </button>
                   </form>
+                  {suggesting > 0 && suggesting === importRun.current && (
+                    <p role="status" style={{ font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", margin: "10px 0 0" }}>
+                      Looking over the page for anything it left out…
+                    </p>
+                  )}
                   <div style={{ borderTop: `1px solid var(--card-edge)`, margin: "18px 0 16px" }} />
                   <p style={{ font: `600 14px/1.4 ${UI}`, color: "var(--card-text)", margin: "0 0 4px" }}>Paste a recipe</p>
                   <p style={{ font: `400 13px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 12px" }}>Markdown or JSON both work — paste it below, or{" "}<button type="button" className="rb-focus" style={linkButton} onClick={() => fileRef.current?.click()}>choose a file</button>.</p>
