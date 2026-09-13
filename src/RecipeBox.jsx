@@ -23,6 +23,8 @@ import {
 } from "./stepphotos.js";
 /* Note times in the reader's own zone and clock style. */
 import { whenAt, whenFull } from "./when.js";
+/* The one thing the box will not keep — see shared/hate.js. */
+import { hasHate, newHate, HATE_MESSAGE } from "../shared/hate.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -2260,8 +2262,12 @@ export default function RecipeBox() {
     flashTimer.current = setTimeout(() => setStatus(""), ms);
   };
   const persist = async (next) => {
+    /* The backstop for every other way the box is changed. Judged against what
+       the box already holds, so one old line cannot block every later save. */
+    if (newHate(next, box).length) { flash(HATE_MESSAGE, 7000); return false; }
     setBox(next);
     flash((await saveBox(next)) ? "Saved" : "Couldn't save — that change is only on this screen");
+    return true;
   };
 
   /* The heading names whichever box is open, so switching boxes swaps both the
@@ -2375,6 +2381,7 @@ export default function RecipeBox() {
   const addEntry = async (kind) => {
     const text = kind === "note" ? noteText.trim() : "";
     if (kind === "note" && !text && !notePhoto) return;
+    if (hasHate(text)) { setNotesError(HATE_MESSAGE); return; }
     setNotesBusy(true);
     setNotesError("");
     try {
@@ -2398,6 +2405,7 @@ export default function RecipeBox() {
   const addReply = async (parent) => {
     const text = replyText.trim();
     if (!text) return;
+    if (hasHate(text)) { setNotesError(HATE_MESSAGE); return; }
     setNotesBusy(true);
     setNotesError("");
     try {
@@ -2526,6 +2534,7 @@ export default function RecipeBox() {
     setNewBoxName("");
     if (cancelBoxRef.current) { cancelBoxRef.current = false; return; }
     if (!name) return;
+    if (hasHate(name)) { flash(HATE_MESSAGE, 6000); return; }
     const existing = allAuthors.find((a) => a.toLowerCase() === name.toLowerCase());
     if (existing) { flash(`${existing} is already listed`); setActiveBox(existing); return; }
     persist({ ...box, authors: [...(box.authors || DEFAULT_AUTHORS), name] });
@@ -2872,6 +2881,7 @@ export default function RecipeBox() {
       flash("A name and a calorie figure are the least it needs", 5000);
       return;
     }
+    if (hasHate(name)) { flash(HATE_MESSAGE, 6000); return; }
     addFromFood(meal, {
       name,
       brand: null,
@@ -3148,6 +3158,7 @@ export default function RecipeBox() {
   const addTyped = () => {
     const text = newItem.trim();
     if (!text) return;
+    if (hasHate(text)) { flash(HATE_MESSAGE, 6000); return; }
     updateList((l) => withTyped(l, text));
     setNewItem("");
   };
@@ -3316,6 +3327,11 @@ export default function RecipeBox() {
   const commitImport = () => {
     const existing = new Set(box.recipes.map((r) => r.id));
     const additions = staged.filter((r) => r._keep !== false && !existing.has(r.id)).map(({ _source, _keep, ...r }) => r);
+    const refused = additions.filter(hasHate);
+    if (refused.length) {
+      flash(`${refused.length === 1 ? "One of those recipes has" : `${refused.length} of those recipes have`} language this site doesn't allow — nothing was added`, 8000);
+      return;
+    }
     persist({ ...box, recipes: [...additions, ...box.recipes] });
     setStaged([]); setImportErrors([]); setView("list");
     flash(`Added ${additions.length} ${additions.length === 1 ? "recipe" : "recipes"}`);
@@ -3551,6 +3567,18 @@ export default function RecipeBox() {
 
   const saveRecipe = () => {
     if (!form.title.trim()) return;
+    /* Named field by field, because "somewhere in this recipe" is no help to
+       somebody who has just written three hundred words of method. */
+    const refused = [
+      ["name", form.title], ["author", form.contributor], ["line about it", form.description],
+      ["servings", form.servings], ["time", form.time], ["tags", form.tagText],
+      ["ingredients", form.ingredientText], ["equipment", form.equipmentText],
+      ["steps", form.stepText], ["notes", form.notes],
+    ].find(([, text]) => hasHate(text));
+    if (refused) {
+      flash(`There's language this site doesn't allow in the ${refused[0]} — take it out and try again`, 8000);
+      return;
+    }
     importRun.current += 1;
     photoPickRun.current += 1;
     const recipe = {

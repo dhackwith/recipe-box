@@ -37,6 +37,7 @@
  */
 
 import { identity } from "../../shared/access.js";
+import { newHate } from "../../shared/hate.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -45,6 +46,13 @@ const json = (data, status = 200) =>
   });
 
 const namespaced = (email, key, shared) => (shared ? `shared:${key}` : `user:${email}:${key}`);
+
+/* A stored value is JSON as often as not, and what is checked is the text
+   inside it rather than the punctuation around it. */
+const asValue = (raw) => {
+  if (typeof raw !== "string") return "";
+  try { return JSON.parse(raw); } catch { return raw; }
+};
 
 const STEP_IMAGE_ID = /^[A-Za-z0-9_-]{6,64}$/;
 /* Characters of data URL: a 1200px JPEG at the app's quality is a few hundred
@@ -121,6 +129,17 @@ export async function onRequest({ request, env }) {
           return json({ error: "that step photo couldn't be read — try a JPEG, or a smaller picture" }, 400);
         }
       }
+      /* Slurs are refused here as well as in the browser, because the browser
+         is the thing being checked. Only what is new is refused: the box is one
+         record, and a line written long ago must not lock every later save
+         (shared/hate.js). Pictures are skipped — base64 is not prose. */
+      if (!key.startsWith("stepimg:") && !key.startsWith("image:") && !/^data:/i.test(value)) {
+        const stored = await env.RECIPES.get(namespaced(email, key, shared));
+        if (newHate(asValue(value), asValue(stored)).length) {
+          return json({ error: "that text has language this site doesn't allow" }, 400);
+        }
+      }
+
       // KV values cap at 25 MB; recipe photos are far below that, but fail loudly.
       await env.RECIPES.put(namespaced(email, key, shared), value);
       return json({ key, value, shared });

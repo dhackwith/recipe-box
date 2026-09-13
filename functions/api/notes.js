@@ -41,6 +41,7 @@
  */
 
 import { identity, displayName } from "../../shared/access.js";
+import { hasHate } from "../../shared/hate.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -277,6 +278,12 @@ export async function onRequest({ request, env }) {
       const photo = okImage(body.photo, PHOTO_MAX) ? body.photo : null;
       if (wantsShot && (!shot || !photo)) {
         return json({ error: "that photo couldn't be read — try a JPEG, or a smaller picture" }, 400);
+      }
+
+      /* Checked here as well as in the browser, for the same reason the author
+         is stamped here: the browser is the thing being checked. */
+      if (hasHate(text)) {
+        return json({ error: "that note has language this site doesn't allow" }, 400);
       }
 
       /* A note with nothing in it is a mistake; "made it" carries the fact by

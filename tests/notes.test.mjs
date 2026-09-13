@@ -306,5 +306,19 @@ is("a reply in the feed names whose note it answers",
 is("...and a note that isn't a reply carries no such name",
   "parentName" in (feedCake.data.entries.find((e) => e.id === cakeQ.data.entry.id) || {}), false);
 
+/* ── what the box will not keep ──
+   Built from the list rather than spelled out; see shared/hate.js. */
+const { TERMS } = await import("../shared/hate.js");
+const slur = TERMS[0];
+const refusedNote = await call("POST", "", devon, { recipe: "pie2", text: `made by a ${slur}` });
+is("a note with a slur in it is refused", refusedNote.status, 400);
+is("...saying so", /doesn't allow/.test(refusedNote.data?.error || ""), true);
+is("...and nothing is written", [...kv.keys()].some((k) => k.startsWith("note:pie2:")), false);
+/* a real note to answer: the parent is checked before the words are */
+const answerable = await call("POST", "", devon, { recipe: "pie2", text: "any tips for the crust?" });
+is("a reply is checked the same way",
+  (await call("POST", "", tracey, { recipe: "pie2", text: `you ${slur}`, parent: answerable.data.entry.id })).status, 400);
+is("swearing is not", (await call("POST", "", devon, { recipe: "pie2", text: "this bloody thing took all day, shit" })).status, 201);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
