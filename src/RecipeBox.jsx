@@ -16,6 +16,11 @@ import {
 /* The way back out of the meal plan, shopping list and tracker, which can each
    be opened from the others. */
 import { trailTo, backFrom } from "./trail.js";
+/* Photos on steps, kept under keys of their own rather than inside the box. */
+import {
+  STEP_PHOTO_MAX, STEP_PHOTO_WIDTH, STEP_PHOTO_QUALITY,
+  stepImageKey, stepImageUrl, newStepPhotoId, stepLines, stepPhotoIds, carryStepPhotos,
+} from "./stepphotos.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -240,6 +245,15 @@ async function prepPhoto(file) {
   const thumb = await shrink(bmp, THUMB_MAX, THUMB_Q);
   bmp.close?.();
   return { full, thumb };
+}
+
+/* A step photo is one size: it is only ever shown on a recipe that has been
+   opened, never in a listing, so there is no small copy to keep. */
+async function prepStepPhoto(file) {
+  const bmp = await loadBitmap(file);
+  const data = await shrink(bmp, STEP_PHOTO_WIDTH, STEP_PHOTO_QUALITY);
+  bmp.close?.();
+  return data;
 }
 
 /* Strip accents so a search for "acai" finds "açaí" and "jalapeno" finds
@@ -1690,7 +1704,7 @@ const UNFILED = "\u0000unfiled";   // sentinel: recipes with no author named
    was refused before it began. */
 const isFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
 
-const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "", nutrition: null, photoChoices: [], photoPick: "" };
+const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "", nutrition: null, photoChoices: [], photoPick: "", stepPhotos: [] };
 
 /* ══════════════════════════════════════════════════════════════════
    Shared bits
@@ -1839,7 +1853,7 @@ const sheet = {
    ══════════════════════════════════════════════════════════════════ */
 function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseServings, units,
                       showPantry, setShowPantry, onClose, startTimer, hasTimer, prevStep, nextStep,
-                      marks, onToggle, onFinish }) {
+                      marks, onToggle, onFinish, photoSrc, onOpenPhoto }) {
   const steps = recipe.steps;
   const step = stepParts(steps[stepIndex]);
   const secs = stepDuration(steps[stepIndex]);
@@ -1896,6 +1910,21 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
           <p style={{ font: `400 clamp(17px, 2.4vw, 21px)/1.68 ${PROSE}`, color: "rgba(var(--on-page), calc(.92 * var(--ink-k)))", margin: 0, maxWidth: "56ch" }}>
             {showText(step.text, factor, units)}
           </p>
+          {photoSrc && Array.isArray(steps[stepIndex]?.photos) && steps[stepIndex].photos.length > 0 && (
+            <div className="rb-cookshots">
+              {steps[stepIndex].photos.slice(0, STEP_PHOTO_MAX).map((id, k) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="rb-cookshot rb-focus"
+                  onClick={() => onOpenPhoto?.(id)}
+                  aria-label={`See photo ${k + 1} of this step full size`}
+                >
+                  <img src={photoSrc(id)} alt="" onError={(e) => { e.currentTarget.parentElement.style.display = "none"; }} />
+                </button>
+              ))}
+            </div>
+          )}
           {secs && (
             <button
               className="rb-btn rb-focus"
@@ -2022,6 +2051,14 @@ export default function RecipeBox() {
   const importRun = useRef(0);
   const [suggesting, setSuggesting] = useState(0);
   const [photoBusy, setPhotoBusy] = useState(false);
+  /* Step photos: the step one is being prepared for, the step choosing from an
+     imported page's photos, and the photos just saved — shown from memory until
+     their uploads land, so a recipe opened straight after saving never shows a
+     gap where a picture is still on its way. */
+  const [stepPhotoBusy, setStepPhotoBusy] = useState(null);
+  const [stepPicking, setStepPicking] = useState(null);
+  const [freshStepPhotos, setFreshStepPhotos] = useState({});
+  const stepPhotoSrc = (id) => freshStepPhotos[id] || stepImageUrl(id);
   /* Which of an imported page's photos is on its way into the form. The run
      counter lets a newer choice, an upload or a fresh form win over one that
      is still loading. */
@@ -2528,7 +2565,14 @@ export default function RecipeBox() {
           if (res?.value) photos[r.id] = res.value;
         } catch { /* no full-size photo stored for this one */ }
       }));
-      const payload = { ...box, photos, exported: new Date().toISOString() };
+      const stepPhotos = {};
+      await Promise.all(box.recipes.flatMap((r) => stepPhotoIds(r.steps)).map(async (id) => {
+        try {
+          const res = await window.storage?.get(stepImageKey(id), true);
+          if (res?.value) stepPhotos[id] = res.value;
+        } catch { /* not stored */ }
+      }));
+      const payload = { ...box, photos, stepPhotos, exported: new Date().toISOString() };
       const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
       const a = document.createElement("a");
       a.href = url;
@@ -3293,6 +3337,7 @@ export default function RecipeBox() {
     setEditingId(null);
     importRun.current += 1;
     photoPickRun.current += 1;
+    setStepPicking(null);
     setView("form");
   };
   const startEdit = (r) => {
@@ -3302,7 +3347,9 @@ export default function RecipeBox() {
       servings: r.servings || "", time: r.time || "", tagText: (r.tags || []).join(", "),
       ingredientText: r.ingredients.join("\n"), equipmentText: (r.equipment || []).join("\n"),
       stepText: r.steps.map(stepLine).join("\n"), notes: r.notes || "", nutrition: r.nutrition || null,
+      stepPhotos: r.steps.map((s) => stepPhotoIds([s]).map((id) => ({ id }))),
     });
+    setStepPicking(null);
     setEditingId(r.id); importRun.current += 1; photoPickRun.current += 1; setView("form");
   };
 
@@ -3315,6 +3362,9 @@ export default function RecipeBox() {
       ingredientText: p.ingredients.length ? p.ingredients.join("\n") : f.ingredientText,
       equipmentText: p.equipment?.length ? p.equipment.join("\n") : f.equipmentText,
       stepText: p.steps.length ? p.steps.map(stepLine).join("\n") : f.stepText,
+      stepPhotos: p.steps.length
+        ? carryStepPhotos(stepLines(f.stepText), stepLines(p.steps.map(stepLine).join("\n")), f.stepPhotos || [])
+        : f.stepPhotos,
       notes: p.notes || f.notes, nutrition: p.nutrition || f.nutrition,
     }));
 
@@ -3429,6 +3479,60 @@ export default function RecipeBox() {
     }
   };
 
+  /* ── step photos in the form ──
+     Kept on the form as { id, data, from } per step, lined up with the step
+     lines. data is the picture itself for one not yet saved; from is the page
+     address it was picked from, so the same one isn't added to a step twice. */
+  const addStepPhoto = (i, data, from) =>
+    setForm((f) => {
+      const lines = stepLines(f.stepText);
+      if (i >= lines.length) return f;
+      const all = lines.map((_, k) => f.stepPhotos?.[k] || []);
+      if (all[i].length >= STEP_PHOTO_MAX || (from && all[i].some((p) => p.from === from))) return f;
+      all[i] = [...all[i], { id: newStepPhotoId(), data, ...(from ? { from } : {}) }];
+      return { ...f, stepPhotos: all };
+    });
+
+  const addStepUpload = async (i, file) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return flash("That file isn't an image");
+    setStepPhotoBusy(i);
+    try {
+      addStepPhoto(i, await prepStepPhoto(file));
+    } catch {
+      flash("Couldn't read that image");
+    } finally {
+      setStepPhotoBusy(null);
+    }
+  };
+
+  /* One of the imported page's photos, fetched through the importer for the
+     same reason as the recipe photo: a browser can show it, but not read it. */
+  const addStepFromPage = async (i, src) => {
+    setStepPhotoBusy(i);
+    try {
+      const res = await fetch("/api/fetch-recipe", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: src, kind: "image" }), credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error("no photo");
+      addStepPhoto(i, await prepStepPhoto(await res.blob()), src);
+    } catch {
+      flash("That photo wouldn't come through — try another", 5000);
+    } finally {
+      setStepPhotoBusy(null);
+    }
+  };
+
+  const removeStepPhoto = (i, id) =>
+    setForm((f) => ({
+      ...f,
+      stepPhotos: stepLines(f.stepText).map((_, k) => {
+        const list = f.stepPhotos?.[k] || [];
+        return k === i ? list.filter((p) => p.id !== id) : list;
+      }),
+    }));
+
   const pickPhoto = async (file) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) return flash("That file isn't an image");
@@ -3467,7 +3571,11 @@ export default function RecipeBox() {
       tags: form.tagText.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       ingredients: form.ingredientText.split("\n").map((l) => l.trim()).filter(Boolean),
       equipment: form.equipmentText.split("\n").map((l) => l.trim()).filter(Boolean),
-      steps: form.stepText.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => stepParts(l)),
+      steps: stepLines(form.stepText).map((line, i) => {
+        const step = stepParts(line);
+        const ids = (form.stepPhotos?.[i] || []).slice(0, STEP_PHOTO_MAX).map((p) => p.id);
+        return ids.length ? { ...step, photos: ids } : step;
+      }),
       notes: form.notes.trim(),
       created: editingId ? box.recipes.find((r) => r.id === editingId)?.created : Date.now(),
       /* carried on the form, so it survives an edit and a pasted import alike */
@@ -3483,6 +3591,31 @@ export default function RecipeBox() {
           else await window.storage?.delete(imageKey(recipe.id), true);
         } catch {}
         setHero(form.full || "");
+      })();
+    }
+
+    /* Step photos: new ones uploaded, and any the edit let go of deleted, so a
+       removed picture doesn't sit in the account unreachable but still counted.
+       One at a time rather than all at once, and a failure is said out loud. */
+    const kept = new Set(stepPhotoIds(recipe.steps));
+    const before = editingId ? stepPhotoIds(box.recipes.find((r) => r.id === editingId)?.steps) : [];
+    const fresh = stepLines(form.stepText)
+      .flatMap((_, i) => (form.stepPhotos?.[i] || []).slice(0, STEP_PHOTO_MAX))
+      .filter((p) => p.data && kept.has(p.id));
+    const dropped = before.filter((id) => !kept.has(id));
+    if (fresh.length) setFreshStepPhotos((m) => ({ ...m, ...Object.fromEntries(fresh.map((p) => [p.id, p.data])) }));
+    if (fresh.length || dropped.length) {
+      (async () => {
+        let failed = 0;
+        for (const p of fresh) {
+          try { await window.storage?.set(stepImageKey(p.id), p.data, true); } catch { failed += 1; }
+        }
+        for (const id of dropped) {
+          try { await window.storage?.delete(stepImageKey(id), true); } catch { /* left behind; harmless */ }
+        }
+        if (failed) {
+          flash(`${failed === 1 ? "A step photo" : `${failed} step photos`} didn't save — edit the recipe and add ${failed === 1 ? "it" : "them"} again`, 7000);
+        }
       })();
     }
 
@@ -3660,6 +3793,25 @@ export default function RecipeBox() {
       color: #fff; font: 400 22px/1 ${UI}; cursor: pointer;
     }
     .rb-lightbox-x:hover { border-color: #fff; }
+
+    /* Step photos: a row under a step on the recipe, larger in cooking mode,
+       and a row for each step in the form where they are added. */
+    .rb-stepshots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .rb-stepshot { padding: 0; border: 1px solid var(--card-edge); border-radius: 2px; background: var(--card-lift); cursor: zoom-in; line-height: 0; overflow: hidden; }
+    .rb-stepshot img { display: block; width: clamp(96px, 26vw, 180px); height: clamp(72px, 19.5vw, 135px); object-fit: cover; }
+    .rb-cookshots { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+    .rb-cookshot { padding: 0; border: 0; border-radius: 3px; background: rgba(0, 0, 0, .18); cursor: zoom-in; line-height: 0; overflow: hidden; }
+    .rb-cookshot img { display: block; height: clamp(120px, 26vh, 240px); width: auto; max-width: 100%; object-fit: cover; }
+    .rb-stepphoto-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+    .rb-stepphoto-row { padding-bottom: 12px; border-bottom: 1px solid var(--card-edge); }
+    .rb-stepphoto-step { display: flex; gap: 8px; margin: 0 0 8px; font: 400 13.5px/1.5 ${UI}; color: var(--card-text); }
+    .rb-stepphoto-step .rb-num { flex: none; color: var(--card-accent); }
+    .rb-stepphoto-items { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .rb-stepphoto-item { position: relative; width: 84px; height: 63px; border: 1px solid var(--card-edge); border-radius: 2px; overflow: hidden; background: var(--card-lift); }
+    .rb-stepphoto-item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .rb-stepphoto-x { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .62); color: #fff; font: 600 14px/22px ${UI}; cursor: pointer; }
+    .rb-stepphoto-full { font: 400 12.5px/1.4 ${UI}; color: var(--card-muted); }
+    .rb-stepphoto-row .rb-photo-choices { margin-top: 10px; }
 
     /* The week. Seven columns where there is room, and a single column of days
        on a phone — a 7-wide grid on a 375px screen gives each day 40 pixels,
@@ -3945,6 +4097,12 @@ export default function RecipeBox() {
           marks={marksFor(openRecipe.id)}
           onToggle={(kind, i) => toggleMark(openRecipe.id, kind, i)}
           onFinish={() => { markDone(openRecipe.id, stepIndex); setCooking(false); }}
+          photoSrc={stepPhotoSrc}
+          onOpenPhoto={(id) => setLightbox({
+            src: stepPhotoSrc(id),
+            alt: `Step ${stepIndex + 1} of ${openRecipe.title}`,
+            caption: `${openRecipe.title} · step ${stepIndex + 1}`,
+          })}
         />
       )}
 
@@ -5465,6 +5623,25 @@ export default function RecipeBox() {
                           <div style={{ maxWidth: "64ch" }}>
                             {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
                             <p style={{ font: `400 16.5px/1.75 ${PROSE}`, color: "var(--card-text)", margin: 0 }}>{showText(text, factor, units)}</p>
+                            {Array.isArray(s?.photos) && s.photos.length > 0 && (
+                              <div className="rb-stepshots rb-noprint">
+                                {s.photos.slice(0, STEP_PHOTO_MAX).map((id, k) => (
+                                  <button
+                                    key={id}
+                                    type="button"
+                                    className="rb-stepshot rb-focus"
+                                    onClick={() => setLightbox({
+                                      src: stepPhotoSrc(id),
+                                      alt: `Step ${i + 1}${title ? `: ${title}` : ""}`,
+                                      caption: `${openRecipe.title} · step ${i + 1}`,
+                                    })}
+                                    aria-label={`See photo ${k + 1} of step ${i + 1} full size`}
+                                  >
+                                    <img src={stepPhotoSrc(id)} alt="" loading="lazy" onError={(e) => { e.currentTarget.parentElement.style.display = "none"; }} />
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                             {secs && (
                               <button
                                 className="rb-btn rb-focus rb-noprint"
@@ -5711,6 +5888,7 @@ export default function RecipeBox() {
                       onClick={() => {
                         persist({ ...box, recipes: box.recipes.filter((r) => r.id !== openRecipe.id) });
                         window.storage?.delete(imageKey(openRecipe.id), true).catch(() => {});
+                        stepPhotoIds(openRecipe.steps).forEach((id) => window.storage?.delete(stepImageKey(id), true).catch(() => {}));
                         setConfirmRemove(false);
                         setView("list");
                       }}
@@ -5902,8 +6080,112 @@ export default function RecipeBox() {
               </Field>
 
               <Field label="Steps" hint={'One per line. Write "Short title: the actual instruction" and the title shows in cooking mode. Any duration you mention becomes a timer — "blend 60 seconds" as readily as "bake 40 minutes".'}>
-                <textarea className="rb-focus" rows={8} style={input} value={form.stepText} onChange={(e) => setForm({ ...form, stepText: e.target.value })} />
+                <textarea
+                  className="rb-focus"
+                  rows={8}
+                  style={input}
+                  value={form.stepText}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    /* photos belong to steps, so they follow each step's line through the edit */
+                    setForm((f) => ({
+                      ...f,
+                      stepText: value,
+                      stepPhotos: carryStepPhotos(stepLines(f.stepText), stepLines(value), f.stepPhotos || []),
+                    }));
+                  }}
+                />
               </Field>
+
+              {stepLines(form.stepText).length > 0 && (
+                <Field
+                  label="Step photos"
+                  group
+                  hint={`Optional — up to ${STEP_PHOTO_MAX} for any step, to show how it should look.${form.photoChoices?.length > 0 ? " Upload your own, or pick from the photos on the page you imported." : ""}`}
+                >
+                  <ol className="rb-stepphoto-list">
+                    {stepLines(form.stepText).map((line, i) => {
+                      const photos = form.stepPhotos?.[i] || [];
+                      const room = photos.length < STEP_PHOTO_MAX;
+                      const { title, text } = stepParts(line);
+                      const name = title || text;
+                      return (
+                        <li key={i} className="rb-stepphoto-row">
+                          <p className="rb-stepphoto-step">
+                            <span className="rb-num">{i + 1}</span>
+                            <span>{name.length > 90 ? `${name.slice(0, 90)}…` : name}</span>
+                          </p>
+                          <div className="rb-stepphoto-items">
+                            {photos.map((ph) => (
+                              <span key={ph.id} className="rb-stepphoto-item">
+                                <img src={ph.data || stepPhotoSrc(ph.id)} alt="" />
+                                <button
+                                  type="button"
+                                  className="rb-stepphoto-x rb-focus"
+                                  onClick={() => removeStepPhoto(i, ph.id)}
+                                  aria-label={`Remove this photo from step ${i + 1}`}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                            {room ? (
+                              <>
+                                {/* a label around a hidden input, sized to its words, like the other photo buttons */}
+                                <label className="rb-btn rb-focus rb-shotbtn" style={{ ...btnQuiet, padding: "6px 12px", fontSize: 12.5 }}>
+                                  {stepPhotoBusy === i ? "Working…" : "Upload a photo"}
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    disabled={stepPhotoBusy !== null}
+                                    onChange={(e) => { addStepUpload(i, e.target.files?.[0]); e.target.value = ""; }}
+                                    style={{ display: "none" }}
+                                  />
+                                </label>
+                                {form.photoChoices?.length > 0 && (
+                                  <button
+                                    type="button"
+                                    className="rb-btn rb-focus"
+                                    style={{ ...btnQuiet, padding: "6px 12px", fontSize: 12.5 }}
+                                    aria-expanded={stepPicking === i}
+                                    onClick={() => setStepPicking(stepPicking === i ? null : i)}
+                                  >
+                                    {stepPicking === i ? "Hide the page's photos" : "From the page"}
+                                  </button>
+                                )}
+                              </>
+                            ) : (
+                              <span className="rb-stepphoto-full">That's {STEP_PHOTO_MAX}, the most a step can have.</span>
+                            )}
+                          </div>
+                          {room && stepPicking === i && form.photoChoices?.length > 0 && (
+                            <div className="rb-photo-choices" role="group" aria-label={`Photos from the page for step ${i + 1}`}>
+                              {form.photoChoices.map((ph) => (
+                                <button
+                                  key={ph.src}
+                                  type="button"
+                                  className="rb-photo-choice rb-focus"
+                                  disabled={stepPhotoBusy !== null || photos.some((p) => p.from === ph.src)}
+                                  aria-label={ph.alt ? `Add to step ${i + 1}: ${ph.alt}` : `Add this photo to step ${i + 1}`}
+                                  onClick={() => addStepFromPage(i, ph.src)}
+                                >
+                                  <img
+                                    src={ph.thumb || ph.src}
+                                    alt=""
+                                    loading="lazy"
+                                    referrerPolicy="no-referrer"
+                                    onError={(e) => { e.currentTarget.parentElement.style.display = "none"; }}
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </Field>
+              )}
 
               <Field label="Notes" hint="Substitutions, warnings, the story behind it.">
                 <textarea className="rb-focus" rows={3} style={input} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
@@ -5957,7 +6239,7 @@ export default function RecipeBox() {
           className="rb-lightbox rb-noprint"
           role="dialog"
           aria-modal="true"
-          aria-label={`Photo from ${lightbox.name}`}
+          aria-label={lightbox.caption || `Photo from ${lightbox.name}`}
           onClick={() => setLightbox(null)}
         >
           {/* The full-size picture is a plain address rather than something
@@ -5965,13 +6247,12 @@ export default function RecipeBox() {
               caching and the decoding, and the small version already on screen
               stands in until it arrives. */}
           <img
-            src={`${NOTES_API}?photo=${encodeURIComponent(lightbox.id)}`}
-            alt={`Cooked by ${lightbox.name}`}
+            src={lightbox.src || `${NOTES_API}?photo=${encodeURIComponent(lightbox.id)}`}
+            alt={lightbox.alt ?? `Cooked by ${lightbox.name}`}
             onClick={(ev) => ev.stopPropagation()}
           />
           <p className="rb-lightbox-who">
-            {lightbox.name}
-            {lightbox.at ? ` · ${whenLabel(lightbox.at)}` : ""}
+            {lightbox.caption ?? <>{lightbox.name}{lightbox.at ? ` · ${whenLabel(lightbox.at)}` : ""}</>}
           </p>
           <button type="button" className="rb-lightbox-x rb-focus" onClick={() => setLightbox(null)} aria-label="Close the photo">
             ×

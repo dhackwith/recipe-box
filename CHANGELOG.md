@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Show each step with photos.** Any step can now carry up to three photos, shown beneath it on the recipe and larger in cooking mode, and tapping one opens it full size. Add them in the recipe form under Step photos: upload your own, or, when you've imported a link, pick from the photos on that page. They're stored apart from the recipes themselves, so a recipe full of photos doesn't slow down the rest of the site.
 - **The meal plan's back button looks clickable again.** It worked, but didn't show the pointing hand the other back buttons do.
 - **Replies in Lately take you to the conversation.** A reply in the Lately list now says whose note it was answering, and tapping it opens the recipe at that note with the reply right beneath it, lit up for a moment so you can see where you've landed. Any other note in Lately opens at that note too, rather than at the top of the recipe.
 - **Back buttons go back the way you came.** Opening the shopping list from the meal plan and going back used to leave the meal plan's back button doing nothing at all. Back on the meal plan, the shopping list and the nutrition tracker now retraces your steps one page at a time, always ends up at your recipes, and says where it is taking you.
