@@ -1982,7 +1982,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
               <>
                 <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "22px 0 12px" }}>You'll need</p>
                 <p style={{ font: `400 14.5px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.8 * var(--ink-k)))", margin: 0 }}>
-                  {recipe.equipment.join(" · ")}
+                  {recipe.equipment.map((tool) => convertText(tool, units)).join(" · ")}
                 </p>
               </>
             )}
@@ -5556,7 +5556,8 @@ export default function RecipeBox() {
                             }}
                           >
                             <span aria-hidden style={{ position: "absolute", left: 0, top: 15, width: 6, height: 6, background: T.sage, borderRadius: "50%" }} />
-                            {tool}
+                            {/* in the reader's units, but never scaled: the pan is the pan at any number of servings */}
+                            {convertText(tool, units)}
                           </li>
                         ))}
                       </ul>

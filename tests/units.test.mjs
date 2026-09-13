@@ -33,13 +33,18 @@ is("past a litre it changes unit", metric("2 quarts stock"), "1.89 l stock");
 is("and past a kilo", metric("3 lb flour"), "1.36 kg flour");
 is("a mixed number", metric("1½ cups milk"), "360 ml milk");
 
-console.log("\n— spoons stay spoons —");
-/* Converting these is right and useless: metric kitchens own teaspoons, and
-   nobody has ever written "5 ml of vanilla" on a recipe card. */
-is("a teaspoon is left alone going metric", metric("1 tsp vanilla"), "1 tsp vanilla");
-is("so is a tablespoon", metric("2 tbsp olive oil"), "2 tbsp olive oil");
-is("...and the long spelling", metric("1 tablespoon honey"), "1 tablespoon honey");
-is("but small millilitres become spoons going the other way", us("15 ml vanilla"), "1 tbsp vanilla");
+console.log("\n— spoons, in one system or the other —");
+/* The family reading this asked for metric all the way through, so spoons
+   convert as well: a list mixing teaspoons with grams looks half-converted. */
+is("a teaspoon becomes millilitres going metric", metric("1 tsp vanilla"), "5 ml vanilla");
+is("so does a tablespoon", metric("2 tbsp olive oil"), "30 ml olive oil");
+is("...and the long spelling", metric("1 tablespoon honey"), "15 ml honey");
+is("half a teaspoon is exact, not rounded up", metric("1/2 teaspoon baking soda"), "2.5 ml baking soda");
+is("...and so is three quarters", metric("3/4 teaspoon kosher salt"), "3.75 ml kosher salt");
+is("...a mixed number of teaspoons", metric("1 1/2 teaspoons baking powder"), "7.5 ml baking powder");
+is("...a tablespoon and a half", metric("1½ tbsp soy sauce"), "22.5 ml soy sauce");
+is("spoons in a step convert too", metric("Stir in 1 teaspoon vanilla"), "Stir in 5 ml vanilla");
+is("small millilitres become spoons going the other way", us("15 ml vanilla"), "1 tbsp vanilla");
 is("...and very small ones become teaspoons", us("5 ml salt"), "1 tsp salt");
 
 console.log("\n— the other direction —");
@@ -150,9 +155,11 @@ is("...a stick of butter", metric("1 stick (113 g) butter"), "113 g butter");
 is("...a pan's size in centimetres", metric("a 9 inch (23 cm) square pan"), "a 23 cm square pan");
 is("US takes the ounces a metric recipe gives", us("225 g (8 oz) butter"), "8 oz butter");
 
-is("in US, a bracket that gives both is left exactly as written",
-  us("6 tablespoons (3 ounces or 85 grams) unsalted butter"), "6 tablespoons (3 ounces or 85 grams) unsalted butter");
-is("...and in metric when no measure leads it", metric("butter (3 ounces or 85 grams)"), "butter (3 ounces or 85 grams)");
+is("in US, a bracket that gives both keeps only its US half",
+  us("6 tablespoons (3 ounces or 85 grams) unsalted butter"), "6 tablespoons (3 ounces) unsalted butter");
+is("...and in metric its metric half, even with no measure leading it",
+  metric("butter (3 ounces or 85 grams)"), "butter (85 g)");
+is("...spoons included", metric("soy sauce (1 tbsp or 15 ml)"), "soy sauce (15 ml)");
 is("a bracket only restating an amount already in the reader's system is dropped, not doubled",
   metric("225 g (8 oz) butter"), "225 g butter");
 is("...the other way too", us("1 cup (240 ml) whole milk"), "1 cup whole milk");
@@ -164,6 +171,47 @@ is("a bracket saying more than an amount converts as it did",
   metric("2 cups (about 1 lb) cherries"), "480 ml (about 455 g) cherries");
 is("a count's bracket is left alone", metric("2 eggs (100 g)"), "2 eggs (100 g)");
 is("a can's bracket still converts", metric("1 can (14 oz) crushed tomatoes"), "1 can (395 g) crushed tomatoes");
+
+console.log("\n— sizes and equipment —");
+is("every dimension of a pan converts together", metric("9x13 inch baking dish"), "22.9x33 cm baking dish");
+is("...written with a times sign and a hyphen", metric("a 9×13-inch pan"), "a 22.9×33 cm pan");
+is("...three of them", metric("10x4x3 inch loaf pan"), "25.4x10.2x7.6 cm loaf pan");
+is("...and back to inches", us("23x33 cm baking dish"), "9x13 inches baking dish");
+is("a size already in the reader's system is left", metric("23x33 cm baking dish"), "23x33 cm baking dish");
+is("equipment with a capacity converts too", metric("Large pitcher (2 qt or bigger)"), "Large pitcher (1.89 l or bigger)");
+
+console.log("\n— a whole recipe, in one system —");
+/* Every ingredient line of the Smitten Kitchen loaf that prompted this. Read in
+   metric, not one cup, spoon, ounce or pound may survive on any line; read in
+   US, not one gram or millilitre. Counts and pinches are neither, and stay. */
+const loaf = [
+  "1¼ pounds (565 grams) peaches, pitted (no need to peel); each peach cut into 8 wedges",
+  "Finely grated zest and juice from half a lemon",
+  "1 teaspoon ground cinnamon",
+  "1/3 cup (72 grams) plus 1 tablespoon (15 grams) light brown sugar, divided",
+  "6 tablespoons (3 ounces or 85 grams) unsalted butter, cold is fine",
+  "1/3 cup (65 grams) granulated sugar",
+  "1/2 cup (115 grams) plain unsweetened Greek-style yogurt or sour cream",
+  "2 large eggs",
+  "1 1/2 teaspoons baking powder",
+  "1/2 teaspoon baking soda",
+  "3/4 teaspoon kosher salt",
+  "1⅓ cups (180 grams) all-purpose flour",
+  "2 tablespoons (30 grams) unsalted butter, cold is fine",
+  "2 tablespoons (25 grams) granulated sugar",
+  "Pinch of salt",
+  "1/4 cup (35 grams) all-purpose flour",
+];
+const { scaleLine: scaled } = await import("../src/units.js");
+const US_MEASURES = /\b(cups?|tablespoons?|teaspoons?|tbsps?|tsps?|ounces?|oz|pounds?|lbs?|quarts?|pints?)\b/i;
+const METRIC_MEASURES = /\d\s*(g|kg|ml|l|grams?|kilograms?|millilit(?:er|re)s?|lit(?:er|re)s?)\b/i;
+is("in metric, no US measure is left on any line", loaf.map(metric).filter((l) => US_MEASURES.test(l)), []);
+is("...nor at double servings", loaf.map((l) => metric(scaled(l, 2))).filter((l) => US_MEASURES.test(l)), []);
+is("in US, no metric measure is left on any line", loaf.map(us).filter((l) => METRIC_MEASURES.test(l)), []);
+is("...nor at double servings", loaf.map((l) => us(scaled(l, 2))).filter((l) => METRIC_MEASURES.test(l)), []);
+is("counts and pinches are left as they were",
+  [metric("2 large eggs"), metric("Pinch of salt"), us("Finely grated zest and juice from half a lemon")],
+  ["2 large eggs", "Pinch of salt", "Finely grated zest and juice from half a lemon"]);
 
 console.log("\n— scaling a line —");
 const { scaleLine } = await import("../src/units.js");

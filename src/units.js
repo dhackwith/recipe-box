@@ -4,12 +4,13 @@
  * Everything about this is a judgement call rather than arithmetic, and the
  * arithmetic is the easy half. Three decisions shape the rest:
  *
- * SPOONS ARE LEFT ALONE. A teaspoon is 5ml and a tablespoon 15ml, and almost
- * nobody writes "5 ml of vanilla" — metric kitchens own spoons too. Converting
- * them is technically right and produces a recipe no one would write, so
- * teaspoons and tablespoons survive in both directions. Going the other way,
- * small millilitre amounts DO become spoons, because that is how the recipe
- * would have been written in the first place.
+ * ONE SYSTEM AT A TIME. A recipe read in metric is metric all the way through:
+ * teaspoons and tablespoons become millilitres, 5 and 15 of them, because a list
+ * that mixes spoons with grams reads as though half of it was never converted.
+ * (Spoons were once left alone, on the grounds that metric kitchens own them
+ * too; the family reading it asked for one system, and that is the better rule.)
+ * Going the other way, small millilitre amounts become spoons, because that is
+ * how a US recipe would have said them.
  *
  * ROUNDING IS THE POINT. A cup is 236.588ml and saying so helps nobody. Amounts
  * land on numbers a person would write on a shopping list: 240ml, 450g, 220°C.
@@ -21,7 +22,7 @@
  * WHAT THE RECIPE ALREADY SAYS WINS. "⅓ cup (72 grams) sugar" was weighed by
  * the person who wrote it, and nothing converting a cup can know what a cup of
  * sugar weighs, so metric shows the 72 g. A bracket that already gives both
- * systems — "(3 ounces or 85 grams)" — is complete and is not touched, and one
+ * systems — "(3 ounces or 85 grams)" — keeps only the reader's half, and one
  * that only restates the leading amount in the other system is dropped rather
  * than converted into the same amount twice.
  *
@@ -99,7 +100,7 @@ export const SYSTEMS = [
 ];
 export const isSystem = (v) => SYSTEMS.some((s) => s.id === v);
 
-/* Deliberately without tsp and tbsp — see the note at the top. */
+/* Spoons are kept apart from cups: they convert on their own terms (SPOON_ML). */
 const US_VOLUME_ML = {
   cup: 240, cups: 240,
   pint: 473, pints: 473, pt: 473,
@@ -123,6 +124,11 @@ const METRIC_WEIGHT_G = {
    inch, and "cook 2 in butter" is not a length. */
 const US_LENGTH_MM = { inch: 25.4, inches: 25.4 };
 const METRIC_LENGTH_MM = { mm: 1, millimeter: 1, millimeters: 1, cm: 10, centimeter: 10, centimeters: 10, centimetre: 10, centimetres: 10 };
+/* Measuring spoons, at the round figures every metric set is marked with. */
+const SPOON_ML = {
+  tsp: 5, tsps: 5, teaspoon: 5, teaspoons: 5,
+  tbsp: 15, tbsps: 15, tablespoon: 15, tablespoons: 15,
+};
 
 /* An ounce is a weight, except when it is a volume, and only the ingredient
    says which. US recipes write "6 oz brandy" meaning fluid ounces and "6 oz
@@ -135,10 +141,9 @@ const looksLikeAPour = (context) => POURS.test(String(context || ""));
 
 /* ── Amounts a recipe gives twice ────────────────────────────────── */
 
-/* Spoons are left alone on their own (see the top), but they are still US
-   measures when a recipe gives a metric amount beside them. A stick of butter
-   is a US measure too: "1 stick (113 g)". */
-const SPOONS = new Set(["tsp", "tsps", "teaspoon", "teaspoons", "tbsp", "tbsps", "tablespoon", "tablespoons"]);
+/* Spoons and sticks of butter are US measures: "1 tablespoon (15 grams)" gives
+   a metric amount beside a US one, and so does "1 stick (113 g)". */
+const SPOONS = new Set(Object.keys(SPOON_ML));
 const STICKS = new Set(["stick", "sticks"]);
 
 const unitKey = (raw) => String(raw || "").toLowerCase().replace(/\./g, "").replace(/\s+/g, "");
@@ -249,6 +254,13 @@ export function convertMeasure(amount, unit, system, context = "") {
   if (system === "metric") {
     if (US_VOLUME_ML[u]) return metricAmount(amount * US_VOLUME_ML[u], "ml", "l");
     if (u === "floz") return metricAmount(amount * 29.5735, "ml", "l");
+    if (SPOON_ML[u]) {
+      /* Spoon amounts are small and exact — half a teaspoon is 2.5 ml, not 3 —
+         so they keep quarter millilitres until they are large enough to round
+         the way a cup would. */
+      const ml = amount * SPOON_ML[u];
+      return ml < 100 ? { amount: String(Math.round(ml * 4) / 4), unit: "ml" } : metricAmount(ml, "ml", "l");
+    }
     if (US_WEIGHT_G[u]) {
       /* A fluid ounce dressed as an ounce. Pounds are never volumes, so only
          the ounce needs asking about. */
@@ -316,6 +328,29 @@ function convertTemps(text, system) {
   });
 }
 
+/* "9x13 inch", "9×13-inch", "10x4x3 inches": a size given as dimensions. Every
+   number belongs to the one unit at the end, so they convert together — taken
+   one measure at a time, "9x13 inch" became "9x33 cm". */
+const DIMENSIONS_RE = new RegExp(
+  `(${NUM})(\\s*[x×]\\s*)(${NUM})(?:(\\s*[x×]\\s*)(${NUM}))?\\s*-?\\s*(inches|inch|cm|centimet(?:er|re)s?)\\b`,
+  "gi",
+);
+
+function convertDimensions(text, system) {
+  return text.replace(DIMENSIONS_RE, (whole, a, x1, b, x2, c, unitRaw) => {
+    const fromUS = !!US_LENGTH_MM[unitKey(unitRaw)];
+    if ((system === "metric") !== fromUS) return whole;          // already the reader's system
+    const one = (n) => {
+      const v = toNumber(n);
+      if (v == null) return null;
+      return system === "metric" ? String(Math.round(v * 2.54 * 10) / 10) : prettyNumber(v / 2.54);
+    };
+    const [A, B, C] = [one(a), one(b), c == null ? "" : one(c)];
+    if (A == null || B == null || C == null) return whole;
+    return `${A}${x1}${B}${c == null ? "" : `${x2}${C}`} ${system === "metric" ? "cm" : "inches"}`;
+  });
+}
+
 /**
  * Convert every measurement in a piece of text.
  *
@@ -346,12 +381,23 @@ export function convertText(text, system, context) {
     return `${one.amount}${gap || " "}${one.unit}`;
   });
 
-  const withUnits = preferWrittenAmounts(String(text), system)
+  const withUnits = preferWrittenAmounts(convertDimensions(String(text), system), system)
     .split(/(\([^()]*\))/)
-    .map((part) =>
-      /* A bracket that already gives both systems is complete as written;
-         converting inside it would only say one of its amounts twice. */
-      part.startsWith("(") && bothSystems(bracketAmounts(part.slice(1, -1))) ? part : convertMeasures(part))
+    .map((part) => {
+      /* A bracket that already gives both systems keeps only the reader's
+         half: converting the other half would say one amount twice, and
+         keeping it would put the other system back on the page. */
+      if (part.startsWith("(")) {
+        const amounts = bracketAmounts(part.slice(1, -1));
+        if (bothSystems(amounts)) {
+          return `(${amounts
+            .filter((a) => a.system === system)
+            .map((a) => `${a.amount} ${system === "metric" ? metricShort(unitKey(a.unit)) : a.unit}`)
+            .join(" or ")})`;
+        }
+      }
+      return convertMeasures(part);
+    })
     .join("");
 
   return convertTemps(withUnits, system);
