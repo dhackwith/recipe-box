@@ -54,7 +54,9 @@ export async function setLove(db, { kind, target, person, pair = "", on }) {
 }
 
 /* Who loves each of these, in the order they did: a Map of target to person
-   ids. One query however many things are asked about. */
+   ids. One query however many things are asked about. Ordered by seq, which
+   only ever rises, rather than by time: two hearts in the same millisecond
+   would otherwise come back in either order. */
 export async function lovesFor(db, kind, targets) {
   const out = new Map();
   const ids = [...new Set(targets.map(String))];
@@ -62,7 +64,7 @@ export async function lovesFor(db, kind, targets) {
   const { results } = await db
     .prepare(`SELECT target, person FROM loves
               WHERE kind = ?1 AND loved = 1 AND target IN (SELECT value FROM json_each(?2))
-              ORDER BY at, person`)
+              ORDER BY seq`)
     .bind(kind, JSON.stringify(ids))
     .all();
   for (const r of results || []) {
