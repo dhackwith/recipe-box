@@ -877,6 +877,41 @@ function describeItem(item) {
 const itemRecipes = (item, list) =>
   [...new Set(item.sources.map((src) => list.recipes[src.recipeId]?.title).filter(Boolean))];
 
+/* What to buy, as a shop sells it (functions/api/packs.js). Suggestions are
+   remembered on this device under the exact amount they were worked out for,
+   so adding another recipe, or changing servings, simply leaves that item
+   without one until it is asked for again rather than showing a stale count. */
+const PACKS_KEY = "rb-packs";
+const PACK_COUNTRY_KEY = "rb-pack-country";
+const PACK_SEEN_KEY = "rb-pack-country-seen";
+const PACKS_KEPT = 300;
+const COUNTRY_NAMES = { US: "United States", NZ: "New Zealand" };
+
+/* The amount an item adds up to, in the unit it is stored in, or null for
+   something with no amount to size ("salt", or "2–3 limes"). */
+function packNeed(item) {
+  const counted = item.sources.filter((src) => src.amount != null);
+  if (!counted.length) return null;
+  const summed = counted.reduce((t, src) => t + src.amount, 0);
+  const amount = item.unit ? summed : Math.ceil(summed - 1e-9);
+  return { amount: Math.round(amount * 1000) / 1000, unit: item.unit || "", name: describeItem(item).name };
+}
+const packKey = (country, need) => `${country}|${fold(need.name)}|${need.unit}|${need.amount}`;
+
+/* "2 × carton (64 fl oz)", "7 (sold each)", "about 4 oz loose". Loose produce
+   is bought by what is needed, not by the kilo it is priced by. */
+function packLabel(p) {
+  const size = `${prettyNumber(p.size)}${p.unit === "count" ? "" : ` ${p.unit}`}`;
+  if (p.package === "each") return `${prettyNumber(p.count * p.size)} (sold each)`;
+  if (p.package === "loose" && Number(p.need) > 0) {
+    if (p.unit === "lb") return `about ${p.need < 1 ? `${Math.ceil(p.need * 16)} oz` : `${prettyNumber(Math.ceil(p.need * 4) / 4)} lb`} loose`;
+    if (p.unit === "kg") return `about ${p.need < 1 ? `${Math.ceil(p.need * 100) * 10} g` : `${prettyNumber(Math.ceil(p.need * 10) / 10)} kg`} loose`;
+  }
+  if (p.package === "loose") return `about ${prettyNumber(p.count * p.size)}${p.unit === "count" ? "" : ` ${p.unit}`} loose`;
+  if (p.unit === "count") return `${p.count} × ${p.package} of ${size}`;
+  return `${p.count} × ${p.package} (${size})`;
+}
+
 const asStoredList = (data) =>
   data && Array.isArray(data.items)
     ? { items: data.items, recipes: data.recipes || {}, tombstones: data.tombstones || {} }
@@ -2922,6 +2957,23 @@ export default function RecipeBox() {
   const toolTrail = useRef([]);              // the path back out of the tool pages — see trail.js
   const [newItem, setNewItem] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  /* Package suggestions: which country's shops, as chosen here ("" is
+     wherever Cloudflare says you are), the country last used, and the
+     suggestions themselves by packKey. */
+  const [packCountry, setPackCountry] = useState(() => {
+    try { const v = localStorage.getItem(PACK_COUNTRY_KEY); return v === "US" || v === "NZ" ? v : ""; } catch { return ""; }
+  });
+  const [packFor, setPackFor] = useState(() => {
+    try { const v = localStorage.getItem(PACK_SEEN_KEY); return v === "US" || v === "NZ" ? v : ""; } catch { return ""; }
+  });
+  const [packs, setPacks] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem(PACKS_KEY) || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+  });
+  const [packsBusy, setPacksBusy] = useState(false);
+  const [packsNote, setPacksNote] = useState("");
+  useEffect(() => {
+    try { localStorage.setItem(PACKS_KEY, JSON.stringify(Object.fromEntries(Object.entries(packs).slice(-PACKS_KEPT)))); } catch { /* this visit only */ }
+  }, [packs]);
   const [crossed, setCrossed] = useState(loadCrossed);
   const [palette, setPalette] = useState(() => paletteById(localPalette()));
   const [menuPane, setMenuPane] = useState("main");
@@ -4434,6 +4486,51 @@ export default function RecipeBox() {
     updateList((l) => ({ ...l, items: l.items.map((i) => (i.id === id ? { ...i, checked: !i.checked } : i)) }));
   const removeItem = (id) => updateList((l) => prune({ ...l, items: l.items.filter((i) => i.id !== id) }));
   const clearChecked = () => updateList((l) => prune({ ...l, items: l.items.filter((i) => !i.checked) }));
+
+  const choosePackCountry = (value) => {
+    const v = value === "US" || value === "NZ" ? value : "";
+    setPackCountry(v);
+    setPacksNote("");
+    try { if (v) localStorage.setItem(PACK_COUNTRY_KEY, v); else localStorage.removeItem(PACK_COUNTRY_KEY); } catch { /* this visit only */ }
+  };
+
+  /* Asks for everything still to buy that has an amount. The server answers
+     what it already knows from its cache and asks the model about the rest. */
+  const suggestPacks = async () => {
+    const asking = list.items.filter((i) => !i.checked).map((i) => ({ item: i, need: packNeed(i) })).filter((x) => x.need);
+    if (!asking.length || packsBusy) return;
+    setPacksBusy(true);
+    setPacksNote("");
+    try {
+      const res = await fetch("/api/packs", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country: packCountry || undefined, items: asking.map(({ item, need }) => ({ id: item.id, ...need })) }),
+      });
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+      if (!res.ok) throw new Error((data && data.error) || `Couldn't get suggestions (${res.status})`);
+      if (!data || !data.country) throw new Error("Suggestions aren't available here — this needs the deployed site");
+      setPackFor(data.country);
+      try { localStorage.setItem(PACK_SEEN_KEY, data.country); } catch { /* this visit only */ }
+      setPacks((old) => {
+        const next = { ...old };
+        for (const { item, need } of asking) {
+          const key = packKey(data.country, need);
+          delete next[key];
+          next[key] = data.packs?.[item.id] || null;
+        }
+        return next;
+      });
+      const without = asking.filter(({ item }) => !data.packs?.[item.id]).length;
+      if (without) setPacksNote(`No sensible package for ${without} ${without === 1 ? "item" : "items"}, so buy ${without === 1 ? "it" : "those"} by the amount shown.`);
+    } catch (err) {
+      setPacksNote(String(err.message || err));
+    } finally {
+      setPacksBusy(false);
+    }
+  };
   const clearAll = () => updateList(() => ({ items: [], recipes: {} }));
   const addTyped = () => {
     const text = newItem.trim();
@@ -5264,6 +5361,11 @@ export default function RecipeBox() {
     .rb-emoji-menu button[aria-checked="true"] { background: color-mix(in srgb, var(--card-accent) 24%, transparent); }
     .rb-msg.has-love { position: relative; margin-bottom: 10px; }
     .rb-love-badge { position: absolute; right: -5px; bottom: -11px; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid var(--card-edge); border-radius: 50%; background: var(--card-bg); font-size: 11.5px; line-height: 1; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .5); }
+    .rb-packs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 18px; }
+    .rb-packs-where { display: inline-flex; align-items: center; gap: 8px; font: 500 13px/1.3 ${UI}; color: var(--card-muted); }
+    .rb-packs-note { flex-basis: 100%; margin: 0; font: 400 12.5px/1.5 ${UI}; color: var(--card-muted); }
+    .rb-pack-line { display: block; font: 500 13px/1.5 ${UI}; color: var(--card-accent); }
+    .rb-pack-est { font-weight: 400; color: var(--card-muted); }
     .rb-love-line { margin: 5px 0 0; font: 500 12.5px/1.4 ${SOCIAL}; color: var(--card-muted); }
     .rb-entry-actions .rb-entry-x + .rb-entry-x { margin-left: 14px; }
     .rb-gif-btn { width: auto; padding: 0 7px; border-radius: 6px; font: 700 11.5px/1 ${SOCIAL}; letter-spacing: .06em; }
@@ -6899,6 +7001,8 @@ export default function RecipeBox() {
           const got = list.items.filter((i) => i.checked);
           const onList = Object.entries(list.recipes);
           const backLabel = toolBackLabel();
+          const packPlace = packCountry || packFor || "US";
+          const sizable = needed.some((i) => packNeed(i));
           const row = (item) => {
             const described = describeItem(item);
             /* Converted here rather than when the item was added: the stored
@@ -6908,6 +7012,8 @@ export default function RecipeBox() {
             const qty = convertText(described.qty, units);
             const name = described.name;
             const from = itemRecipes(item, list);
+            const need = item.checked ? null : packNeed(item);
+            const pack = need ? packs[packKey(packPlace, need)] : null;
             return (
               <li key={item.id} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "11px 0", borderBottom: `1px solid var(--card-edge)` }}>
                 <input
@@ -6923,6 +7029,12 @@ export default function RecipeBox() {
                     {qty && <><span className="rb-num" style={{ color: "var(--card-accent)", marginRight: 4 }}>{qty}</span>{" "}</>}
                     {name}
                   </span>
+                  {pack && (
+                    <span className="rb-pack-line">
+                      Buy {packLabel(pack)}
+                      {pack.estimate && <span className="rb-pack-est"> · estimated</span>}
+                    </span>
+                  )}
                   {from.length > 0 && (
                     <span style={{ display: "block", font: `400 12px/1.5 ${UI}`, color: "var(--card-muted)" }}>for {from.join(", ")}</span>
                   )}
@@ -7005,6 +7117,30 @@ export default function RecipeBox() {
                         </button>
                       </span>
                     ))}
+                  </div>
+                )}
+
+                {sizable && (
+                  <div className="rb-noprint rb-packs-bar">
+                    <button className="rb-btn rb-focus" style={btnQuiet} onClick={suggestPacks} disabled={packsBusy}>
+                      {packsBusy ? "Asking…" : "Suggest what to buy"}
+                    </button>
+                    <label className="rb-packs-where">
+                      <span>Shopping in</span>
+                      <select
+                        className="rb-focus"
+                        value={packCountry}
+                        onChange={(e) => choosePackCountry(e.target.value)}
+                        style={{ ...input, width: "auto", padding: "7px 10px", fontSize: 13.5 }}
+                      >
+                        <option value="">{packFor ? `Where I am (${COUNTRY_NAMES[packFor]})` : "Where I am"}</option>
+                        <option value="US">United States</option>
+                        <option value="NZ">New Zealand</option>
+                      </select>
+                    </label>
+                    <p className="rb-packs-note" role="status">
+                      {packsNote || "Typical supermarket sizes, suggested by AI. Check the shelf."}
+                    </p>
                   </div>
                 )}
 

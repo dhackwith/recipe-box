@@ -135,7 +135,7 @@ const LIST = { type: "array", items: { type: "string" } };
 
 /* JSON mode usually hands back an object, but is not guaranteed to, and a
    string answer sometimes arrives wrapped in a Markdown code fence. */
-function readAnswer(out) {
+export function readAnswer(out) {
   let r = out && typeof out === "object" && "response" in out ? out.response : out;
   if (typeof r === "string") {
     try { r = JSON.parse(r.trim().replace(/^```(?:json)?\s*|\s*```$/g, "")); }

@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **See what to buy at the shop.** On the shopping list, tap Suggest what to buy and each item gets a line saying how a supermarket sells it, like "Buy 2 × carton (64 fl oz)" for 10½ cups of almond milk. Choose United States or New Zealand under Shopping in, or leave it to go by where you are. The package sizes come from AI, so treat them as typical rather than exact. Where a size had to be guessed from cups or scoops, the line says "estimated".
 - **Timers sit in the top corner.** A running timer is now a small box in the top right corner of the screen instead of a bar across the bottom that covered Messenger. Where Home and Menu reach that corner, it sits beside them instead, or just under them on a phone. In cooking mode it sits just below the top bar. Pause and Stop are right beside the time.
 - **Filters fit on a phone.** Opening Filters on a narrow screen used to push most of the menu off the left edge, so you could barely read it. It now stays fully on screen, and so do the other drop-down menus.
 - **Love a message or a note.** Tap Love beside the time on somebody's message and a ❤️ appears on it, for both of you. Under a recipe, tap Love beside Reply on somebody's note, and everyone reading the recipe sees who loved it. Tap Unlove to take it back.
