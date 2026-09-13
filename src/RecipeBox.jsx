@@ -2951,9 +2951,11 @@ export default function RecipeBox() {
   /* Running timers sit in a small stack in the top right corner rather than a
      bar across the bottom, which covered the messenger. Where exactly is
      measured, so they cover nothing that matters:
-     - on a wide screen, beside Home and Menu, in the header's empty row;
-     - on anything narrower, just below them (the CSS default), because there
-       the title fills that row;
+     - in the very top right corner of the screen, whenever Home and Menu are
+       far enough in from it (a wide screen, where the page is a centred column);
+     - otherwise, beside Home and Menu in the header's empty row, where there
+       is room for it (a laptop-sized screen);
+     - otherwise just below them (a phone), where the title fills that row;
      - in cooking mode, beside Done when that has wrapped onto a line of its
        own with room to spare (a phone), and otherwise below the top bar.
      Worked out again whenever the page or the cooking bar changes size, not
@@ -2973,9 +2975,12 @@ export default function RecipeBox() {
         return settle({ top: Math.round(bar.getBoundingClientRect().bottom) + 8 });
       }
       const corner = document.querySelector(".rb-corner");
-      if (!corner || room() < 1000) return settle(null);
+      if (!corner) return settle(null);
       const r = corner.getBoundingClientRect();
-      settle({ top: Math.round(r.top + window.scrollY), right: Math.round(room() - r.left) + 10 });
+      const inset = room() < 700 ? 8 : 12;
+      if (r.right <= room() - inset - TIMER_WIDTH - 12) return settle({ top: inset, right: inset });
+      if (room() >= 1000) return settle({ top: Math.round(r.top + window.scrollY), right: Math.round(room() - r.left) + 10 });
+      settle({ top: Math.round(r.bottom + window.scrollY) + 8, right: inset });
     };
     placeTimers.current = place;
     place();
@@ -5027,7 +5032,7 @@ export default function RecipeBox() {
     .rb-chip-done { animation: rb-chip 1.6s ease-in-out infinite; }
     /* Timers: a small stack in the top right corner, above everything but
        out of the messenger's way. Only as wide as a clock and two buttons. */
-    .rb-timers { position: fixed; top: 56px; right: 16px; z-index: 70; width: 250px; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 72px); overflow-y: auto; }
+    .rb-timers { position: fixed; top: 12px; right: 12px; z-index: 70; width: 250px; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 72px); overflow-y: auto; }
     .rb-timer { padding: 7px 10px 6px; border: 1px solid rgba(var(--on-page), calc(.24 * var(--ink-k))); border-radius: 8px; background: rgba(var(--deep-rgb), .96); box-shadow: 0 12px 30px -14px rgba(0, 0, 0, .6); }
     .rb-timer.is-done { border-color: var(--page-accent); background: linear-gradient(rgba(var(--accent-rgb), .16), rgba(var(--accent-rgb), .16)), rgba(var(--deep-rgb), .96); }
     .rb-timer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
