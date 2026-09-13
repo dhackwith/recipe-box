@@ -369,13 +369,46 @@ const QTY_RE = new RegExp(`^(\\s*)(${NUM})(\\s*(?:-|–|to)\\s*)?(${NUM})?`);
 const LEAD_BRACKET_RE = /^(\s*)(fl\.?\s*oz|[A-Za-z]+\.?)(\s*)\(([^()]*)\)/;
 const BRACKET_AMOUNT_RE = new RegExp(`(${NUM})(\\s*)(fl\\.?\\s*oz|[A-Za-z]+\\.?)`, "g");
 
+/* "… plus 1 tablespoon (15 grams)": more of the same ingredient, joined on. */
+const PLUS_RE = new RegExp(`(\\bplus\\s+|\\+\\s*)(${NUM})(\\s*)(fl\\.?\\s*oz|[A-Za-z]+\\.?)(\\s*\\([^()]*\\))?`, "gi");
+
+/* "1 teaspoon" doubled is "2 teaspoons", and "2 cups" halved is "1 cup". Only
+   whole words change: "tbsp", "oz" and "g" read the same at any amount. */
+const PLURAL = {
+  cup: "cups", tablespoon: "tablespoons", teaspoon: "teaspoons", pound: "pounds", ounce: "ounces",
+  stick: "sticks", pint: "pints", quart: "quarts", gallon: "gallons", gram: "grams", kilogram: "kilograms",
+  liter: "liters", litre: "litres", milliliter: "milliliters", millilitre: "millilitres",
+};
+const SINGULAR = Object.fromEntries(Object.entries(PLURAL).map(([one, many]) => [many, one]));
+
+function agree(unit, value) {
+  const m = String(unit).match(/^([A-Za-z]+)(\.?)$/);
+  if (!m) return unit;
+  const lower = m[1].toLowerCase();
+  const word = value > 1 ? PLURAL[lower] : SINGULAR[lower];
+  if (!word) return unit;
+  const cased = m[1][0] === m[1][0].toUpperCase() ? word[0].toUpperCase() + word.slice(1) : word;
+  return cased + m[2];
+}
+
+/* Every measured amount in a piece of text, scaled; counts and prose left. */
+const scaleAmounts = (text, factor) =>
+  text.replace(BRACKET_AMOUNT_RE, (whole, n, gap, unit) => {
+    const v = toNumber(n);
+    return v == null || !kindOf(unitKey(unit)) ? whole : `${prettyNumber(v * factor)}${gap}${agree(unit, v * factor)}`;
+  });
+
 /**
- * An ingredient line at a different number of servings. The leading amount
- * moves, and anything later in the line is left as written — except the
- * bracket straight after a leading measure, because "⅓ cup (72 grams)" says one
- * amount twice and both halves have to agree, most of all now that metric shows
- * the bracket's half. A bracket after a container is the container's size, and
- * a 14 oz can is still 14 oz however many go in.
+ * An ingredient line at a different number of servings.
+ *
+ * The leading amount moves, and so does everything that is more of that same
+ * amount: the bracket straight after a leading measure, because "⅓ cup (72
+ * grams)" says one amount twice and both halves have to agree, and a measure
+ * joined on with "plus", because "⅓ cup plus 1 tablespoon" is one quantity in
+ * two parts. The rest of the line is left as written. A bracket after a
+ * container is its size, so a 14 oz can is 14 oz however many go in; and a
+ * count joined on — "plus 1 for garnish" — is left as the recipe wrote it.
+ * Unit words agree with what they end up counting: two teaspoons, one cup.
  */
 export function scaleLine(line, factor) {
   if (!factor || factor === 1) return line;
@@ -385,15 +418,26 @@ export function scaleLine(line, factor) {
   if (a == null) return line;
   const b = m[4] ? toNumber(m[4]) : null;
   const scaled = prettyNumber(a * factor) + (b != null ? `${m[3] || "–"}${prettyNumber(b * factor)}` : "");
+  const size = (b ?? a) * factor;
 
-  let rest = line.slice(m[0].length);
+  const rest = line.slice(m[0].length);
+  let head = "";
+  let tail = rest;
   const lead = rest.match(LEAD_BRACKET_RE);
+  const unitAt = rest.match(/^(\s*)([A-Za-z]+\.?)/);
   if (lead && kindOf(unitKey(lead[2]))) {
-    const inside = lead[4].replace(BRACKET_AMOUNT_RE, (whole, n, gap, unit) => {
-      const v = toNumber(n);
-      return v == null || !kindOf(unitKey(unit)) ? whole : `${prettyNumber(v * factor)}${gap}${unit}`;
-    });
-    rest = `${lead[1]}${lead[2]}${lead[3]}(${inside})${rest.slice(lead[0].length)}`;
+    head = `${lead[1]}${agree(lead[2], size)}${lead[3]}(${scaleAmounts(lead[4], factor)})`;
+    tail = rest.slice(lead[0].length);
+  } else if (unitAt && kindOf(unitKey(unitAt[2]))) {
+    head = `${unitAt[1]}${agree(unitAt[2], size)}`;
+    tail = rest.slice(unitAt[0].length);
   }
-  return line.slice(0, m[1].length) + scaled + rest;
+
+  tail = tail.replace(PLUS_RE, (whole, joiner, n, gap, unit, bracket) => {
+    const v = toNumber(n);
+    if (v == null || !kindOf(unitKey(unit))) return whole;
+    return `${joiner}${prettyNumber(v * factor)}${gap}${agree(unit, v * factor)}${bracket ? scaleAmounts(bracket, factor) : ""}`;
+  });
+
+  return line.slice(0, m[1].length) + scaled + head + tail;
 }

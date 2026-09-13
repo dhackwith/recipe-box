@@ -179,5 +179,27 @@ is("a bracket further along the line is left", scaleLine("2 cups cherries (about
 is("at the recipe's own servings nothing changes", scaleLine("1/3 cup (72 grams) sugar", 1), "1/3 cup (72 grams) sugar");
 is("a line with no amount is left", scaleLine("Salt to taste", 3), "Salt to taste");
 
+/* The same sugar line at double servings used to leave its tablespoon behind. */
+is("a measure joined on with plus scales too, bracket and all",
+  scaleLine("1/3 cup (72 grams) plus 1 tablespoon (15 grams) light brown sugar, divided", 2),
+  "⅔ cup (144 grams) plus 2 tablespoons (30 grams) light brown sugar, divided");
+is("...so metric shows both parts doubled",
+  metric(scaleLine("1/3 cup (72 grams) plus 1 tablespoon (15 grams) light brown sugar, divided", 2)),
+  "144 g plus 30 g light brown sugar, divided");
+is("...without a bracket", scaleLine("1 cup plus 2 tablespoons flour", 2), "2 cups plus 4 tablespoons flour");
+is("...further along the line", scaleLine("3 cups flour, plus 2 tablespoons for dusting", 0.5),
+  "1½ cups flour, plus 1 tablespoon for dusting");
+is("plus more for serving has nothing to scale",
+  scaleLine("2 tablespoons olive oil, plus more for serving", 2), "4 tablespoons olive oil, plus more for serving");
+is("a count joined on is left as the recipe wrote it", scaleLine("2 limes, plus 1 for garnish", 2), "4 limes, plus 1 for garnish");
+
+is("a unit agrees with its new amount", scaleLine("1 teaspoon ground cinnamon", 2), "2 teaspoons ground cinnamon");
+is("...going down as well as up", scaleLine("2 cups milk", 0.5), "1 cup milk");
+is("...and half of one is still a cup", scaleLine("1 cup milk", 0.5), "½ cup milk");
+is("...a range agrees with its larger end", scaleLine("½–1 teaspoon chili flakes", 2), "1–2 teaspoons chili flakes");
+is("...capitals are kept", scaleLine("1 Cup sugar", 2), "2 Cups sugar");
+is("abbreviations read the same at any amount", scaleLine("1 tbsp oil", 3), "3 tbsp oil");
+is("a word that only looks like a unit is left", scaleLine("1 large egg", 2), "2 large egg");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
