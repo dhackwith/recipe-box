@@ -18,6 +18,13 @@
  * WHEN IN DOUBT, LEAVE IT. A wrong conversion is worse than none, so anything
  * not recognised passes through untouched.
  *
+ * WHAT THE RECIPE ALREADY SAYS WINS. "⅓ cup (72 grams) sugar" was weighed by
+ * the person who wrote it, and nothing converting a cup can know what a cup of
+ * sugar weighs, so metric shows the 72 g. A bracket that already gives both
+ * systems — "(3 ounces or 85 grams)" — is complete and is not touched, and one
+ * that only restates the leading amount in the other system is dropped rather
+ * than converted into the same amount twice.
+ *
  * The quantity parsing and pretty-printing live here too, rather than in
  * RecipeBox.jsx where they began, so that there is one place that knows what
  * "1½" means rather than two that can drift apart.
@@ -125,6 +132,84 @@ const METRIC_LENGTH_MM = { mm: 1, millimeter: 1, millimeters: 1, cm: 10, centime
 const POURS = /\b(water|milk|buttermilk|cream|half-and-half|juice|wine|beer|cider|ale|stout|stock|broth|consomm|oil|vinegar|syrup|sauce|soda|seltzer|tonic|brandy|rum|vodka|gin|whisk|tequila|mezcal|liqueur|bourbon|scotch|sherry|port|vermouth|champagne|prosecco|sake|soju|schnapps|bitters|espresso|coffee|tea|liquor|spirit|puree|purée|nectar|kombucha|lemonade|brine|wash|extract)/i;
 
 const looksLikeAPour = (context) => POURS.test(String(context || ""));
+
+/* ── Amounts a recipe gives twice ────────────────────────────────── */
+
+/* Spoons are left alone on their own (see the top), but they are still US
+   measures when a recipe gives a metric amount beside them. A stick of butter
+   is a US measure too: "1 stick (113 g)". */
+const SPOONS = new Set(["tsp", "tsps", "teaspoon", "teaspoons", "tbsp", "tbsps", "tablespoon", "tablespoons"]);
+const STICKS = new Set(["stick", "sticks"]);
+
+const unitKey = (raw) => String(raw || "").toLowerCase().replace(/\./g, "").replace(/\s+/g, "");
+
+/* Which system a unit belongs to and what it measures, or null for a count, a
+   container, or a word that is not a unit at all. */
+function kindOf(u) {
+  if (METRIC_WEIGHT_G[u]) return { system: "metric", kind: "weight" };
+  if (METRIC_VOLUME_ML[u]) return { system: "metric", kind: "volume" };
+  if (METRIC_LENGTH_MM[u]) return { system: "metric", kind: "length" };
+  if (US_WEIGHT_G[u] || STICKS.has(u)) return { system: "us", kind: "weight" };
+  if (US_VOLUME_ML[u] || u === "floz" || SPOONS.has(u)) return { system: "us", kind: "volume" };
+  if (US_LENGTH_MM[u]) return { system: "us", kind: "length" };
+  return null;
+}
+
+const AMOUNT_RE = new RegExp(`^(${NUM})\\s*(fl\\.?\\s*oz|[A-Za-z]+\\.?)$`);
+
+/* The amounts in a bracket that holds nothing but amounts — "(72 grams)",
+   "(3 ounces or 85 grams)" — or null when it says anything else, "(about 1
+   lb)" or "(Garnacha or Tempranillo)", which is then converted like any text. */
+function bracketAmounts(inside) {
+  const pieces = String(inside).trim().split(/\s*(?:\bor\b|,|;|=)\s*/i).filter(Boolean);
+  if (!pieces.length) return null;
+  const amounts = [];
+  for (const piece of pieces) {
+    const m = piece.match(AMOUNT_RE);
+    const kind = m && kindOf(unitKey(m[2]));
+    if (!kind) return null;
+    amounts.push({ amount: m[1].trim(), unit: m[2].trim(), ...kind });
+  }
+  return amounts;
+}
+
+const bothSystems = (amounts) =>
+  !!amounts && amounts.some((a) => a.system === "metric") && amounts.some((a) => a.system === "us");
+
+/* "grams" as the rest of a converted recipe writes it: g, ml, cm. */
+function metricShort(u) {
+  if (METRIC_WEIGHT_G[u]) return METRIC_WEIGHT_G[u] === 1 ? "g" : "kg";
+  if (METRIC_VOLUME_ML[u]) return { 1: "ml", 10: "cl", 100: "dl", 1000: "l" }[METRIC_VOLUME_ML[u]];
+  if (METRIC_LENGTH_MM[u]) return METRIC_LENGTH_MM[u] === 1 ? "mm" : "cm";
+  return u;
+}
+
+/* A measure with a bracket straight after it: "⅓ cup (72 grams)". */
+const RESTATED_RE = new RegExp(`(${NUM})(\\s*)(fl\\.?\\s*oz|[A-Za-z]+\\.?)(\\s*)\\(([^()]*)\\)`, "g");
+
+/* Where a measure's bracket gives the amount in the reader's system, show that
+   amount — weight first, as the more exact — in place of the pair. Where the
+   measure is already in the reader's system and the bracket only restates it
+   in the other, the bracket goes. Anything else is left for convertText. */
+function preferWrittenAmounts(text, system) {
+  return text.replace(RESTATED_RE, (whole, amount, gap, unitRaw, _space, inside) => {
+    const lead = kindOf(unitKey(unitRaw));
+    const amounts = bracketAmounts(inside);
+    if (!lead || !amounts) return whole;
+
+    /* Only a true repeat is dropped: "225 g (8 oz)" says one weight twice. A
+       bracket giving a different kind of amount — "⅓ cup (72 grams)" to a US
+       reader — adds something, so it stays and is converted as usual. */
+    if (lead.system === system) {
+      return amounts.every((a) => a.system !== system && a.kind === lead.kind) ? `${amount}${gap}${unitRaw}` : whole;
+    }
+
+    const mine = amounts.filter((a) => a.system === system);
+    const pick = mine.find((a) => a.kind === "weight") || mine.find((a) => a.kind === "volume") || mine.find((a) => a.kind === "length");
+    if (!pick) return whole;
+    return `${pick.amount} ${system === "metric" ? metricShort(unitKey(pick.unit)) : pick.unit}`;
+  });
+}
 
 /* ── Rounding, which is where the judgement lives ─────────────────── */
 
@@ -242,7 +327,7 @@ export function convertText(text, system, context) {
   if (!text || system !== "metric" && system !== "us") return text;
   const around = context === undefined ? text : context;
 
-  const withUnits = String(text).replace(MEASURE_RE, (whole, aRange, dash, bRange, gapRange, unitRange, aLone, gapLone, unitLone) => {
+  const convertMeasures = (part) => part.replace(MEASURE_RE, (whole, aRange, dash, bRange, gapRange, unitRange, aLone, gapLone, unitLone) => {
     const unitRaw = unitRange ?? unitLone;
     const unit = unitRaw.toLowerCase().replace(/\./g, "").replace(/\s+/g, "");
     const gap = gapRange ?? gapLone;
@@ -261,6 +346,14 @@ export function convertText(text, system, context) {
     return `${one.amount}${gap || " "}${one.unit}`;
   });
 
+  const withUnits = preferWrittenAmounts(String(text), system)
+    .split(/(\([^()]*\))/)
+    .map((part) =>
+      /* A bracket that already gives both systems is complete as written;
+         converting inside it would only say one of its amounts twice. */
+      part.startsWith("(") && bothSystems(bracketAmounts(part.slice(1, -1))) ? part : convertMeasures(part))
+    .join("");
+
   return convertTemps(withUnits, system);
 }
 
@@ -269,3 +362,38 @@ export function convertText(text, system, context) {
  * context for deciding whether an ounce pours.
  */
 export const convertIngredient = (line, system) => convertText(line, system, line);
+
+/* ── Scaling a line ──────────────────────────────────────────────── */
+
+const QTY_RE = new RegExp(`^(\\s*)(${NUM})(\\s*(?:-|–|to)\\s*)?(${NUM})?`);
+const LEAD_BRACKET_RE = /^(\s*)(fl\.?\s*oz|[A-Za-z]+\.?)(\s*)\(([^()]*)\)/;
+const BRACKET_AMOUNT_RE = new RegExp(`(${NUM})(\\s*)(fl\\.?\\s*oz|[A-Za-z]+\\.?)`, "g");
+
+/**
+ * An ingredient line at a different number of servings. The leading amount
+ * moves, and anything later in the line is left as written — except the
+ * bracket straight after a leading measure, because "⅓ cup (72 grams)" says one
+ * amount twice and both halves have to agree, most of all now that metric shows
+ * the bracket's half. A bracket after a container is the container's size, and
+ * a 14 oz can is still 14 oz however many go in.
+ */
+export function scaleLine(line, factor) {
+  if (!factor || factor === 1) return line;
+  const m = line.match(QTY_RE);
+  if (!m) return line;
+  const a = toNumber(m[2]);
+  if (a == null) return line;
+  const b = m[4] ? toNumber(m[4]) : null;
+  const scaled = prettyNumber(a * factor) + (b != null ? `${m[3] || "–"}${prettyNumber(b * factor)}` : "");
+
+  let rest = line.slice(m[0].length);
+  const lead = rest.match(LEAD_BRACKET_RE);
+  if (lead && kindOf(unitKey(lead[2]))) {
+    const inside = lead[4].replace(BRACKET_AMOUNT_RE, (whole, n, gap, unit) => {
+      const v = toNumber(n);
+      return v == null || !kindOf(unitKey(unit)) ? whole : `${prettyNumber(v * factor)}${gap}${unit}`;
+    });
+    rest = `${lead[1]}${lead[2]}${lead[3]}(${inside})${rest.slice(lead[0].length)}`;
+  }
+  return line.slice(0, m[1].length) + scaled + rest;
+}

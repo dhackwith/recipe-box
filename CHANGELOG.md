@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Metric uses the weights a recipe already gives.** When a recipe says "⅓ cup (72 grams) sugar", Units → Metric now shows 72 g instead of turning the cup into 80 ml. A bracket that already gives both, like "(3 ounces or 85 grams)", is no longer converted into "85 g or 85 grams", and one that only repeats the amount is dropped. Changing the servings scales those bracketed weights too.
 - **Notes show the time, in your own time zone.** Notes, replies and the Lately list now say when they were written as well as the day, like "Today at 2:42 PM" or "13 September at 9:42 am", worked out for wherever you are. The same note shows Friday afternoon to someone in California and Saturday morning to someone in New Zealand. Hover over a time to see the full date and time zone.
 - **Step photos are bigger.** They now spread across the whole width of the step instead of sitting small at one side: two photos share the width, three take a third each, and a single photo runs the full width. On a phone, the first of three goes full width with the other two beneath it.
 - **Show each step with photos.** Any step can now carry up to three photos, shown beneath it on the recipe and larger in cooking mode, and tapping one opens it full size. Add them in the recipe form under Step photos: upload your own, or, when you've imported a link, pick from the photos on that page. They're stored apart from the recipes themselves, so a recipe full of photos doesn't slow down the rest of the site.

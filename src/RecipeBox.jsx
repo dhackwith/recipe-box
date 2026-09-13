@@ -7,7 +7,7 @@ import CHANGELOG_MD from "../CHANGELOG.md?raw";
    than one here and one there that can drift apart. */
 import {
   NUM, UNITS, VESSELS, toNumber, prettyNumber,
-  SYSTEMS, isSystem, convertText, convertIngredient,
+  SYSTEMS, isSystem, convertText, convertIngredient, scaleLine,
 } from "./units.js";
 import {
   dailyTargets, bmi, ACTIVITY, GOALS,
@@ -299,17 +299,8 @@ async function saveBox(box) {
 /* ══════════════════════════════════════════════════════════════════
    Quantities — parsing, scaling, pretty-printing
    ══════════════════════════════════════════════════════════════════ */
-const QTY_RE = new RegExp(`^(\\s*)(${NUM})(\\s*(?:-|–|to)\\s*)?(${NUM})?`);
-function scaleLine(line, factor) {
-  if (!factor || factor === 1) return line;
-  const m = line.match(QTY_RE);
-  if (!m) return line;
-  const a = toNumber(m[2]);
-  if (a == null) return line;
-  const b = m[4] ? toNumber(m[4]) : null;
-  const scaled = prettyNumber(a * factor) + (b != null ? `${m[3] || "–"}${prettyNumber(b * factor)}` : "");
-  return line.slice(0, m[1].length) + scaled + line.slice(m[0].length);
-}
+/* scaleLine lives in units.js, beside the unit tables that decide which
+   brackets restate an amount and so scale with it. */
 
 /* split leading quantity from the ingredient name, for the ruled column */
 function splitQty(s) {

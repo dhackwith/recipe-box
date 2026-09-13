@@ -132,5 +132,52 @@ is("three of them", SYSTEMS.length, 3);
 is("as written is one", isSystem("as-written"), true);
 is("and anything else is not", isSystem("imperial"), false);
 
+console.log("\n— amounts the recipe already gives —");
+/* The Smitten Kitchen loaf that raised this: sugar shown as 80 ml when the
+   recipe itself says 72 grams, and butter as "(85 g or 85 grams)". */
+is("the weight a recipe gives is shown, not its cup converted",
+  metric("1/3 cup (72 grams) plus 1 tablespoon (15 grams) light brown sugar, divided"),
+  "72 g plus 15 g light brown sugar, divided");
+is("...on a plain line", metric("1/3 cup (65 grams) granulated sugar"), "65 g granulated sugar");
+is("...and from a bracket giving both, its metric half",
+  metric("6 tablespoons (3 ounces or 85 grams) unsalted butter, cold is fine"), "85 g unsalted butter, cold is fine");
+is("...after a mixed number", metric("1⅓ cups (180 grams) all-purpose flour"), "180 g all-purpose flour");
+is("...after a pound", metric("1¼ pounds (565 grams) peaches, pitted"), "565 g peaches, pitted");
+is("...the author's number, not rounded to a five", metric("½ cup (113 grams) butter"), "113 g butter");
+is("...weight before volume when a bracket gives both", metric("1 cup (240 ml or 200 g) sugar"), "200 g sugar");
+is("...a volume when that is all it gives", metric("1 cup (240 ml) whole milk"), "240 ml whole milk");
+is("...a stick of butter", metric("1 stick (113 g) butter"), "113 g butter");
+is("...a pan's size in centimetres", metric("a 9 inch (23 cm) square pan"), "a 23 cm square pan");
+is("US takes the ounces a metric recipe gives", us("225 g (8 oz) butter"), "8 oz butter");
+
+is("in US, a bracket that gives both is left exactly as written",
+  us("6 tablespoons (3 ounces or 85 grams) unsalted butter"), "6 tablespoons (3 ounces or 85 grams) unsalted butter");
+is("...and in metric when no measure leads it", metric("butter (3 ounces or 85 grams)"), "butter (3 ounces or 85 grams)");
+is("a bracket only restating an amount already in the reader's system is dropped, not doubled",
+  metric("225 g (8 oz) butter"), "225 g butter");
+is("...the other way too", us("1 cup (240 ml) whole milk"), "1 cup whole milk");
+is("but a bracket giving a different kind of amount stays: a weight beside a cup",
+  us("1/3 cup (72 grams) light brown sugar"), "1/3 cup (2½ oz) light brown sugar");
+
+is("a cup with nothing beside it still converts", metric("1 cup sugar"), "240 ml sugar");
+is("a bracket saying more than an amount converts as it did",
+  metric("2 cups (about 1 lb) cherries"), "480 ml (about 455 g) cherries");
+is("a count's bracket is left alone", metric("2 eggs (100 g)"), "2 eggs (100 g)");
+is("a can's bracket still converts", metric("1 can (14 oz) crushed tomatoes"), "1 can (395 g) crushed tomatoes");
+
+console.log("\n— scaling a line —");
+const { scaleLine } = await import("../src/units.js");
+is("the leading amount scales", scaleLine("2 cups flour", 2), "4 cups flour");
+is("a bracket restating a leading measure scales with it",
+  scaleLine("1/3 cup (72 grams) light brown sugar", 2), "⅔ cup (144 grams) light brown sugar");
+is("...both halves of an either-or",
+  scaleLine("6 tablespoons (3 ounces or 85 grams) butter", 1.5), "9 tablespoons (4½ ounces or 127.5 grams) butter");
+is("...so metric shows the right weight at double servings",
+  metric(scaleLine("1/3 cup (72 grams) light brown sugar", 2)), "144 g light brown sugar");
+is("a can's size does not scale", scaleLine("1 can (14 oz) crushed tomatoes", 2), "2 can (14 oz) crushed tomatoes");
+is("a bracket further along the line is left", scaleLine("2 cups cherries (about 1 lb)", 2), "4 cups cherries (about 1 lb)");
+is("at the recipe's own servings nothing changes", scaleLine("1/3 cup (72 grams) sugar", 1), "1/3 cup (72 grams) sugar");
+is("a line with no amount is left", scaleLine("Salt to taste", 3), "Salt to taste");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
