@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Notes show the time, in your own time zone.** Notes, replies and the Lately list now say when they were written as well as the day, like "Today at 2:42 PM" or "13 September at 9:42 am", worked out for wherever you are. The same note shows Friday afternoon to someone in California and Saturday morning to someone in New Zealand. Hover over a time to see the full date and time zone.
 - **Step photos are bigger.** They now spread across the whole width of the step instead of sitting small at one side: two photos share the width, three take a third each, and a single photo runs the full width. On a phone, the first of three goes full width with the other two beneath it.
 - **Show each step with photos.** Any step can now carry up to three photos, shown beneath it on the recipe and larger in cooking mode, and tapping one opens it full size. Add them in the recipe form under Step photos: upload your own, or, when you've imported a link, pick from the photos on that page. They're stored apart from the recipes themselves, so a recipe full of photos doesn't slow down the rest of the site.
 - **The meal plan's back button looks clickable again.** It worked, but didn't show the pointing hand the other back buttons do.

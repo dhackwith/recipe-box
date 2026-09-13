@@ -21,6 +21,8 @@ import {
   STEP_PHOTO_MAX, STEP_PHOTO_WIDTH, STEP_PHOTO_QUALITY,
   stepImageKey, stepImageUrl, newStepPhotoId, stepLines, stepPhotoIds, carryStepPhotos,
 } from "./stepphotos.js";
+/* Note times in the reader's own zone and clock style. */
+import { whenAt, whenFull } from "./when.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -942,14 +944,15 @@ async function notesCall(method, query = "", body) {
   return data;
 }
 
-/* "11 September", and the year too once it is no longer this one. The stored
-   value is a full timestamp with a zone, so reading it as local time is right. */
-const whenLabel = (iso) => {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const year = d.getFullYear() === new Date().getFullYear() ? "" : ` ${d.getFullYear()}`;
-  return `${d.getDate()} ${MONTHS[d.getMonth()]}${year}`;
-};
+/* When a note was written, in whatever zone the reader is in: the server stamps
+   an exact moment and each device turns it into its own day and clock (see
+   when.js). The full date and zone are there on hover, and <time> carries the
+   moment itself for anything that reads the page rather than looks at it. */
+function When({ iso, inSentence = false }) {
+  const label = whenAt(iso, { inSentence });
+  if (!label) return null;
+  return <time dateTime={iso} title={whenFull(iso)}>{label}</time>;
+}
 
 /* ══════════════════════════════════════════════════════════════════
    Syncing a list between one person's devices
@@ -4584,7 +4587,7 @@ export default function RecipeBox() {
                             </span>
                             <span className="rb-lately-what">{r ? r.title : "a recipe since removed"}</span>
                             <span aria-hidden>·</span>
-                            <span>{whenLabel(e.at)}</span>
+                            <span><When iso={e.at} /></span>
                           </span>
                           {e.kind === "note" && e.text && <span className="rb-lately-text">{e.text}</span>}
                           {e.shot && <span className="rb-lately-shot"><img src={e.shot} alt="" loading="lazy" /></span>}
@@ -5717,14 +5720,14 @@ export default function RecipeBox() {
                           <p className="rb-entry-who">
                             <span className="rb-entry-removed">Removed</span>
                             <span aria-hidden>·</span>
-                            <span>{whenLabel(e.at)}</span>
+                            <span><When iso={e.at} /></span>
                           </p>
                         ) : (
                           <>
                             <p className="rb-entry-who">
                               <span>{e.name}</span>
                               <span aria-hidden>·</span>
-                              <span>{e.kind === "made" ? `made this on ${whenLabel(e.at)}` : whenLabel(e.at)}</span>
+                              <span>{e.kind === "made" ? <>made this <When iso={e.at} inSentence /></> : <When iso={e.at} />}</span>
                               {beyondIndent && parent && (
                                 <span>to {parent.deleted ? "a removed note" : parent.name}</span>
                               )}
@@ -6268,7 +6271,7 @@ export default function RecipeBox() {
             onClick={(ev) => ev.stopPropagation()}
           />
           <p className="rb-lightbox-who">
-            {lightbox.caption ?? <>{lightbox.name}{lightbox.at ? ` · ${whenLabel(lightbox.at)}` : ""}</>}
+            {lightbox.caption ?? <>{lightbox.name}{lightbox.at ? <> · <When iso={lightbox.at} /></> : null}</>}
           </p>
           <button type="button" className="rb-lightbox-x rb-focus" onClick={() => setLightbox(null)} aria-label="Close the photo">
             ×
