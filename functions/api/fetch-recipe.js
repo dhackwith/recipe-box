@@ -4,7 +4,7 @@
  * allow a page on this domain to read theirs — so this is the one place the
  * page is fetched.
  *
- * POST { url }                 -> { recipe, url }   the Recipe node, and where it was found
+ * POST { url }                 -> { recipe, url, photos }   the Recipe node, where it was found, and its photos
  *
  * A page can describe its recipe three ways: a block of ld+json, microdata
  * attributes hung on the visible markup, or h-recipe class names. All are
@@ -22,6 +22,7 @@ import { findMicrodataRecipe } from "../../shared/microdata.js";
 import { findHRecipe } from "../../shared/hrecipe.js";
 import { suggest } from "../../shared/fill.js";
 import { pageMeta } from "../../shared/pagemeta.js";
+import { pagePhotos } from "../../shared/photos.js";
 
 const MAX_PAGE = 5 * 1024 * 1024;
 const MAX_IMAGE = 10 * 1024 * 1024;
@@ -165,7 +166,9 @@ async function load(url) {
 
 async function page(url) {
   const got = await load(url);
-  return got instanceof Response ? got : json({ recipe: got.recipe, url: got.from });
+  if (got instanceof Response) return got;
+  /* every photo the page offers, so the one kept can be chosen (shared/photos.js) */
+  return json({ recipe: got.recipe, url: got.from, photos: pagePhotos(got.html, got.recipe, got.from) });
 }
 
 /* Steps and equipment the page didn't label, suggested and checked against the

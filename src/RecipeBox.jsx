@@ -1664,7 +1664,7 @@ const UNFILED = "\u0000unfiled";   // sentinel: recipes with no author named
    was refused before it began. */
 const isFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
 
-const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "", nutrition: null };
+const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "", nutrition: null, photoChoices: [], photoPick: "" };
 
 /* ══════════════════════════════════════════════════════════════════
    Shared bits
@@ -1996,6 +1996,11 @@ export default function RecipeBox() {
   const importRun = useRef(0);
   const [suggesting, setSuggesting] = useState(0);
   const [photoBusy, setPhotoBusy] = useState(false);
+  /* Which of an imported page's photos is on its way into the form. The run
+     counter lets a newer choice, an upload or a fresh form win over one that
+     is still loading. */
+  const [photoChoosing, setPhotoChoosing] = useState("");
+  const photoPickRun = useRef(0);
   const [hero, setHero] = useState("");        // full-size photo for the open recipe
   /* "" wide, "mid" squarish, "tall" portrait. Cleared with every recipe, or the
      shape of the last photo is inherited by the next one. */
@@ -3186,6 +3191,7 @@ export default function RecipeBox() {
     setLinkText("");
     setEditingId(null);
     importRun.current += 1;
+    photoPickRun.current += 1;
     setView("form");
   };
   const startEdit = (r) => {
@@ -3196,7 +3202,7 @@ export default function RecipeBox() {
       ingredientText: r.ingredients.join("\n"), equipmentText: (r.equipment || []).join("\n"),
       stepText: r.steps.map(stepLine).join("\n"), notes: r.notes || "", nutrition: r.nutrition || null,
     });
-    setEditingId(r.id); importRun.current += 1; setView("form");
+    setEditingId(r.id); importRun.current += 1; photoPickRun.current += 1; setView("form");
   };
 
   const fillFormFrom = (p) =>
@@ -3244,19 +3250,15 @@ export default function RecipeBox() {
       if (!p) return flash("That page has a recipe, but not one this could read — try the paste box", 7000);
       fillFormFrom(p);
       setLinkText("");
-      /* the photo is optional: a recipe without one is still worth having */
-      const src = schemaImage(data.recipe.image, from);
-      let gotPhoto = false;
-      if (src) {
-        try {
-          const img = await ask({ url: src, kind: "image" });
-          if (img.ok) {
-            const { full, thumb } = await prepPhoto(await img.blob());
-            setForm((f) => ({ ...f, thumb, full, photoTouched: true }));
-            gotPhoto = true;
-          }
-        } catch { /* keep the recipe, skip the photo */ }
-      }
+      /* The photo is optional: a recipe without one is still worth having. The
+         page's first photo goes in straight away, and every photo it offers is
+         kept beside the form so somebody can pick a better one. */
+      const choices = Array.isArray(data.photos)
+        ? data.photos.filter((ph) => ph && typeof ph.src === "string" && ph.src)
+        : [];
+      setForm((f) => ({ ...f, photoChoices: choices, photoPick: "" }));
+      const src = choices[0]?.src || schemaImage(data.recipe.image, from);
+      const gotPhoto = src ? (await takePagePhoto(src)) !== false : false;
       const host = new URL(from).hostname.replace(/^www\./, "");
       flash(`Filled in from ${host}${src && !gotPhoto ? " (the photo wouldn't come through)" : ""} — check it over, then add it`, 5000);
       const missing = [!p.steps.length && "steps", !p.equipment.length && "equipment"].filter(Boolean);
@@ -3302,13 +3304,39 @@ export default function RecipeBox() {
     }
   };
 
+  /* One of an imported page's photos, fetched through the importer (a browser
+     may show another site's picture, but not read its pixels to shrink them)
+     and shrunk like any upload. True when it went in, false when it couldn't
+     be fetched or read, null when a newer choice overtook it. */
+  const takePagePhoto = async (src) => {
+    const run = ++photoPickRun.current;
+    setPhotoChoosing(src);
+    try {
+      const res = await fetch("/api/fetch-recipe", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: src, kind: "image" }), credentials: "same-origin",
+      });
+      if (!res.ok) return run === photoPickRun.current ? false : null;
+      const { full, thumb } = await prepPhoto(await res.blob());
+      if (run !== photoPickRun.current) return null;
+      setForm((f) => ({ ...f, thumb, full, photoTouched: true, photoPick: src }));
+      return true;
+    } catch {
+      return run === photoPickRun.current ? false : null;
+    } finally {
+      if (run === photoPickRun.current) setPhotoChoosing("");
+    }
+  };
+
   const pickPhoto = async (file) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) return flash("That file isn't an image");
+    photoPickRun.current += 1;
+    setPhotoChoosing("");
     setPhotoBusy(true);
     try {
       const { full, thumb } = await prepPhoto(file);
-      setForm((f) => ({ ...f, thumb, full, photoTouched: true }));
+      setForm((f) => ({ ...f, thumb, full, photoTouched: true, photoPick: "" }));
     } catch {
       flash("Couldn't read that image");
     } finally {
@@ -3316,11 +3344,16 @@ export default function RecipeBox() {
     }
   };
 
-  const dropPhoto = () => setForm((f) => ({ ...f, thumb: "", full: null, photoTouched: true }));
+  const dropPhoto = () => {
+    photoPickRun.current += 1;
+    setPhotoChoosing("");
+    setForm((f) => ({ ...f, thumb: "", full: null, photoTouched: true, photoPick: "" }));
+  };
 
   const saveRecipe = () => {
     if (!form.title.trim()) return;
     importRun.current += 1;
+    photoPickRun.current += 1;
     const recipe = {
       id: editingId || `r-${Date.now()}`,
       thumb: form.thumb || "",
@@ -3413,6 +3446,13 @@ export default function RecipeBox() {
     .rb-entry-who { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin: 0; font: 500 12.5px/1.4 ${UI}; color: var(--card-muted); }
     .rb-entry-who > span:first-child { color: var(--card-text); font-weight: 600; }
     .rb-entry-text { margin: 5px 0 0; font: 400 15px/1.7 ${PROSE}; color: var(--card-text); white-space: pre-wrap; }
+    /* The photos an imported page offers: a row that scrolls rather than wraps,
+       so a dozen of them never push the rest of the form down the page. */
+    .rb-photo-choices { display: flex; gap: 8px; overflow-x: auto; padding: 3px 3px 8px; }
+    .rb-photo-choice { flex: 0 0 auto; width: 96px; height: 72px; padding: 0; border: 1px solid var(--card-edge); border-radius: 2px; background: var(--card-lift); cursor: pointer; overflow: hidden; }
+    .rb-photo-choice img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .rb-photo-choice[aria-pressed="true"] { border-color: var(--card-accent); box-shadow: 0 0 0 2px var(--card-accent); }
+    .rb-photo-choice:disabled { cursor: progress; opacity: .55; }
     .rb-entry-x { background: none; border: 0; padding: 0; cursor: pointer; font: 500 12px/1.4 ${UI}; color: var(--card-accent); text-decoration: underline; text-underline-offset: 2px; }
     .rb-entry-x:disabled { cursor: default; opacity: .5; }    /* Something you can catch from the other side of the room without it
        covering what you are reading: a band of the theme's accent around the
@@ -5574,6 +5614,37 @@ export default function RecipeBox() {
                     style={{ display: "none" }}
                   />
                 </div>
+                {form.photoChoices?.length > 1 && (
+                  <div style={{ marginTop: 14 }}>
+                    <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", margin: "0 0 8px" }}>
+                      Photos from the page. Tap one to use it instead.
+                    </p>
+                    <div className="rb-photo-choices" role="group" aria-label="Photos from the recipe page">
+                      {form.photoChoices.map((ph) => (
+                        <button
+                          key={ph.src}
+                          type="button"
+                          className="rb-photo-choice rb-focus"
+                          aria-pressed={form.photoPick === ph.src}
+                          aria-label={ph.alt ? `Use this photo: ${ph.alt}` : "Use this photo"}
+                          disabled={photoChoosing === ph.src}
+                          onClick={async () => {
+                            if ((await takePagePhoto(ph.src)) === false) flash("That photo wouldn't come through — try another", 5000);
+                          }}
+                        >
+                          {/* shown straight from the recipe site, which never learns which page asked */}
+                          <img
+                            src={ph.thumb || ph.src}
+                            alt=""
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => { e.currentTarget.parentElement.style.display = "none"; }}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </Field>
 
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>

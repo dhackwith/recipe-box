@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Choose the photo when you import a recipe.** Importing a link still puts the page's main photo on the recipe straight away, and now lines up the other photos from the page beneath it. Tap one to use it instead. Only the one you pick is kept, and the sidebar pictures, cookbook covers and author photos that fill most recipe pages are left out.
 - **Imported recipes come with a description and tags.** When a recipe page doesn't describe or tag the recipe itself, the importer now uses the blurb the page shows when it's shared and the tags the post was filed under, so a Smitten Kitchen recipe arrives tagged cake, everyday cakes, peach, nectarine and summer. Tags show up as filters on the recipes page, so trim any you don't want before adding.
 - **Imported recipes suggest their equipment.** Almost no recipe site lists the pans and tools a recipe needs, so after an import the site now reads the method and fills in the equipment it mentions. A page that doesn't mark out its steps gets those suggested too, copied straight from the page. Anything that can't be found on the page is thrown away before it reaches the form, and everything is left for you to check before you add the recipe.
 - **Imported recipes bring their steps.** Recipes from Smitten Kitchen and the many other blogs built on WordPress.com used to arrive with every ingredient but no method. The steps now come through too, along with the recipe's own note and its time as the site wrote it.
