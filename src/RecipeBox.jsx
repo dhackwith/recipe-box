@@ -25,6 +25,7 @@ import {
 import { whenAt, whenFull } from "./when.js";
 /* The one thing the box will not keep — see shared/hate.js. */
 import { hasHate, newHate, HATE_MESSAGE } from "../shared/hate.js";
+import { asFavorites, emptyFavorites, isFavorite, setFavorite, mergeFavorites } from "./favorites.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -1275,6 +1276,27 @@ const SYNC_KEY = "grocery-list";
 const SYNC_DEBOUNCE = 2000;
 const TOMBSTONE_LIFE = 7 * 24 * 60 * 60 * 1000;   // outlives a weekly shop
 
+/* Favorites (src/favorites.js): this device's copy, and the person's own key
+   in the account, which syncs the same way the shopping list does. */
+const FAV_KEY = "rb-favorites";
+const FAV_SYNC_KEY = "favorites";
+
+/* The favorite star: filled when on, an outline when not. Drawn rather than
+   typed, so it is the same shape in every font and on every device. */
+function Star({ on, size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M12 2.8l2.85 5.78 6.38.93-4.62 4.5 1.09 6.35L12 17.36l-5.7 3 1.09-6.35-4.62-4.5 6.38-.93z"
+        fill={on ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /* an item's content, ignoring when it last changed */
 const itemBody = (i) => JSON.stringify({ ...i, updatedAt: undefined });
 
@@ -2334,6 +2356,8 @@ export default function RecipeBox() {
   const [openId, setOpenId] = useState(null);
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState(null);
+  /* only the recipes this person has starred */
+  const [favOnly, setFavOnly] = useState(false);
   const [activeBox, setActiveBox] = useState(null);   // null = every box
   const [scope, setScope] = useState("all");
   /* Mirrored locally, like the colour theme, so the first paint is already in
@@ -2869,6 +2893,14 @@ export default function RecipeBox() {
     return () => { cancelled = true; };
   }, [listOpen, hasChats]);
 
+  /* While the friends list is open, it keeps its order current: whenever the
+     unread count moves, the conversations are asked for again, so whoever just
+     wrote rises to the top without the list being closed and opened. Sending,
+     reading and taking back already ask for it themselves. */
+  useEffect(() => {
+    if (listOpen) refreshInbox();
+  }, [unreadMessages]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /* Opening a chat puts it nearest the friends list, open. Past what the
      screen has room for, the chats furthest from the list are minimised, and
      past MAX_CHATS the furthest is closed. On a phone an open chat takes the
@@ -3274,6 +3306,85 @@ export default function RecipeBox() {
       clearTimeout(syncTimer.current);
     };
   }, [syncList]);
+
+  /* ── Favorites ──────────────────────────────────────────────────────
+     Each person's own stars. Saved to the device at once and to the account
+     a moment later, read-merge-write like the shopping list above, so a star
+     made on the phone is on the laptop too — and never lost to a device that
+     was asleep when it happened. */
+  const [favorites, setFavorites] = useState(() => {
+    try { return asFavorites(JSON.parse(localStorage.getItem(FAV_KEY) || "null")) || emptyFavorites(); }
+    catch { return emptyFavorites(); }
+  });
+  const favRef = useRef(favorites);
+  const favTimer = useRef(null);
+  const favSyncing = useRef(false);
+  const favAgain = useRef(false);
+  const writeFavLocal = (f) => {
+    try { localStorage.setItem(FAV_KEY, JSON.stringify(f)); } catch { /* the account's copy still follows */ }
+  };
+
+  const syncFavorites = useCallback(async () => {
+    if (favSyncing.current) { favAgain.current = true; return; }
+    favSyncing.current = true;
+    try {
+      let theirs = null;
+      try {
+        theirs = asFavorites(JSON.parse((await window.storage.get(FAV_SYNC_KEY)).value));
+      } catch (err) {
+        if (!/not found/i.test(String(err && err.message))) throw err;
+      }
+      const mine = favRef.current;
+      const merged = theirs ? mergeFavorites(mine, theirs) : mine;
+      if (JSON.stringify(merged) !== JSON.stringify(mine)) {
+        favRef.current = merged;
+        setFavorites(merged);
+        writeFavLocal(merged);
+      }
+      /* Nothing is written for somebody who has never starred anything, and
+         nothing when the account already says the same. */
+      const differs = theirs ? JSON.stringify(merged) !== JSON.stringify(theirs) : Object.keys(merged.stars).length > 0;
+      if (differs) await window.storage.set(FAV_SYNC_KEY, JSON.stringify(merged));
+    } catch {
+      /* Offline, or not signed in: this device's stars stand, and the next
+         change or the next visit tries again. */
+    } finally {
+      favSyncing.current = false;
+      if (favAgain.current) { favAgain.current = false; syncFavorites(); }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    syncFavorites();
+    const onWake = () => { if (document.visibilityState === "visible") syncFavorites(); };
+    /* two tabs on one device share the stars, so a star in one shows in the other */
+    const onStorage = (e) => {
+      if (e.key !== FAV_KEY) return;
+      let next = null;
+      try { next = asFavorites(JSON.parse(e.newValue || "null")); } catch { next = null; }
+      if (next) { favRef.current = next; setFavorites(next); }
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("storage", onStorage);
+      clearTimeout(favTimer.current);
+    };
+  }, [syncFavorites]);
+
+  const toggleFavorite = (recipe) => {
+    const on = !isFavorite(favRef.current, recipe.id);
+    const next = setFavorite(favRef.current, recipe.id, on);
+    favRef.current = next;
+    setFavorites(next);
+    writeFavLocal(next);
+    clearTimeout(favTimer.current);
+    favTimer.current = setTimeout(syncFavorites, SYNC_DEBOUNCE);
+    flash(on ? "Added to favorites" : "Removed from favorites");
+  };
 
   /* two tabs on one device share its list, so a change in one shows in the other */
   useEffect(() => {
@@ -3823,8 +3934,11 @@ export default function RecipeBox() {
     const hitQ = !terms.length || terms.every((t) => hay.includes(t));
     const inBox =
       activeBox === null ? true : activeBox === UNFILED ? !r.contributor : r.contributor === activeBox;
-    return hitQ && (!tagFilter || (r.tags || []).includes(tagFilter)) && inBox;
+    return hitQ && (!tagFilter || (r.tags || []).includes(tagFilter)) && (!favOnly || isFavorite(favorites, r.id)) && inBox;
   });
+  /* how many recipes still in the box are starred — a star on a recipe since
+     removed is not counted */
+  const favCount = box.recipes.filter((r) => isFavorite(favorites, r.id)).length;
 
   /* Spam-clicking otherwise stacks identical countdowns. A second press on a
      step that is already counting does nothing; a different step is free to
@@ -4742,6 +4856,20 @@ export default function RecipeBox() {
     .rb-shot img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 220ms cubic-bezier(.2,.7,.3,1); }
     .rb-tile:hover .rb-shot img, .rb-tile:focus-visible .rb-shot img { transform: scale(1.035); }
     .rb-noshot { font: 500 10px/1 ${UI}; letter-spacing: .13em; text-transform: uppercase; color: var(--card-muted); }
+    /* The favorite star. On a tile it sits over the corner of the photo, on a
+       dark wash so it reads on any picture, and it is always shown, because a
+       phone has no hover to reveal it. Gold when starred. */
+    .rb-tile-wrap { position: relative; }
+    .rb-star { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border-radius: 50%; cursor: pointer; border: 1px solid rgba(255, 255, 255, .28); background: rgba(12, 16, 18, .42); color: rgba(255, 255, 255, .92); backdrop-filter: blur(3px); transition: transform 120ms ease, background-color 120ms ease; }
+    .rb-tile-wrap > .rb-star { position: absolute; top: 9px; right: 9px; }
+    .rb-star:hover { background-color: rgba(12, 16, 18, .6); transform: scale(1.06); }
+    .rb-star.is-on { color: #F2B632; }
+    /* beside a recipe's title, on the card rather than over a photo */
+    .rb-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin: 0 0 10px; }
+    .rb-star-title { flex: none; width: 40px; height: 40px; margin-top: 2px; border-color: var(--card-edge); background: transparent; color: var(--card-muted); backdrop-filter: none; }
+    .rb-star-title:hover { background-color: var(--card-lift); color: var(--card-text); }
+    .rb-star-title.is-on { color: #E0A21B; }
+    @media (prefers-reduced-motion: reduce) { .rb-star { transition: none; } .rb-star:hover { transform: none; } }
     @media (prefers-reduced-motion: reduce) { .rb-shot img { transition: none; } .rb-tile:hover .rb-shot img { transform: none; } }
     .rb-card { transition: transform 160ms cubic-bezier(.2,.7,.3,1), box-shadow 160ms ease; }
     .rb-card:active { cursor: grabbing; }
@@ -5107,7 +5235,7 @@ export default function RecipeBox() {
                 ...(unfiled ? [{ key: UNFILED, name: "No author", count: unfiled }] : []),
               ];
               const current = shelf.find((b) => b.key === activeBox) || shelf[0];
-              const activeFilters = (scope !== "all" ? 1 : 0) + (tagFilter ? 1 : 0);
+              const activeFilters = (scope !== "all" ? 1 : 0) + (tagFilter ? 1 : 0) + (favOnly ? 1 : 0);
               const chip = (key, label, onClear) => (
                 <button
                   key={key}
@@ -5238,6 +5366,21 @@ export default function RecipeBox() {
                               </button>
                             ))}
                           </div>
+                          <p style={menuLabel}>Show</p>
+                          <button
+                            className="rb-focus"
+                            aria-pressed={favOnly}
+                            onClick={() => setFavOnly(!favOnly)}
+                            style={{ ...menuRow(favOnly), marginBottom: 12 }}
+                          >
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 9 }}>
+                              <span style={{ display: "inline-flex", color: favOnly ? "#E0A21B" : "var(--card-muted)" }}>
+                                <Star on={favOnly} size={16} />
+                              </span>
+                              Favorites only
+                            </span>
+                            <span style={{ font: `500 12px/1 ${UI}`, color: "var(--card-muted)" }}>{favCount}</span>
+                          </button>
                           {allTags.length > 0 && (
                             <>
                               <p style={menuLabel}>Tags</p>
@@ -5264,7 +5407,7 @@ export default function RecipeBox() {
                             </>
                           )}
                           {activeFilters > 0 && (
-                            <button className="rb-focus" onClick={() => { setScope("all"); setTagFilter(null); }} style={{ ...linkButton, margin: "14px 4px 2px", fontSize: 13 }}>
+                            <button className="rb-focus" onClick={() => { setScope("all"); setTagFilter(null); setFavOnly(false); }} style={{ ...linkButton, margin: "14px 4px 2px", fontSize: 13 }}>
                               Clear filters
                             </button>
                           )}
@@ -5277,6 +5420,7 @@ export default function RecipeBox() {
                   {activeFilters > 0 && (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
                       {scope !== "all" && chip("scope", `Searching ${{ ingredient: "ingredients", author: "authors", equipment: "equipment" }[scope]}`, () => setScope("all"))}
+                      {favOnly && chip("fav", "★ Favorites", () => setFavOnly(false))}
                       {tagFilter && chip("tag", tagFilter, () => setTagFilter(null))}
                     </div>
                   )}
@@ -5292,10 +5436,16 @@ export default function RecipeBox() {
 
             {visible.length === 0 ? (
               <div style={{ border: `1px dashed rgba(var(--on-page), calc(.28 * var(--ink-k)))`, borderRadius: 3, padding: "56px 30px", textAlign: "center" }}>
-                <p style={{ font: `300 26px/1.35 ${DISPLAY}`, margin: "0 0 10px" }}>Nothing in the box yet.</p>
+                <p style={{ font: `300 26px/1.35 ${DISPLAY}`, margin: "0 0 10px" }}>
+                  {favOnly && box.recipes.length > 0 ? "No favorites here yet." : "Nothing in the box yet."}
+                </p>
                 <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "rgba(var(--on-page), calc(.62 * var(--ink-k)))", margin: "0 0 22px" }}>
                   {box.recipes.length === 0
                     ? "Add one by hand, or drag a folder of .md or .json files anywhere on this page."
+                    : favOnly && favCount === 0
+                    ? "You haven't starred any recipes yet. Tap the star on a recipe to keep it here."
+                    : favOnly
+                    ? "None of your favorites match that."
                     : activeBox && activeBox !== UNFILED && !query && !tagFilter
                     ? `${activeBox} hasn't added a recipe yet. Anything you add from here gets filed to this box.`
                     : "No recipe matches that search."}
@@ -5304,31 +5454,47 @@ export default function RecipeBox() {
               </div>
             ) : (
               <div className="rb-grid">
-                {visible.map((r) => (
-                  <article
-                    key={r.id}
-                    tabIndex={0}
-                    role="button"
-                    onClick={() => openCard(r.id)}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(r.id); } }}
-                    className="rb-tile rb-focus"
-                  >
-                    <div className="rb-shot">
-                      {(r.imageUrl || r.thumb)
-                        ? <img src={r.imageUrl || r.thumb} alt="" loading="lazy" />
-                        : <span className="rb-noshot">no photo yet</span>}
+                {visible.map((r) => {
+                  const fav = isFavorite(favorites, r.id);
+                  return (
+                    /* The star is a button beside the tile rather than inside it,
+                       because the tile is itself a button. */
+                    <div key={r.id} className="rb-tile-wrap">
+                      <article
+                        tabIndex={0}
+                        role="button"
+                        onClick={() => openCard(r.id)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(r.id); } }}
+                        className="rb-tile rb-focus"
+                      >
+                        <div className="rb-shot">
+                          {(r.imageUrl || r.thumb)
+                            ? <img src={r.imageUrl || r.thumb} alt="" loading="lazy" />
+                            : <span className="rb-noshot">no photo yet</span>}
+                        </div>
+                        <h3 style={{ font: `400 20px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "12px 0 2px", letterSpacing: "-0.01em" }}>{r.title}</h3>
+                        {r.contributor && (
+                          <p style={{ font: `italic 400 13.5px/1.4 ${PROSE}`, color: "var(--page-accent)", margin: 0 }}>from {r.contributor}'s kitchen</p>
+                        )}
+                        <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.6 * var(--ink-k)))", margin: "7px 0 0", display: "flex", gap: 13, flexWrap: "wrap" }}>
+                          <span>{r.steps.length} steps</span>
+                          <span>{r.ingredients.length} ingredients</span>
+                          {r.time && <span>{r.time}</span>}
+                        </p>
+                      </article>
+                      <button
+                        type="button"
+                        className={`rb-star rb-focus rb-noprint${fav ? " is-on" : ""}`}
+                        onClick={() => toggleFavorite(r)}
+                        aria-pressed={fav}
+                        aria-label={fav ? `Remove ${r.title} from favorites` : `Add ${r.title} to favorites`}
+                        title={fav ? "Remove from favorites" : "Add to favorites"}
+                      >
+                        <Star on={fav} size={18} />
+                      </button>
                     </div>
-                    <h3 style={{ font: `400 20px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "12px 0 2px", letterSpacing: "-0.01em" }}>{r.title}</h3>
-                    {r.contributor && (
-                      <p style={{ font: `italic 400 13.5px/1.4 ${PROSE}`, color: "var(--page-accent)", margin: 0 }}>from {r.contributor}'s kitchen</p>
-                    )}
-                    <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.6 * var(--ink-k)))", margin: "7px 0 0", display: "flex", gap: 13, flexWrap: "wrap" }}>
-                      <span>{r.steps.length} steps</span>
-                      <span>{r.ingredients.length} ingredients</span>
-                      {r.time && <span>{r.time}</span>}
-                    </p>
-                  </article>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -6258,9 +6424,26 @@ export default function RecipeBox() {
                 <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
                 {toolTrail.current.length ? toolBackLabel() : backLabel()}
               </button>
-              <h2 style={{ font: `300 clamp(30px, 4.6vw, 42px)/1.08 ${DISPLAY}`, margin: "0 0 10px", letterSpacing: "-0.02em", color: "var(--card-text)" }}>
-                {openRecipe.title}
-              </h2>
+              <div className="rb-title-row">
+                <h2 style={{ font: `300 clamp(30px, 4.6vw, 42px)/1.08 ${DISPLAY}`, margin: 0, letterSpacing: "-0.02em", color: "var(--card-text)" }}>
+                  {openRecipe.title}
+                </h2>
+                {(() => {
+                  const fav = isFavorite(favorites, openRecipe.id);
+                  return (
+                    <button
+                      type="button"
+                      className={`rb-star rb-star-title rb-focus rb-noprint${fav ? " is-on" : ""}`}
+                      onClick={() => toggleFavorite(openRecipe)}
+                      aria-pressed={fav}
+                      aria-label={fav ? `Remove ${openRecipe.title} from favorites` : `Add ${openRecipe.title} to favorites`}
+                      title={fav ? "Remove from favorites" : "Add to favorites"}
+                    >
+                      <Star on={fav} size={22} />
+                    </button>
+                  );
+                })()}
+              </div>
               {openRecipe.contributor && (
                 <p style={{ font: `italic 400 17px/1.4 ${PROSE}`, color: "var(--card-accent)", margin: "0 0 20px" }}>from {openRecipe.contributor}'s kitchen</p>
               )}
@@ -7080,69 +7263,80 @@ export default function RecipeBox() {
           })()}
 
           {listOpen ? (
-            <section className="rb-messenger-panel" aria-label="Messenger">
+            <section className="rb-messenger-panel" aria-label="Friends list">
               <div className="rb-messenger-head">
-                <button type="button" className="rb-chatwin-title rb-focus" onClick={toggleList} aria-label="Minimise Messenger">
+                <button type="button" className="rb-chatwin-title rb-focus" onClick={toggleList} aria-label="Minimise the friends list">
                   <span className="rb-messenger-title">
-                    Messenger
+                    Friends list
                     {unreadMessages ? <span className="rb-messenger-count">{unreadMessages}</span> : null}
                   </span>
                 </button>
-                <button type="button" className="rb-chatwin-ctl is-minimise rb-focus" onClick={toggleList} aria-label="Minimise Messenger" title="Minimise">
+                <button type="button" className="rb-chatwin-ctl is-minimise rb-focus" onClick={toggleList} aria-label="Minimise the friends list" title="Minimise">
                   <span aria-hidden>_</span>
                 </button>
               </div>
               <div className="rb-messenger-body">
                 {inbox === null && !listError && <p className="rb-chat-empty" style={{ marginTop: 10 }}>Looking…</p>}
                 {inbox !== null && (() => {
+                  /* Everybody in one list, split by whether they are about, and
+                     within each half the most recent conversation first. Somebody
+                     never written to comes after everybody who has, by name. */
                   const isOpen = (id) => chats.some((c) => c.id === id && !c.minimized);
-                  return (
-                    <ul className="rb-chat-list">
-                      {(inbox || []).map((t) => (
-                        <li key={t.with}>
-                          <button
-                            type="button"
-                            className={`rb-chat-person rb-focus${isOpen(t.with) ? " is-open" : ""}`}
-                            onClick={() => openChat(t.with, t.name)}
-                          >
-                            {faceWithLight(t.with, t.name, 36)}
-                            <span className="rb-chat-lines">
-                              <span className="rb-chat-who">
-                                {t.name}
-                                {t.unread ? <span className="rb-chat-unread">{t.unread}</span> : null}
-                              </span>
-                              {t.last && (
-                                <span className="rb-chat-last">
-                                  {t.last.mine ? "You: " : ""}
-                                  {t.last.deleted ? (t.last.removed ? "message removed" : "message taken back") : t.last.text}
-                                </span>
-                              )}
-                              {statusFor(t.with) ? <span className="rb-chat-seen">{statusFor(t.with)}</span> : null}
+                  const threads = new Map((inbox || []).map((t) => [t.with, t]));
+                  const latest = (id) => threads.get(id)?.last?.id || 0;
+                  const everyone = [
+                    ...(inbox || []).map((t) => ({ id: t.with, name: t.name })),
+                    ...messagePeople.filter((p) => !threads.has(p.id)),
+                  ].sort((a, b) => latest(b.id) - latest(a.id) || a.name.localeCompare(b.name));
+                  const online = everyone.filter((p) => lightOn(p.id));
+                  const offline = everyone.filter((p) => !lightOn(p.id));
+                  const row = (p) => {
+                    const t = threads.get(p.id);
+                    /* The section already says who is on, so only the offline
+                       half needs "Last seen" underneath. */
+                    const seen = !lightOn(p.id) && statusFor(p.id);
+                    return (
+                      <li key={p.id}>
+                        <button
+                          type="button"
+                          className={`rb-chat-person rb-focus${isOpen(p.id) ? " is-open" : ""}`}
+                          onClick={() => openChat(p.id, p.name)}
+                        >
+                          {faceWithLight(p.id, p.name, 36)}
+                          <span className="rb-chat-lines">
+                            <span className="rb-chat-who">
+                              {p.name}
+                              {t?.unread ? <span className="rb-chat-unread">{t.unread}</span> : null}
                             </span>
-                          </button>
-                        </li>
-                      ))}
-                      {messagePeople
-                        .filter((p) => !(inbox || []).some((t) => t.with === p.id))
-                        .map((p) => (
-                          <li key={p.id}>
-                            <button
-                              type="button"
-                              className={`rb-chat-person rb-focus${isOpen(p.id) ? " is-open" : ""}`}
-                              onClick={() => openChat(p.id, p.name)}
-                            >
-                              {faceWithLight(p.id, p.name, 36)}
-                              <span className="rb-chat-lines">
-                                <span className="rb-chat-who">
-                                  {p.name}
-                                  {blockedIds.includes(p.id) ? <span className="rb-chat-last">Blocked</span> : null}
-                                </span>
-                                {statusFor(p.id) ? <span className="rb-chat-seen">{statusFor(p.id)}</span> : null}
+                            {blockedIds.includes(p.id) ? (
+                              <span className="rb-chat-last">Blocked</span>
+                            ) : t?.last ? (
+                              <span className="rb-chat-last">
+                                {t.last.mine ? "You: " : ""}
+                                {t.last.deleted ? (t.last.removed ? "message removed" : "message taken back") : t.last.text}
                               </span>
-                            </button>
-                          </li>
-                        ))}
-                    </ul>
+                            ) : null}
+                            {seen ? <span className="rb-chat-seen">{seen}</span> : null}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  };
+                  return (
+                    <>
+                      <p className="rb-chat-heading" id="rb-friends-online" style={{ marginTop: 12 }}>Online ({online.length})</p>
+                      {online.length > 0 ? (
+                        <ul className="rb-chat-list" aria-labelledby="rb-friends-online">{online.map(row)}</ul>
+                      ) : (
+                        <p className="rb-chat-empty" style={{ fontSize: 12.5, margin: "2px 0 4px" }}>Nobody else is on right now.</p>
+                      )}
+                      {offline.length > 0 && (
+                        <>
+                          <p className="rb-chat-heading" id="rb-friends-offline">Offline ({offline.length})</p>
+                          <ul className="rb-chat-list" aria-labelledby="rb-friends-offline">{offline.map(row)}</ul>
+                        </>
+                      )}
+                    </>
                   );
                 })()}
                 {listError && <p className="rb-messenger-error">{listError}</p>}

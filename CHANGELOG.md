@@ -13,6 +13,8 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **Star your favorites.** Tap the star on any recipe, on its tile or beside its title, to keep it as a favorite. Filters → Favorites only shows just those. Your stars are your own, and they follow you to your other devices.
+- **See who's on at a glance.** Open Messenger and the friends list is split into Online and Offline, with whoever you've talked to most recently at the top of each. It keeps itself in order while it's open, so somebody who has just written moves up straight away.
 - **A minute to take a message back.** Take back is there for a minute after you send something. After that the message stays. Devon, who looks after the site, can remove anyone's message or note. A message removed that way says "Removed" rather than "Taken back", so nobody thinks the sender changed their mind.
 - **Chat with several people at once.** Messenger now works like Facebook's chat. Your friends list sits in the bottom corner, and tapping a name opens a chat window beside it. Open a few and they line up side by side. Each has a _ to shrink it to a small tab along the bottom, which flashes when something new arrives, and an × to close it. Your chats are still there the next time you visit.
 - **Put a face to your name.** Menu → Profile lets you choose a picture of yourself. It shows beside your notes and replies, in Lately, and all through Messenger, so you can tell who's talking at a glance. Anyone without a picture shows their initials instead.
