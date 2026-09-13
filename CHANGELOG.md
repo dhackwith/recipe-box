@@ -13,6 +13,10 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **The messenger follows you around the site.** It's a button in the bottom right of every page now, rather than a page of its own. When somebody writes, their name flashes above it; tap the name and the conversation opens in a small window in the corner, so you can answer without leaving the recipe you were reading. Cooking mode still covers it, on purpose.
+- **A message you send no longer appears twice.** Sending added it to the page, and the check for new messages added it again a moment later.
+- **The family's own words have their own typeface.** Messenger, the notes and replies under a recipe, and Lately on the front page are now set in Nunito Sans, a rounder, friendlier face, so talking to each other looks different from reading a recipe.
+
 - **Private messages.** A new Messages page lets anyone in the family write to anyone else, one to one. Messages arrive about a second after they're sent while you have the page open, and the button beside Meal plan and Shopping list shows how many you haven't read. Nobody else can see a conversation you're in, you can take back something you sent, and anyone you block can no longer write to you — they're told plainly rather than left talking to a wall. Slurs are refused here as everywhere else.
 - **See who's about.** Every name in Messages now carries a light: green for somebody who has used the site in the last five minutes, unlit otherwise, with "Last seen" and the time beside it. It counts any page, not just Messages, and the status is written in words as well as shown as a colour.
 

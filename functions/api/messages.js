@@ -30,6 +30,8 @@
  *
  * GET  ?people                  -> who can be messaged, who you have blocked, who is about
  * GET  ?inbox                   -> every conversation, newest first, with unread counts
+ * GET  ?waiting[&wait=1&unread=n] -> who has written and not been read, and the lights;
+ *                                  with wait, holds until the count is no longer n
  * GET  ?with=<id>&since=<n>     -> that conversation; &wait=1 to hold for new ones
  * POST { to, text }             -> send
  * POST { here }                 -> I am using the site: the unread count and the lights
@@ -115,6 +117,22 @@ async function unreadFor(env, me) {
   return Number(row?.unread) || 0;
 }
 
+/* Who has written to you and not been read: one row per person, for the names
+   that flash above the messenger. Anybody you have blocked is left out, the
+   same as they are left out of the badge. */
+async function waitingFor(env, me) {
+  const { results } = await env.MESSAGES
+    .prepare(`SELECT m.sender AS sender, COUNT(*) AS n
+              FROM messages m
+              LEFT JOIN reads r ON r.person = ?1 AND r.pair = m.pair
+              WHERE m.recipient = ?1 AND m.deleted = 0 AND m.id > COALESCE(r.last_read, 0)
+                AND m.sender NOT IN (SELECT blocked FROM blocks WHERE blocker = ?1)
+              GROUP BY m.sender`)
+    .bind(me)
+    .all();
+  return (results || []).map((r) => ({ id: r.sender, name: personName(r.sender), unread: Number(r.n) || 0 }));
+}
+
 async function conversation(env, pair, since) {
   const { results } = await env.MESSAGES
     .prepare("SELECT id, sender, recipient, text, at, deleted FROM messages WHERE pair = ?1 AND id > ?2 ORDER BY id LIMIT ?3")
@@ -145,6 +163,24 @@ export async function onRequest({ request, env }) {
           people: await lights(env, people().filter((p) => p.id !== me.id)),
           blocked: await blockedBy(env, me.id),
         });
+      }
+
+      /* What is waiting. The page holds this request open rather than asking
+         on a timer: it says which count it already knows, and the answer comes
+         the moment that changes, so a name starts flashing a second after
+         somebody writes rather than on the next quarter-minute. */
+      if (url.searchParams.get("waiting") !== null) {
+        const known = parseInt(url.searchParams.get("unread") || "", 10);
+        const gather = async () => ({ unread: await unreadFor(env, me.id), waiting: await waitingFor(env, me.id) });
+        let state = await gather();
+        if (url.searchParams.get("wait") !== null && Number.isFinite(known)) {
+          const until = Date.now() + WAIT_MS;
+          while (state.unread === known && Date.now() < until) {
+            await new Promise((r) => setTimeout(r, TICK_MS));
+            state = await gather();
+          }
+        }
+        return json({ ...state, people: await lights(env, people()) });
       }
 
       /* The inbox: one row per conversation, newest first, with how many of

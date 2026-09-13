@@ -11,6 +11,12 @@
       "port": 5173
     },
     {
+      "name": "recipe-box-alt",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5180", "--strictPort"],
+      "port": 5180
+    },
+    {
       "name": "recipe-box-cf",
       "runtimeExecutable": "npx",
       "runtimeArgs": [

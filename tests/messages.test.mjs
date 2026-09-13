@@ -73,10 +73,13 @@ const is = (label, got, want) => {
   console.log(`${ok ? "  ok  " : "FAIL  "}${label}${ok ? "" : `\n        got  ${JSON.stringify(got)}\n        want ${JSON.stringify(want)}`}`);
 };
 
+const lastId = (messages) => (messages && messages.length ? messages[messages.length - 1].id : 0);
+
 const devon = await sign("devonhackwith@gmail.com");
 const nick = await sign("nick@heyerconception.com");
 const nickOther = await sign("nick@heyer.app");          // his other address, the same person
 const michael = await sign("mhealy.dev@gmail.com");
+const tracey = await sign("uktraceyj@gmail.com");        // the roster matches her by the part before the @
 
 /* ── who may be here at all ── */
 is("no token, no messages", (await call("GET", "?inbox", null)).status, 403);
@@ -200,6 +203,33 @@ const before = (await call("POST", "", devon, { here: true })).data.unread;
 await call("POST", "", devon, { block: "michael" });
 is("blocking somebody takes their unread away", (await call("POST", "", devon, { here: true })).data.unread < before, true);
 await call("POST", "", devon, { unblock: "michael" });
+
+/* ── what is waiting to be read ──
+   The names that flash above the messenger. */
+await call("POST", "", tracey, { to: "devon", text: "are you up?" });
+const waiting = await call("GET", "?waiting", devon);
+is("who has written is listed", waiting.data.waiting.map((w) => w.id).includes("tracey"), true);
+is("...by name", waiting.data.waiting.find((w) => w.id === "tracey")?.name, "Tracey Hackwith");
+is("...with how many", waiting.data.waiting.find((w) => w.id === "tracey")?.unread >= 1, true);
+is("...and the lights ride along", Array.isArray(waiting.data.people), true);
+
+const fromTracey = (await call("GET", "?with=tracey", devon)).data.messages;
+await call("POST", "", devon, { read: lastId(fromTracey), with: "tracey" });
+is("reading them takes the name off the list",
+  (await call("GET", "?waiting", devon)).data.waiting.some((w) => w.id === "tracey"), false);
+
+await call("POST", "", tracey, { to: "devon", text: "still awake?" });
+await call("POST", "", devon, { block: "tracey" });
+is("somebody blocked never flashes", (await call("GET", "?waiting", devon)).data.waiting.some((w) => w.id === "tracey"), false);
+await call("POST", "", devon, { unblock: "tracey" });
+
+/* Holding the request open: told a count that is already out of date, it
+   answers at once rather than waiting out the clock. */
+const started = Date.now();
+const promptly = await call("GET", "?waiting&wait=1&unread=-5", devon);
+is("a count it already disagrees with comes back immediately", Date.now() - started < 3000, true);
+is("...with what is actually waiting", promptly.data.waiting.some((w) => w.id === "tracey"), true);
+is("waiting needs a sign-in too", (await call("GET", "?waiting", null)).status, 403);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
