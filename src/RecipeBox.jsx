@@ -4490,7 +4490,7 @@ export default function RecipeBox() {
             <Grain card />
             <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 36px" }}>
               <button
-                className="rb-focus"
+                className="rb-btn rb-focus rb-noprint"
                 onClick={leaveShopping}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 16,

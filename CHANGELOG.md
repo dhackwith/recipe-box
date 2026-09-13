@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **The meal plan's back button looks clickable again.** It worked, but didn't show the pointing hand the other back buttons do.
 - **Replies in Lately take you to the conversation.** A reply in the Lately list now says whose note it was answering, and tapping it opens the recipe at that note with the reply right beneath it, lit up for a moment so you can see where you've landed. Any other note in Lately opens at that note too, rather than at the top of the recipe.
 - **Back buttons go back the way you came.** Opening the shopping list from the meal plan and going back used to leave the meal plan's back button doing nothing at all. Back on the meal plan, the shopping list and the nutrition tracker now retraces your steps one page at a time, always ends up at your recipes, and says where it is taking you.
 - **Reply to a note.** Every note and "I made this" on a recipe now has a Reply button, and replies sit indented under whatever they answer, so a question and its answer stay together. You can reply to a reply too. If someone removes a note that has replies, a small "Removed" marker keeps its place so the conversation still makes sense.
