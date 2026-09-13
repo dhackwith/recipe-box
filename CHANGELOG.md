@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **Timers sit in the top corner.** A running timer is now a small box in the top right of the screen, beside Home and Menu (or just under them on a phone), instead of a bar across the bottom that covered Messenger. In cooking mode it sits just below the top bar. Pause and Stop are right beside the time.
 - **Filters fit on a phone.** Opening Filters on a narrow screen used to push most of the menu off the left edge, so you could barely read it. It now stays fully on screen, and so do the other drop-down menus.
 - **Love a message or a note.** Tap Love beside the time on somebody's message and a ❤️ appears on it, for both of you. Under a recipe, tap Love beside Reply on somebody's note, and everyone reading the recipe sees who loved it. Tap Unlove to take it back.
 - **Block from the name at the top of a chat.** Tap the person's name in a chat window and a small menu drops down with Block, or Unblock if you've blocked them. It used to be a link under the message box. The _ button still shrinks the chat.

@@ -2694,8 +2694,8 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
       }}
     >
       <Grain opacity={0.06} />
-      {/* top bar */}
-      <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "18px 22px", flexWrap: "wrap" }}>
+      {/* top bar — measured by the timers, which sit just below it */}
+      <div data-cook-bar style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "18px 22px", flexWrap: "wrap" }}>
         <div>
           <p style={{ font: `400 17px/1.3 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: 0 }}>{recipe.title}</p>
           <p style={{ font: `500 12px/1.4 ${UI}`, color: "rgba(var(--on-page), calc(.55 * var(--ink-k)))", margin: "2px 0 0" }}>
@@ -2947,6 +2947,52 @@ export default function RecipeBox() {
     try { localStorage.setItem(UNITS_KEY, units); } catch { /* storage off; the choice lasts the visit */ }
   }, [units]);
   const [cooking, setCooking] = useState(false);
+
+  /* Running timers sit in a small stack in the top right corner rather than a
+     bar across the bottom, which covered the messenger. Where exactly is
+     measured, so they cover nothing that matters:
+     - on a wide screen, beside Home and Menu, in the header's empty row;
+     - on anything narrower, just below them (the CSS default), because there
+       the title fills that row;
+     - in cooking mode, beside Done when that has wrapped onto a line of its
+       own with room to spare (a phone), and otherwise below the top bar.
+     Worked out again whenever the page or the cooking bar changes size, not
+     only on a resize event, which some ways of changing the width never send. */
+  const TIMER_WIDTH = 250;
+  const [timerSpot, setTimerSpot] = useState(null);
+  useLayoutEffect(() => {
+    const settle = (next) => setTimerSpot((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next));
+    const room = () => document.documentElement.clientWidth;
+    const place = () => {
+      if (cooking) {
+        const bar = document.querySelector("[data-cook-bar]");
+        if (!bar) return settle(null);
+        const done = [...bar.querySelectorAll("button")].pop();
+        const d = done?.getBoundingClientRect();
+        if (d && room() - d.right - 16 >= TIMER_WIDTH) return settle({ top: Math.round(d.top) - 4, right: 8 });
+        return settle({ top: Math.round(bar.getBoundingClientRect().bottom) + 8 });
+      }
+      const corner = document.querySelector(".rb-corner");
+      if (!corner || room() < 1000) return settle(null);
+      const r = corner.getBoundingClientRect();
+      settle({ top: Math.round(r.top + window.scrollY), right: Math.round(room() - r.left) + 10 });
+    };
+    placeTimers.current = place;
+    place();
+    window.addEventListener("resize", place);
+    const watch = typeof ResizeObserver === "function" ? new ResizeObserver(place) : null;
+    watch?.observe(document.documentElement);
+    const bar = cooking ? document.querySelector("[data-cook-bar]") : null;
+    if (bar) watch?.observe(bar);
+    return () => { window.removeEventListener("resize", place); watch?.disconnect(); };
+  }, [cooking]);
+  /* And on every redraw while a timer is showing — which is every second, as
+     it counts — so the spot can never be left stale by a change of size that
+     sent no event at all. Nothing redraws unless the spot actually moved. */
+  const placeTimers = useRef(null);
+  useLayoutEffect(() => {
+    if (timers.length) placeTimers.current?.();
+  });
   const [stepIndex, setStepIndex] = useState(0);
   const [showPantry, setShowPantry] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -4979,6 +5025,16 @@ export default function RecipeBox() {
     .rb-flash { position: fixed; inset: 0; z-index: 60; pointer-events: none; box-shadow: inset 0 0 0 7px var(--page-accent); animation: rb-pulse 1.6s ease-in-out infinite; }
     @keyframes rb-pulse { 0%, 100% { opacity: .18; } 50% { opacity: .9; } }
     .rb-chip-done { animation: rb-chip 1.6s ease-in-out infinite; }
+    /* Timers: a small stack in the top right corner, above everything but
+       out of the messenger's way. Only as wide as a clock and two buttons. */
+    .rb-timers { position: fixed; top: 56px; right: 16px; z-index: 70; width: 250px; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 72px); overflow-y: auto; }
+    .rb-timer { padding: 7px 10px 6px; border: 1px solid rgba(var(--on-page), calc(.24 * var(--ink-k))); border-radius: 8px; background: rgba(var(--deep-rgb), .96); box-shadow: 0 12px 30px -14px rgba(0, 0, 0, .6); }
+    .rb-timer.is-done { border-color: var(--page-accent); background: linear-gradient(rgba(var(--accent-rgb), .16), rgba(var(--accent-rgb), .16)), rgba(var(--deep-rgb), .96); }
+    .rb-timer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .rb-timer-clock { font-size: 22px; line-height: 1.15; color: rgb(var(--on-page)); }
+    .rb-timer.is-done .rb-timer-clock { color: var(--page-accent); }
+    .rb-timer-btns { display: inline-flex; gap: 6px; }
+    .rb-timer-label { margin: 2px 0 0; font: 400 12px/1.35 ${UI}; color: rgba(var(--on-page), calc(.7 * var(--ink-k))); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     @keyframes rb-chip { 0%, 100% { border-color: var(--page-accent); } 50% { border-color: rgba(var(--accent-rgb), .35); } }
     @media (prefers-reduced-motion: reduce) {
       .rb-flash { animation: none; opacity: .7; }
@@ -5501,7 +5557,7 @@ export default function RecipeBox() {
       .rb-actions button { flex: 1 1 auto; }
       .rb-corner { top: 8px !important; right: 16px !important; }
 
-      .rb-tray { padding: 10px 12px !important; }
+      .rb-timers { top: 48px; right: 8px; width: min(250px, calc(100vw - 16px)); }
     }
     @media (max-width: 400px) {
 
@@ -5525,7 +5581,7 @@ export default function RecipeBox() {
         ...paletteVars(palette, theme),
         position: "relative", isolation: "isolate", minHeight: "100vh", color: "rgb(var(--on-page))",
         background: `radial-gradient(120% 90% at 50% 0%, var(--page-soft) 0%, var(--page-bg) 45%, var(--page-deep) 100%)`,
-        paddingBottom: timers.length ? 130 : 80,
+        paddingBottom: 80,
       }}
     >
       <style>{css}</style>
@@ -8004,39 +8060,29 @@ export default function RecipeBox() {
       {timers.length > 0 && (
         <div
           role="status"
-          className="rb-noprint rb-tray"
-          style={{
-            position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 70,
-            background: "rgba(var(--deep-rgb), .96)", borderTop: `1px solid rgba(var(--on-page), calc(.2 * var(--ink-k)))`,
-            padding: "12px 18px", gap: 12, overflowX: "auto",
-          }}
+          aria-label="Timers"
+          className="rb-noprint rb-timers"
+          style={timerSpot || undefined}
         >
           {timers.map((t) => {
             const done = t.remaining === 0;
+            const label = `${done ? "Time's up — " : ""}${t.label}`;
             return (
-              <div
-                key={t.id}
-                className={done ? "rb-chip-done" : undefined}
-                style={{
-                  display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", flex: "0 0 auto",
-                  border: `1px solid ${done ? "var(--page-accent)" : "rgba(var(--on-page), calc(.24 * var(--ink-k)))"}`, borderRadius: 2,
-                  background: done ? "rgba(var(--accent-rgb), .16)" : "transparent",
-                }}
-              >
-                <div style={{ paddingInline: 8, minWidth: 50 }}>
-                  <span className="rb-num" style={{ fontSize: 22, color: done ? "var(--page-accent)" : "rgb(var(--on-page))", minWidth: 66 }}>{clock(t.remaining)}</span>
+              <div key={t.id} className={`rb-timer${done ? " is-done rb-chip-done" : ""}`}>
+                <div className="rb-timer-row">
+                  <span className="rb-num rb-timer-clock">{clock(t.remaining)}</span>
+                  <span className="rb-timer-btns">
+                    {!done && (
+                      <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "4px 10px", fontSize: 12 }} onClick={() => toggleTimer(t.id)}>
+                        {t.running ? "Pause" : "Resume"}
+                      </button>
+                    )}
+                    <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "4px 10px", fontSize: 12 }} onClick={() => dropTimer(t.id)}>
+                      {done ? "Clear" : "Stop"}
+                    </button>
+                  </span>
                 </div>
-                <span style={{ font: `400 12.5px/1.35 ${UI}`, color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))", paddingInlineEnd: '8px', width: '100%', textJustify: 'right'  }}>
-                  {done ? "Time's up — " : ""}{t.label}
-                </span>
-                {!done && (
-                  <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "6px 12px", fontSize: 12.5 }} onClick={() => toggleTimer(t.id)}>
-                    {t.running ? "Pause" : "Resume"}
-                  </button>
-                )}
-                <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "6px 12px", fontSize: 12.5 }} onClick={() => dropTimer(t.id)}>
-                  {done ? "Clear" : "Stop"}
-                </button>
+                <p className="rb-timer-label" title={label}>{label}</p>
               </div>
             );
           })}
