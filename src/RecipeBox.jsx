@@ -937,6 +937,26 @@ async function notesCall(method, query = "", body) {
   return data;
 }
 
+const MESSAGES_API = "/api/messages";
+
+/* Private messages (functions/api/messages.js). Same shape as notesCall: the
+   server's own refusals are already written for a person to read. */
+async function messagesCall(method, query = "", body) {
+  const res = await fetch(MESSAGES_API + query, {
+    method,
+    credentials: "same-origin",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok) throw new Error((data && data.error) || `Couldn't reach your messages (${res.status})`);
+  if (data === null) throw new Error("Messages aren't available here — this needs the deployed site");
+  return data;
+}
+
+const lastMessageId = (messages) => (messages.length ? messages[messages.length - 1].id : 0);
+
 /* When a note was written, in whatever zone the reader is in: the server stamps
    an exact moment and each device turns it into its own day and clock (see
    when.js). The full date and zone are there on hover, and <time> carries the
@@ -2320,6 +2340,21 @@ export default function RecipeBox() {
      time: opening another reply box closes the first. */
   const [replyTo, setReplyTo] = useState(null);
   const [replyText, setReplyText] = useState("");
+  /* ── private messages ──
+     inbox is null until asked, the way notes are, so an empty inbox does not
+     flash "nobody has written" before the first answer. chatRun cancels a
+     waiting request when the conversation changes or the page closes. */
+  const [inbox, setInbox] = useState(null);
+  const [messagePeople, setMessagePeople] = useState([]);
+  const [blockedIds, setBlockedIds] = useState([]);
+  const [chatWith, setChatWith] = useState(null);
+  const [chatName, setChatName] = useState("");
+  const [chat, setChat] = useState([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const chatRun = useRef(0);
   /* A note to bring into view once the recipe's notes are on the page, when it
      was opened from the Lately feed: { target, ids } — the note to scroll to,
      and the notes to light up for a moment. */
@@ -2401,6 +2436,158 @@ export default function RecipeBox() {
       setNotesBusy(false);
     }
   };
+
+  /* ── private messages ───────────────────────────────────────────
+     The inbox and the conversation are two requests: the inbox is asked for
+     when the page opens and after anything is sent, and the conversation holds
+     a request open (wait=1) that answers the moment something arrives. Both go
+     quiet when messaging is not switched on, because the rest of the site does
+     not depend on it. */
+  const refreshInbox = async () => {
+    try {
+      const box = await messagesCall("GET", "?inbox");
+      setInbox(box.threads || []);
+      setUnreadMessages(box.unread || 0);
+    } catch { /* said elsewhere, if anywhere */ }
+  };
+
+  const markRead = async (who, upTo) => {
+    if (!who || !upTo) return;
+    try {
+      await messagesCall("POST", "", { read: upTo, with: who });
+      setInbox((list) => (list || []).map((t) => (t.with === who ? { ...t, unread: 0 } : t)));
+      setUnreadMessages((n) => Math.max(0, n - 0));
+      refreshInbox();
+    } catch { /* the count is a nicety, not the message */ }
+  };
+
+  /* The badge beside Meal plan and Shopping list. Quiet about failure: an
+     unbound database or a dev server should not put an error on the page. */
+  useEffect(() => {
+    let stop = false;
+    const look = async () => {
+      if (stop || document.hidden) return;
+      try {
+        const box = await messagesCall("GET", "?inbox");
+        if (!stop) setUnreadMessages(box.unread || 0);
+      } catch { /* quiet */ }
+    };
+    look();
+    const every = setInterval(look, 45000);
+    const onWake = () => look();
+    document.addEventListener("visibilitychange", onWake);
+    return () => { stop = true; clearInterval(every); document.removeEventListener("visibilitychange", onWake); };
+  }, []);
+
+  /* Who there is to talk to, and what has been said, when the page opens. */
+  useEffect(() => {
+    if (view !== "messages") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const who = await messagesCall("GET", "?people");
+        if (cancelled) return;
+        setMessagePeople(who.people || []);
+        setBlockedIds(who.blocked || []);
+        const box = await messagesCall("GET", "?inbox");
+        if (cancelled) return;
+        setInbox(box.threads || []);
+        setUnreadMessages(box.unread || 0);
+      } catch (err) {
+        if (cancelled) return;
+        setInbox([]);
+        setChatError(String(err.message || err));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [view]);
+
+  /* One conversation, and then a request that waits for the next thing said. */
+  useEffect(() => {
+    if (view !== "messages" || !chatWith) return;
+    const run = ++chatRun.current;
+    let stop = false;
+    const mine = () => !stop && run === chatRun.current;
+    (async () => {
+      try {
+        const opened = await messagesCall("GET", `?with=${encodeURIComponent(chatWith)}&since=0`);
+        if (!mine()) return;
+        setChat(opened.messages || []);
+        setChatName(opened.name || "");
+        let since = lastMessageId(opened.messages || []);
+        markRead(chatWith, since);
+        while (mine()) {
+          if (document.hidden) {
+            await new Promise((r) => setTimeout(r, 1500));
+            continue;
+          }
+          const next = await messagesCall("GET", `?with=${encodeURIComponent(chatWith)}&since=${since}&wait=1`);
+          if (!mine()) return;
+          if (next.messages && next.messages.length) {
+            setChat((all) => [...all, ...next.messages]);
+            since = lastMessageId(next.messages);
+            markRead(chatWith, since);
+          }
+        }
+      } catch (err) {
+        if (mine()) setChatError(String(err.message || err));
+      }
+    })();
+    return () => { stop = true; };
+  }, [view, chatWith]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openChat = (id, name) => {
+    chatRun.current += 1;
+    setChatWith(id);
+    setChatName(name || "");
+    setChat([]);
+    setChatDraft("");
+    setChatError("");
+  };
+
+  const sendMessage = async () => {
+    const text = chatDraft.trim();
+    if (!text || !chatWith) return;
+    if (hasHate(text)) { setChatError(HATE_MESSAGE); return; }
+    setChatBusy(true);
+    setChatError("");
+    try {
+      const { message } = await messagesCall("POST", "", { to: chatWith, text });
+      setChat((all) => [...all, message]);
+      setChatDraft("");
+      refreshInbox();
+    } catch (err) {
+      setChatError(String(err.message || err));
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const blockPerson = async (id, blocked) => {
+    try {
+      const data = await messagesCall("POST", "", blocked ? { block: id } : { unblock: id });
+      setBlockedIds(data.blocked || []);
+      if (blocked && chatWith === id) setChatWith(null);
+      refreshInbox();
+      flash(blocked ? `${personLabel(id)} can no longer message you` : `${personLabel(id)} can message you again`, 5000);
+    } catch (err) {
+      setChatError(String(err.message || err));
+    }
+  };
+
+  const takeBackMessage = async (id) => {
+    try {
+      await messagesCall("DELETE", `?id=${encodeURIComponent(id)}`);
+      setChat((all) => all.map((m) => (m.id === id ? { ...m, deleted: true, text: "" } : m)));
+      refreshInbox();
+    } catch (err) {
+      setChatError(String(err.message || err));
+    }
+  };
+
+  /* A name for an id, from whichever list already holds it. */
+  const personLabel = (id) =>
+    messagePeople.find((p) => p.id === id)?.name || (inbox || []).find((t) => t.with === id)?.name || id;
 
   const addReply = async (parent) => {
     const text = replyText.trim();
@@ -3052,6 +3239,10 @@ export default function RecipeBox() {
     setConfirmClear(false);
     openTool("shopping");
   };
+  const openMessages = () => {
+    setChatError("");
+    openTool("messages");
+  };
   const leaveShopping = () => {
     const { to, trail } = backFrom(toolTrail.current);
     toolTrail.current = trail;
@@ -3060,6 +3251,7 @@ export default function RecipeBox() {
   const BACK_TO = {
     list: "Back to recipes", detail: "Back to the recipe", form: "Back to editing", import: "Back to the import",
     plan: "Back to the meal plan", shopping: "Back to the shopping list", today: "Back to the tracker",
+    messages: "Back to messages",
   };
   /* what a tool page's back button will say: wherever the path actually leads */
   const toolBackLabel = () => {
@@ -3848,6 +4040,32 @@ export default function RecipeBox() {
     .rb-stepphoto-full { font: 400 12.5px/1.4 ${UI}; color: var(--card-muted); }
     .rb-stepphoto-row .rb-photo-choices { margin-top: 10px; }
 
+    /* Messages: who on the left, the conversation on the right, and one column
+       on a phone, where a list beside a thread would be two half-widths of
+       nothing. */
+    .rb-chat { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+    @media (min-width: 760px) { .rb-chat { grid-template-columns: 230px minmax(0, 1fr); gap: 30px; } }
+    .rb-chat-side { min-width: 0; }
+    .rb-chat-heading { margin: 18px 0 6px; font: 600 9.5px/1 ${UI}; letter-spacing: .12em; text-transform: uppercase; color: var(--card-muted); }
+    .rb-chat-list { list-style: none; margin: 0; padding: 0; }
+    .rb-chat-person { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--card-edge); padding: 10px 2px; cursor: pointer; }
+    .rb-chat-person.is-open { box-shadow: inset 3px 0 0 var(--card-accent); }
+    .rb-chat-who { display: flex; align-items: baseline; gap: 8px; font: 600 14px/1.3 ${UI}; color: var(--card-text); }
+    .rb-chat-unread { flex: none; min-width: 18px; padding: 1px 6px; border-radius: 999px; background: var(--card-accent); color: var(--on-accent); font: 600 11px/1.5 ${UI}; text-align: center; }
+    .rb-chat-last { display: block; margin-top: 3px; font: 400 12.5px/1.45 ${UI}; color: var(--card-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rb-chat-blocked { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--card-edge); font: 400 13.5px/1.4 ${UI}; color: var(--card-muted); }
+    .rb-chat-main { min-width: 0; display: flex; flex-direction: column; }
+    .rb-chat-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--card-edge); }
+    .rb-chat-name { font: 400 19px/1.2 ${DISPLAY}; color: var(--card-text); }
+    .rb-chat-empty { font: 400 14px/1.6 ${UI}; color: var(--card-muted); margin: 0; }
+    .rb-chat-thread { list-style: none; margin: 0; padding: 14px 0 0; display: flex; flex-direction: column; gap: 12px; max-height: 52vh; overflow-y: auto; }
+    .rb-msg { max-width: min(78%, 520px); padding: 9px 12px; border: 1px solid var(--card-edge); border-radius: 3px; background: var(--card-lift); }
+    .rb-msg.is-mine { margin-left: auto; border-color: var(--card-accent); }
+    .rb-msg-text { margin: 0; font: 400 15px/1.65 ${PROSE}; color: var(--card-text); white-space: pre-wrap; }
+    .rb-msg-gone { font-style: italic; color: var(--card-muted); }
+    .rb-msg-when { display: flex; align-items: baseline; gap: 10px; margin: 5px 0 0; font: 400 11.5px/1.4 ${UI}; color: var(--card-muted); }
+    .rb-chat-compose { display: flex; gap: 10px; align-items: flex-end; margin-top: 14px; }
+
     /* The week. Seven columns where there is room, and a single column of days
        on a phone — a 7-wide grid on a 375px screen gives each day 40 pixels,
        which is not a column, it is a stripe. */
@@ -4309,6 +4527,10 @@ export default function RecipeBox() {
               <span aria-hidden style={{ marginRight: 7 }}>◷</span>Daily nutrition{todayTotals.calories ? ` (${todayTotals.calories})` : ""}
             </button>
 
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={openMessages}>
+              <span aria-hidden style={{ marginRight: 7 }}>✉</span>Messages{unreadMessages ? ` (${unreadMessages})` : ""}
+            </button>
+
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
           </div>
         </div>
@@ -4678,6 +4900,168 @@ export default function RecipeBox() {
         )}
 
         {/* ═══════ THE WEEK'S PLAN ═══════ */}
+        {!loading && view === "messages" && (() => {
+          const threads = inbox || [];
+          const spokenTo = new Set(threads.map((t) => t.with));
+          const others = messagePeople.filter((p) => !spokenTo.has(p.id));
+          const blocked = new Set(blockedIds);
+          const openWith = chatWith;
+          const personRow = (id, name, meta, unread) => (
+            <li key={id}>
+              <button
+                type="button"
+                className={`rb-chat-person rb-focus${openWith === id ? " is-open" : ""}`}
+                onClick={() => openChat(id, name)}
+                aria-current={openWith === id ? "true" : undefined}
+              >
+                <span className="rb-chat-who">
+                  {name}
+                  {unread ? <span className="rb-chat-unread">{unread}</span> : null}
+                </span>
+                {meta ? <span className="rb-chat-last">{meta}</span> : null}
+              </button>
+            </li>
+          );
+          return (
+            <article className="rb-sheet" style={{ ...sheet, maxWidth: 1040 }}>
+              <Grain card />
+              <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 36px" }}>
+                <button
+                  className="rb-btn rb-focus rb-noprint"
+                  onClick={leaveShopping}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 16,
+                    background: "transparent", border: "none", padding: "4px 0",
+                    color: "var(--card-accent)", font: `600 13.5px/1 ${UI}`,
+                  }}
+                >
+                  <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
+                  {toolBackLabel()}
+                </button>
+
+                <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Messages</h2>
+                <p style={{ font: `400 14.5px/1.65 ${UI}`, color: "var(--card-muted)", margin: "0 0 18px", maxWidth: "62ch" }}>
+                  Between the two of you. Nobody else in the family sees these, and anybody you block can't write to you.
+                </p>
+
+                {inbox === null ? (
+                  <p style={{ font: `400 14px/1.6 ${UI}`, color: "var(--card-muted)", margin: 0 }}>Looking…</p>
+                ) : (
+                  <div className="rb-chat">
+                    <div className="rb-chat-side">
+                      {threads.length > 0 && (
+                        <ul className="rb-chat-list">
+                          {threads.map((t) =>
+                            personRow(
+                              t.with,
+                              t.name,
+                              t.last ? `${t.last.mine ? "You: " : ""}${t.last.deleted ? "message taken back" : t.last.text}` : "",
+                              t.unread,
+                            ))}
+                        </ul>
+                      )}
+                      {others.length > 0 && (
+                        <>
+                          <p className="rb-chat-heading">{threads.length ? "Anyone else" : "Who to"}</p>
+                          <ul className="rb-chat-list">
+                            {others.map((p) => personRow(p.id, p.name, blocked.has(p.id) ? "Blocked" : "", 0))}
+                          </ul>
+                        </>
+                      )}
+                      {blockedIds.length > 0 && (
+                        <>
+                          <p className="rb-chat-heading">Blocked</p>
+                          <ul className="rb-chat-list">
+                            {blockedIds.map((id) => (
+                              <li key={id} className="rb-chat-blocked">
+                                <span>{personLabel(id)}</span>
+                                <button type="button" className="rb-entry-x rb-focus" onClick={() => blockPerson(id, false)}>
+                                  Unblock
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="rb-chat-main">
+                      {!openWith ? (
+                        <p className="rb-chat-empty">
+                          {threads.length ? "Pick a conversation." : "Pick somebody to write to."}
+                        </p>
+                      ) : (
+                        <>
+                          <div className="rb-chat-top">
+                            <span className="rb-chat-name">{chatName || personLabel(openWith)}</span>
+                            {blocked.has(openWith) ? (
+                              <button type="button" className="rb-entry-x rb-focus" onClick={() => blockPerson(openWith, false)}>
+                                Unblock
+                              </button>
+                            ) : (
+                              <button type="button" className="rb-entry-x rb-focus" onClick={() => blockPerson(openWith, true)}>
+                                Block
+                              </button>
+                            )}
+                          </div>
+
+                          <ol className="rb-chat-thread">
+                            {chat.length === 0 && <li className="rb-chat-empty">Nothing yet. Say hello.</li>}
+                            {chat.map((m) => (
+                              <li key={m.id} className={`rb-msg${m.mine ? " is-mine" : ""}`}>
+                                <p className={m.deleted ? "rb-msg-text rb-msg-gone" : "rb-msg-text"}>
+                                  {m.deleted ? "Taken back" : m.text}
+                                </p>
+                                <p className="rb-msg-when">
+                                  <When iso={m.at} />
+                                  {m.mine && !m.deleted && (
+                                    <button type="button" className="rb-entry-x rb-focus" onClick={() => takeBackMessage(m.id)}>
+                                      Take back
+                                    </button>
+                                  )}
+                                </p>
+                              </li>
+                            ))}
+                          </ol>
+
+                          <div className="rb-chat-compose rb-noprint">
+                            <textarea
+                              className="rb-focus"
+                              value={chatDraft}
+                              onChange={(e) => setChatDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                /* Enter sends, as it does everywhere else people type to each
+                                   other; shift and Enter is a new line. */
+                                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+                              }}
+                              rows={2}
+                              maxLength={4000}
+                              placeholder={`Message ${chatName || personLabel(openWith)}`}
+                              aria-label={`Message ${chatName || personLabel(openWith)}`}
+                              style={{ ...input, resize: "vertical", font: `400 14.5px/1.6 ${UI}` }}
+                            />
+                            <button
+                              className="rb-btn rb-focus"
+                              style={btnPrimary}
+                              onClick={sendMessage}
+                              disabled={chatBusy || !chatDraft.trim()}
+                            >
+                              {chatBusy ? "Sending…" : "Send"}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      {chatError && (
+                        <p style={{ font: `400 13px/1.6 ${UI}`, color: "var(--card-danger)", margin: "12px 0 0" }}>{chatError}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </article>
+          );
+        })()}
+
         {!loading && view === "plan" && (
           <article className="rb-sheet" style={{ ...sheet, maxWidth: 1040 }}>
             <Grain card />

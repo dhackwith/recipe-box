@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "dev:cf": "npm run build && npx wrangler pages dev dist --kv RECIPES --ai AI",
-    "test": "node tests/roster.test.mjs && node tests/notes.test.mjs && node tests/when.test.mjs && node tests/replies.test.mjs && node tests/importer.test.mjs && node tests/microdata.test.mjs && node tests/hrecipe.test.mjs && node tests/fill.test.mjs && node tests/pagemeta.test.mjs && node tests/photos.test.mjs && node tests/shopping.test.mjs && node tests/body.test.mjs && node tests/day.test.mjs && node tests/food.test.mjs && node tests/food-endpoint.test.mjs && node tests/plan.test.mjs && node tests/trail.test.mjs && node tests/stepphotos.test.mjs && node tests/storage.test.mjs && node tests/hate.test.mjs && node tests/styles.test.mjs && node tests/units.test.mjs"
+    "test": "node tests/roster.test.mjs && node tests/notes.test.mjs && node tests/when.test.mjs && node tests/replies.test.mjs && node tests/importer.test.mjs && node tests/microdata.test.mjs && node tests/hrecipe.test.mjs && node tests/fill.test.mjs && node tests/pagemeta.test.mjs && node tests/photos.test.mjs && node tests/shopping.test.mjs && node tests/body.test.mjs && node tests/day.test.mjs && node tests/food.test.mjs && node tests/food-endpoint.test.mjs && node tests/plan.test.mjs && node tests/trail.test.mjs && node tests/stepphotos.test.mjs && node tests/storage.test.mjs && node tests/hate.test.mjs && node tests/messages.test.mjs && node tests/styles.test.mjs && node tests/units.test.mjs"
   },
   "dependencies": {
     "jose": "^6.2.12",

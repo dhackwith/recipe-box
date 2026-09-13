@@ -56,15 +56,17 @@ export async function identity(request) {
  *
  * Somebody not listed still gets in — Access, not this file, decides that — and
  * is named from their address until they are added here. */
-const ROSTER = new Map(Object.entries({
-  "devonhackwith@gmail.com": "Devon Hackwith",
-  uktraceyj: "Tracey Hackwith",
-  hhackwith: "Haven Hackwith",
-  ashtonhack: "Ashton Hackwith",
-  "nick@heyerconception.com": "Nicholas Heyer",
-  "nick@heyer.app": "Nicholas Heyer",
-  "mhealy.dev@gmail.com": "Michael Healy",
-}));
+const PEOPLE = [
+  { id: "devon", name: "Devon Hackwith", addresses: ["devonhackwith@gmail.com"] },
+  { id: "tracey", name: "Tracey Hackwith", addresses: ["uktraceyj"] },
+  { id: "haven", name: "Haven Hackwith", addresses: ["hhackwith"] },
+  { id: "ashton", name: "Ashton Hackwith", addresses: ["ashtonhack"] },
+  { id: "nicholas", name: "Nicholas Heyer", addresses: ["nick@heyerconception.com", "nick@heyer.app"] },
+  { id: "michael", name: "Michael Healy", addresses: ["mhealy.dev@gmail.com"] },
+];
+
+const ROSTER = new Map(PEOPLE.flatMap((p) => p.addresses.map((a) => [a, p.name])));
+const BY_ADDRESS = new Map(PEOPLE.flatMap((p) => p.addresses.map((a) => [a, p])));
 
 /* A readable stand-in for anybody not on the roster. Only ever a fallback, and
    a visible prompt to add them to it. */
@@ -74,16 +76,50 @@ function fromAddress(local) {
   return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
-export function displayName(email) {
+/* An address as the roster is keyed: lower case, and without the +suffix Gmail
+   and others treat as the same mailbox — otherwise a full-address entry is
+   missed by the very person it names, and they are quietly renamed. */
+function addressOf(email) {
   const raw = String(email || "").trim().toLowerCase();
-  if (!raw) return "Someone";
-  /* Gmail and others treat everything after a + as the same mailbox, so the
-     suffix comes off before any lookup — otherwise a full-address entry is
-     missed by the very person it names, and they are quietly renamed. */
+  if (!raw) return null;
   const at = raw.indexOf("@");
   const local = (at < 0 ? raw : raw.slice(0, at)).replace(/\+.*$/, "");
-  const addr = at < 0 ? local : local + raw.slice(at);
-  if (ROSTER.has(addr)) return ROSTER.get(addr);
-  if (ROSTER.has(local)) return ROSTER.get(local);
-  return fromAddress(local);
+  return { local, addr: at < 0 ? local : local + raw.slice(at) };
 }
+
+export function displayName(email) {
+  const parts = addressOf(email);
+  if (!parts) return "Someone";
+  if (ROSTER.has(parts.addr)) return ROSTER.get(parts.addr);
+  if (ROSTER.has(parts.local)) return ROSTER.get(parts.local);
+  return fromAddress(parts.local);
+}
+
+/* ── People, as private messages need them ────────────────────────
+   A message is between people, not addresses: Nicholas answers to two, and a
+   conversation with him is one conversation. An id is the stable name of a
+   person, so it is what a message, a block and a read marker are keyed by.
+   Somebody signed in but not on the roster is their own address, which is
+   unique and cannot collide with a roster id. */
+
+/** Everyone the box knows: ids and names, and never anybody's address. */
+export const people = () => PEOPLE.map(({ id, name }) => ({ id, name }));
+
+/** The person a signed-in address belongs to. */
+export function personFor(email) {
+  const parts = addressOf(email);
+  if (!parts) return null;
+  const known = BY_ADDRESS.get(parts.addr) || BY_ADDRESS.get(parts.local);
+  return known ? { id: known.id, name: known.name } : { id: parts.addr, name: fromAddress(parts.local) };
+}
+
+/** What to call an id, roster or not. */
+export function personName(id) {
+  const known = PEOPLE.find((p) => p.id === id);
+  if (known) return known.name;
+  const parts = addressOf(id);
+  return parts ? fromAddress(parts.local) : "Someone";
+}
+
+/** Whether an id is somebody the box knows, which is who may be messaged. */
+export const isPerson = (id) => PEOPLE.some((p) => p.id === id);

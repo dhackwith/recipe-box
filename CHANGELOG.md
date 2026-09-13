@@ -11,6 +11,10 @@ after it explains what they can now do.
 Write it for whoever is cooking, not for whoever is coding, and leave the plumbing
 out unless they would notice it.
 
+## 2026-09-13
+
+- **Private messages.** A new Messages page lets anyone in the family write to anyone else, one to one. Messages arrive about a second after they're sent while you have the page open, and the button beside Meal plan and Shopping list shows how many you haven't read. Nobody else can see a conversation you're in, you can take back something you sent, and anyone you block can no longer write to you — they're told plainly rather than left talking to a wall. Slurs are refused here as everywhere else.
+
 ## 2026-09-12
 
 - **Slurs can't be saved.** Anything you can type — a recipe, a step, a note or reply, a shopping list item, a box name — is now checked for racial and homophobic slurs and the stock phrases of hate groups, and refused with a message saying which field to fix. Ordinary swearing is left alone, and so are the kitchen words that contain slurs: fagioli, spicy, raccoon, squawk, niger seed. Disguised spellings are caught too. Anything already written stays as it is; only new text is checked.

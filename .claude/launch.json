@@ -20,6 +20,8 @@
         "dist",
         "--kv",
         "RECIPES",
+        "--d1",
+        "MESSAGES=recipe-box-messages",
         "--ai",
         "AI",
         "--port",
