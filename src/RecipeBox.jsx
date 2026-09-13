@@ -2354,6 +2354,9 @@ export default function RecipeBox() {
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState("");
   const [unreadMessages, setUnreadMessages] = useState(0);
+  /* Who is about: id -> { online, seen }. Refreshed by the same request that
+     says this page is here, so the lights cost nothing of their own. */
+  const [presence, setPresence] = useState({});
   const chatRun = useRef(0);
   /* A note to bring into view once the recipe's notes are on the page, when it
      was opened from the Lately feed: { target, ids } — the note to scroll to,
@@ -2461,15 +2464,20 @@ export default function RecipeBox() {
     } catch { /* the count is a nicety, not the message */ }
   };
 
-  /* The badge beside Meal plan and Shopping list. Quiet about failure: an
-     unbound database or a dev server should not put an error on the page. */
+  /* Being here, and the badge beside Meal plan and Shopping list. One request
+     does both: it records that this person is using the site — anywhere on it,
+     not only on the messages page — and brings back the unread count and
+     everybody's lights. Quiet about failure: an unbound database or a dev
+     server should not put an error on the page. */
   useEffect(() => {
     let stop = false;
     const look = async () => {
       if (stop || document.hidden) return;
       try {
-        const box = await messagesCall("GET", "?inbox");
-        if (!stop) setUnreadMessages(box.unread || 0);
+        const beat = await messagesCall("POST", "", { here: true });
+        if (stop) return;
+        setUnreadMessages(beat.unread || 0);
+        if (beat.people) setPresence(Object.fromEntries(beat.people.map((p) => [p.id, p])));
       } catch { /* quiet */ }
     };
     look();
@@ -2489,6 +2497,7 @@ export default function RecipeBox() {
         if (cancelled) return;
         setMessagePeople(who.people || []);
         setBlockedIds(who.blocked || []);
+        if (who.people) setPresence((all) => ({ ...all, ...Object.fromEntries(who.people.map((p) => [p.id, p])) }));
         const box = await messagesCall("GET", "?inbox");
         if (cancelled) return;
         setInbox(box.threads || []);
@@ -4065,6 +4074,14 @@ export default function RecipeBox() {
     .rb-msg-gone { font-style: italic; color: var(--card-muted); }
     .rb-msg-when { display: flex; align-items: baseline; gap: 10px; margin: 5px 0 0; font: 400 11.5px/1.4 ${UI}; color: var(--card-muted); }
     .rb-chat-compose { display: flex; gap: 10px; align-items: flex-end; margin-top: 14px; }
+    /* The light: lit for somebody who has used the site in the last five
+       minutes, and unlit rather than red for somebody who has not — they are
+       not away, they are simply not here. */
+    .rb-chat-light { flex: none; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: transparent; border: 1px solid var(--card-edge); }
+    .rb-chat-light.is-on { background: #3FA45B; border-color: #2F8247; box-shadow: 0 0 0 2px rgba(63, 164, 91, .2); }
+    .rb-chat-seen { display: block; margin-top: 2px; font: 400 11.5px/1.4 ${UI}; color: var(--card-muted); }
+    .rb-chat-name .rb-chat-light { margin-right: 8px; }
+    .rb-chat-name .rb-chat-seen { font-size: 11.5px; }
 
     /* The week. Seven columns where there is room, and a single column of days
        on a phone — a 7-wide grid on a 375px screen gives each day 40 pixels,
@@ -4906,22 +4923,40 @@ export default function RecipeBox() {
           const others = messagePeople.filter((p) => !spokenTo.has(p.id));
           const blocked = new Set(blockedIds);
           const openWith = chatWith;
-          const personRow = (id, name, meta, unread) => (
-            <li key={id}>
-              <button
-                type="button"
-                className={`rb-chat-person rb-focus${openWith === id ? " is-open" : ""}`}
-                onClick={() => openChat(id, name)}
-                aria-current={openWith === id ? "true" : undefined}
-              >
-                <span className="rb-chat-who">
-                  {name}
-                  {unread ? <span className="rb-chat-unread">{unread}</span> : null}
-                </span>
-                {meta ? <span className="rb-chat-last">{meta}</span> : null}
-              </button>
-            </li>
-          );
+          /* Green if they have used the site in the last five minutes, unlit
+             otherwise — and said in words too, because a colour on its own is
+             no use to somebody who cannot see it. */
+          const lightFor = (id) => {
+            const who = presence[id] || {};
+            return { on: !!who.online, seen: who.seen || null };
+          };
+          const statusFor = (id) => {
+            const { on, seen } = lightFor(id);
+            if (on) return <>Online now</>;
+            if (seen) return <>Last seen <When iso={seen} /></>;
+            return null;
+          };
+          const personRow = (id, name, meta, unread) => {
+            const status = statusFor(id);
+            return (
+              <li key={id}>
+                <button
+                  type="button"
+                  className={`rb-chat-person rb-focus${openWith === id ? " is-open" : ""}`}
+                  onClick={() => openChat(id, name)}
+                  aria-current={openWith === id ? "true" : undefined}
+                >
+                  <span className="rb-chat-who">
+                    <span className={`rb-chat-light${lightFor(id).on ? " is-on" : ""}`} aria-hidden />
+                    {name}
+                    {unread ? <span className="rb-chat-unread">{unread}</span> : null}
+                  </span>
+                  {meta ? <span className="rb-chat-last">{meta}</span> : null}
+                  {status ? <span className="rb-chat-seen">{status}</span> : null}
+                </button>
+              </li>
+            );
+          };
           return (
             <article className="rb-sheet" style={{ ...sheet, maxWidth: 1040 }}>
               <Grain card />
@@ -4993,7 +5028,11 @@ export default function RecipeBox() {
                       ) : (
                         <>
                           <div className="rb-chat-top">
-                            <span className="rb-chat-name">{chatName || personLabel(openWith)}</span>
+                            <span className="rb-chat-name">
+                              <span className={`rb-chat-light${lightFor(openWith).on ? " is-on" : ""}`} aria-hidden />
+                              {chatName || personLabel(openWith)}
+                              {statusFor(openWith) ? <span className="rb-chat-seen">{statusFor(openWith)}</span> : null}
+                            </span>
                             {blocked.has(openWith) ? (
                               <button type="button" className="rb-entry-x rb-focus" onClick={() => blockPerson(openWith, false)}>
                                 Unblock

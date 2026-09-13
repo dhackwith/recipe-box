@@ -39,3 +39,9 @@ CREATE TABLE IF NOT EXISTS reads (
   PRIMARY KEY (person, pair)
 );
 
+-- When each person was last using the site, for the lights beside their name.
+-- One row each, overwritten: this is the only thing here that is not history.
+CREATE TABLE IF NOT EXISTS presence (
+  person TEXT PRIMARY KEY,
+  at     TEXT NOT NULL
+);

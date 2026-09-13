@@ -22,10 +22,17 @@
  * Cloudflare does not limit how long a request may stay open while the client
  * is connected, and waiting is not CPU time.
  *
- * GET  ?people                  -> who can be messaged, and who you have blocked
+ * WHO IS ABOUT. Every person has one row saying when they were last seen, and
+ * "last seen" means anywhere on the site: the page says it is here on the same
+ * request that asks for the unread count, so one write every three quarters of
+ * a minute covers the lights, the badge and being counted as present. Green is
+ * ONLINE_MS; after that the light goes out and the time stands in its place.
+ *
+ * GET  ?people                  -> who can be messaged, who you have blocked, who is about
  * GET  ?inbox                   -> every conversation, newest first, with unread counts
  * GET  ?with=<id>&since=<n>     -> that conversation; &wait=1 to hold for new ones
  * POST { to, text }             -> send
+ * POST { here }                 -> I am using the site: the unread count and the lights
  * POST { read, with }           -> mark read up to a message id
  * POST { block } / { unblock }  -> keep your own block list
  * DELETE ?id=<n>                -> take back something you sent
@@ -47,6 +54,8 @@ const PAGE = 200;
    enough that an open chat costs a couple of requests a minute. */
 const WAIT_MS = 25000;
 const TICK_MS = 900;
+/* Devon's five minutes: used the site inside this, and the light is on. */
+const ONLINE_MS = 5 * 60 * 1000;
 
 /* One name for a conversation, whichever end you look from. */
 const pairOf = (a, b) => [a, b].sort().join(":");
@@ -78,6 +87,34 @@ async function blockedBy(env, me) {
   return (results || []).map((r) => r.blocked);
 }
 
+/* Everybody's last-seen, as a list of people with a light each. Reading the
+   whole table is one query of half a dozen rows, which is cheaper than asking
+   about people one at a time. */
+async function lights(env, ids) {
+  const { results } = await env.MESSAGES.prepare("SELECT person, at FROM presence").all();
+  const seen = new Map((results || []).map((r) => [r.person, r.at]));
+  const now = Date.now();
+  return ids.map(({ id, name }) => {
+    const at = seen.get(id) || null;
+    const when = at ? Date.parse(at) : NaN;
+    return { id, name, seen: at, online: Number.isFinite(when) && now - when < ONLINE_MS };
+  });
+}
+
+/* What the badge shows: everything said to you that you have not read, less
+   anybody you have blocked. */
+async function unreadFor(env, me) {
+  const row = await env.MESSAGES
+    .prepare(`SELECT SUM(CASE WHEN m.recipient = ?1 AND m.id > COALESCE(r.last_read, 0) AND m.deleted = 0 THEN 1 ELSE 0 END) AS unread
+              FROM messages m
+              LEFT JOIN reads r ON r.person = ?1 AND r.pair = m.pair
+              WHERE (m.sender = ?1 OR m.recipient = ?1)
+                AND m.sender NOT IN (SELECT blocked FROM blocks WHERE blocker = ?1)`)
+    .bind(me)
+    .first();
+  return Number(row?.unread) || 0;
+}
+
 async function conversation(env, pair, since) {
   const { results } = await env.MESSAGES
     .prepare("SELECT id, sender, recipient, text, at, deleted FROM messages WHERE pair = ?1 AND id > ?2 ORDER BY id LIMIT ?3")
@@ -103,7 +140,11 @@ export async function onRequest({ request, env }) {
       /* Who there is to talk to. Names and ids only: nobody's address leaves
          the server, because the page has no use for one. */
       if (url.searchParams.get("people") !== null) {
-        return json({ me, people: people().filter((p) => p.id !== me.id), blocked: await blockedBy(env, me.id) });
+        return json({
+          me,
+          people: await lights(env, people().filter((p) => p.id !== me.id)),
+          blocked: await blockedBy(env, me.id),
+        });
       }
 
       /* The inbox: one row per conversation, newest first, with how many of
@@ -170,6 +211,17 @@ export async function onRequest({ request, env }) {
     if (request.method === "POST") {
       const body = await request.json().catch(() => null);
       if (!body || typeof body !== "object") return json({ error: "Send it as JSON" }, 400);
+
+      /* Here, and what has happened while I was: one write, and the two things
+         every page wants back from it. */
+      if (body.here !== undefined) {
+        await env.MESSAGES
+          .prepare(`INSERT INTO presence (person, at) VALUES (?1, ?2)
+                    ON CONFLICT (person) DO UPDATE SET at = ?2`)
+          .bind(me.id, nowIso())
+          .run();
+        return json({ unread: await unreadFor(env, me.id), people: await lights(env, people()) });
+      }
 
       /* Your own block list. One-way: blocking somebody says nothing about
          whether they have blocked you. */

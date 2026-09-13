@@ -164,5 +164,42 @@ is("your own is", (await call("DELETE", `?id=${mine.data.message.id}`, devon)).s
 const afterDelete = (await call("GET", "?with=devon", nick)).data.messages.find((m) => m.id === mine.data.message.id);
 is("...and it leaves a gap rather than vanishing", [afterDelete.deleted, afterDelete.text], [true, ""]);
 
+/* ── who is about ──
+   One request says "I am here" and brings back the badge and the lights. */
+const beat = await call("POST", "", devon, { here: true });
+is("saying you are here is allowed", beat.status, 200);
+is("...and you are lit", beat.data.people.find((p) => p.id === "devon")?.online, true);
+is("...everybody is listed, you included", beat.data.people.length, 6);
+is("...somebody never seen is unlit and has no time",
+  [beat.data.people.find((p) => p.id === "haven")?.online, beat.data.people.find((p) => p.id === "haven")?.seen], [false, null]);
+is("...and the unread count rides along", typeof beat.data.unread, "number");
+
+await call("POST", "", nick, { here: true });
+is("the other end sees your light from their side",
+  (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon")?.online, true);
+
+/* Six minutes ago is not "now". */
+sqlite.prepare("UPDATE presence SET at = ?1 WHERE person = ?2")
+  .run(new Date(Date.now() - 6 * 60 * 1000).toISOString(), "devon");
+const stale = (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon");
+is("six minutes out and the light is off", stale.online, false);
+is("...but it still says when they were last seen", typeof stale.seen, "string");
+
+sqlite.prepare("UPDATE presence SET at = ?1 WHERE person = ?2")
+  .run(new Date(Date.now() - 4 * 60 * 1000).toISOString(), "devon");
+is("four minutes out is still here",
+  (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon")?.online, true);
+
+is("being here needs a sign-in too", (await call("POST", "", null, { here: true })).status, 403);
+is("saying you are here twice keeps one row, not two",
+  (await call("POST", "", devon, { here: true })).status === 200 && sqlite.prepare("SELECT COUNT(*) AS n FROM presence WHERE person = ?1").get("devon").n, 1);
+
+/* The badge leaves out anybody you have blocked. */
+await call("POST", "", michael, { to: "devon", text: "still here?" });
+const before = (await call("POST", "", devon, { here: true })).data.unread;
+await call("POST", "", devon, { block: "michael" });
+is("blocking somebody takes their unread away", (await call("POST", "", devon, { here: true })).data.unread < before, true);
+await call("POST", "", devon, { unblock: "michael" });
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

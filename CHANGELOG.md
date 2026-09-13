@@ -14,6 +14,7 @@ out unless they would notice it.
 ## 2026-09-13
 
 - **Private messages.** A new Messages page lets anyone in the family write to anyone else, one to one. Messages arrive about a second after they're sent while you have the page open, and the button beside Meal plan and Shopping list shows how many you haven't read. Nobody else can see a conversation you're in, you can take back something you sent, and anyone you block can no longer write to you — they're told plainly rather than left talking to a wall. Slurs are refused here as everywhere else.
+- **See who's about.** Every name in Messages now carries a light: green for somebody who has used the site in the last five minutes, unlit otherwise, with "Last seen" and the time beside it. It counts any page, not just Messages, and the status is written in words as well as shown as a colour.
 
 ## 2026-09-12
 
