@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **Block from the name at the top of a chat.** Tap the person's name in a chat window and a small menu drops down with Block, or Unblock if you've blocked them. It used to be a link under the message box. The _ button still shrinks the chat.
 - **Send a GIF.** Tap GIF beside the paperclip in any chat and search for one, or pick from what's popular right now. Tap a GIF and it's sent. The GIFs come from KLIPY, with the strictest family-safe setting on.
 - **Answer with an emoji.** Every chat has a 👍 beside Send, and one tap sends it. Press and hold it to choose a different emoji from a small menu. Your choice takes the thumbs up's place in all your chats. A message that's only an emoji or three shows up large.
 - **Send photos and files in Messenger.** Tap the paperclip in a chat to attach a photo or a file up to 5 MB, or paste a picture straight into the message box. Photos show up in the conversation, and you can tap one to see it full size. Other files show as a card to download. Only the two of you can open what's sent, and taking a message back takes its file with it.

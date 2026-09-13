@@ -1201,6 +1201,24 @@ function ChatWindow({
   const fileRef = useRef(null);
   const [gifOpen, setGifOpen] = useState(false);
 
+  /* Tapping their name opens a small menu about them — for now, Block or
+     Unblock — the way Facebook's chat does. A tap anywhere else, Escape, or
+     minimising the window puts it away. */
+  const [personMenu, setPersonMenu] = useState(false);
+  const personRef = useRef(null);
+  useEffect(() => {
+    if (minimized) { setPersonMenu(false); return; }
+    if (!personMenu) return;
+    personRef.current?.querySelector('[role="menuitem"]')?.focus();
+    const away = (e) => { if (!personRef.current?.contains(e.target)) setPersonMenu(false); };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [personMenu, minimized]);
+  const closePersonMenu = () => {
+    setPersonMenu(false);
+    personRef.current?.querySelector(".rb-chatwin-title")?.focus();
+  };
+
   /* The quick emoji beside Send. A tap sends it. Pressing and holding opens a
      small menu to choose a different one, which then stands in its place in
      every chat — and so does a right-click, or the up arrow for somebody on a
@@ -1418,13 +1436,37 @@ function ChatWindow({
   return (
     <section className="rb-chatwin" aria-label={`Chat with ${name}`}>
       <div className="rb-chatwin-head">
-        <button type="button" className="rb-chatwin-title rb-focus" onClick={onMinimize} aria-label={`Minimise your chat with ${name}`}>
-          {faceWithLight(id, name, 30)}
-          <span className="rb-chatwin-lines">
-            <span className="rb-chatwin-name">{name}</span>
-            {status ? <span className="rb-chat-seen">{status}</span> : null}
-          </span>
-        </button>
+        <span className="rb-person-wrap" ref={personRef}>
+          <button
+            type="button"
+            className="rb-chatwin-title rb-focus"
+            onClick={() => setPersonMenu((open) => !open)}
+            aria-haspopup="menu"
+            aria-expanded={personMenu}
+            title={`Options for ${name}`}
+          >
+            {faceWithLight(id, name, 30)}
+            <span className="rb-chatwin-lines">
+              <span className="rb-chatwin-nameline">
+                <span className="rb-chatwin-name">{name}</span>
+                <span className="rb-chatwin-caret" aria-hidden>▾</span>
+              </span>
+              {status ? <span className="rb-chat-seen">{status}</span> : null}
+            </span>
+          </button>
+          {personMenu && (
+            <div
+              className="rb-person-menu"
+              role="menu"
+              aria-label={`Options for ${name}`}
+              onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); closePersonMenu(); } }}
+            >
+              <button type="button" role="menuitem" onClick={() => { setPersonMenu(false); onBlock(!blocked); }}>
+                {blocked ? `Unblock ${first}` : `Block ${first}`}
+              </button>
+            </div>
+          )}
+        </span>
         <button type="button" className="rb-chatwin-ctl is-minimise rb-focus" onClick={onMinimize} aria-label={`Minimise your chat with ${name}`} title="Minimise">
           <span aria-hidden>_</span>
         </button>
@@ -1576,9 +1618,6 @@ function ChatWindow({
               title="Send a GIF"
             >
               GIF
-            </button>
-            <button type="button" className="rb-entry-x rb-focus" onClick={() => onBlock(!blocked)}>
-              {blocked ? `Unblock ${first}` : `Block ${first}`}
             </button>
           </span>
           <span className="rb-chatwin-send">
@@ -5029,6 +5068,12 @@ export default function RecipeBox() {
     .rb-chatwin-lines { min-width: 0; display: flex; flex-direction: column; }
     .rb-chatwin-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
     .rb-chatwin-lines .rb-chat-seen { margin-top: 1px; font-size: 11px; }
+    .rb-person-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
+    .rb-chatwin-nameline { min-width: 0; display: flex; align-items: center; gap: 5px; }
+    .rb-chatwin-caret { flex: none; font-size: 10px; opacity: .7; }
+    .rb-person-menu { position: absolute; left: 2px; top: calc(100% + 4px); z-index: 3; min-width: 170px; padding: 4px; border: 1px solid var(--card-edge); border-radius: 8px; background: var(--card-bg); box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); }
+    .rb-person-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 5px; background: none; text-align: left; cursor: pointer; color: var(--card-text); font: 500 13.5px/1.3 ${SOCIAL}; }
+    .rb-person-menu button:hover, .rb-person-menu button:focus-visible { background: var(--card-lift); outline: none; }
     .rb-chatwin-ctl { flex: none; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: none; border: 0; border-radius: 50%; cursor: pointer; color: inherit; opacity: .7; font: 600 18px/1 ${SOCIAL}; }
     .rb-chatwin-ctl:hover { opacity: 1; background: color-mix(in srgb, currentColor 10%, transparent); }
     /* an underscore sits on the baseline; lifted, it reads as a minimise bar */
