@@ -21,6 +21,7 @@
 import { findMicrodataRecipe } from "../../shared/microdata.js";
 import { findHRecipe } from "../../shared/hrecipe.js";
 import { suggest } from "../../shared/fill.js";
+import { pageMeta } from "../../shared/pagemeta.js";
 
 const MAX_PAGE = 5 * 1024 * 1024;
 const MAX_IMAGE = 10 * 1024 * 1024;
@@ -122,7 +123,7 @@ export function fillGaps(recipe, extra) {
   if (!recipe || !extra) return recipe || extra;
   const out = { ...recipe };
   const empty = (v) => v == null || v === "" || (Array.isArray(v) && !v.length);
-  for (const [k, v] of Object.entries(extra)) if (empty(out[k])) out[k] = v;
+  for (const [k, v] of Object.entries(extra)) if (empty(out[k]) && !empty(v)) out[k] = v;
   return out;
 }
 
@@ -155,7 +156,11 @@ async function load(url) {
   if (!recipe) {
     return json({ error: "That page doesn't publish a recipe this can read — try copying the recipe text into the paste box instead" }, 422);
   }
-  return { recipe, html, from: res.url || url.toString() };
+  /* A description and tags from the page around the recipe, for a recipe that
+     published neither itself. Tags go in as keywords, so the client's usual
+     rules apply: category and cuisine still win, and long ones are dropped. */
+  const { description, tags } = pageMeta(html);
+  return { recipe: fillGaps(recipe, { description, keywords: tags }), html, from: res.url || url.toString() };
 }
 
 async function page(url) {
