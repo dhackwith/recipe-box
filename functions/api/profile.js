@@ -26,7 +26,7 @@
  * picture is handed the new version directly, so only everybody else waits.
  */
 
-import { identity, personFor, isPerson } from "../../shared/access.js";
+import { identity, personFor, isPerson, isOwner } from "../../shared/access.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -82,7 +82,9 @@ export async function onRequest({ request, env }) {
         if (isPerson(id)) faces[id] = String(k.metadata?.v || "1");
       }
       return json({
-        me: { id: me.id, name: me.name, face: faces[me.id] || null, canHaveFace: isPerson(me.id) },
+        /* owner rides along here because this is asked for on every page load;
+           the page only uses it to offer Remove, and the server checks again. */
+        me: { id: me.id, name: me.name, face: faces[me.id] || null, canHaveFace: isPerson(me.id), owner: isOwner(email) },
         faces,
       });
     }

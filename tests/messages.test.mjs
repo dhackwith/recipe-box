@@ -90,7 +90,7 @@ is("without the database it says so", (await onRequest({ env: {}, request: new R
 const roster = await call("GET", "?people", devon);
 is("everybody else is listed", roster.data.people.map((p) => p.id).sort(), ["ashton", "haven", "michael", "nicholas", "tracey"]);
 is("...by name", roster.data.people.find((p) => p.id === "nicholas").name, "Nicholas Heyer");
-is("...and you are told who you are", roster.data.me, { id: "devon", name: "Devon Hackwith" });
+is("...and you are told who you are", roster.data.me, { id: "devon", name: "Devon Hackwith", owner: true });
 is("nobody's address is sent to the page", JSON.stringify(roster.data).includes("@"), false);
 
 /* ── sending and reading ── */
@@ -166,6 +166,36 @@ is("somebody else's message is not yours to take back", (await call("DELETE", `?
 is("your own is", (await call("DELETE", `?id=${mine.data.message.id}`, devon)).status, 200);
 const afterDelete = (await call("GET", "?with=devon", nick)).data.messages.find((m) => m.id === mine.data.message.id);
 is("...and it leaves a gap rather than vanishing", [afterDelete.deleted, afterDelete.text], [true, ""]);
+is("...marked as taken back, not removed", afterDelete.removed, false);
+
+/* A minute to change your mind, and then it stays. The clock is the server's:
+   the stored time is moved back rather than waiting a minute. */
+const ageBy = (id, ms) => sqlite.prepare("UPDATE messages SET at = ? WHERE id = ?").run(new Date(Date.now() - ms).toISOString(), id);
+const late = await call("POST", "", michael, { to: "nicholas", text: "said in haste" });
+ageBy(late.data.message.id, 61_000);
+const tooLate = await call("DELETE", `?id=${late.data.message.id}`, michael);
+is("after a minute your own message can't be taken back", tooLate.status, 403);
+is("...and you are told why", /minute/.test(tooLate.data.error), true);
+is("...and it is still there",
+  (await call("GET", "?with=michael", nick)).data.messages.find((m) => m.id === late.data.message.id)?.text, "said in haste");
+const justInTime = await call("POST", "", michael, { to: "nicholas", text: "oops" });
+ageBy(justInTime.data.message.id, 50_000);
+is("inside the minute it still can", (await call("DELETE", `?id=${justInTime.data.message.id}`, michael)).status, 200);
+
+/* The owner may remove anybody's, however old, and it says removed. */
+is("the owner is told they are the owner", (await call("GET", "?people", devon)).data.me.owner, true);
+is("...and nobody else is", (await call("GET", "?people", nick)).data.me.owner, false);
+const fromNick = await call("POST", "", nick, { to: "devon", text: "something that should go" });
+ageBy(fromNick.data.message.id, 10 * 60_000);
+is("nobody else may remove somebody else's message", (await call("DELETE", `?id=${fromNick.data.message.id}`, michael)).status, 403);
+is("the owner may, however old it is", (await call("DELETE", `?id=${fromNick.data.message.id}`, devon)).status, 200);
+const removedRow = (await call("GET", "?with=devon", nick)).data.messages.find((m) => m.id === fromNick.data.message.id);
+is("...leaving a gap marked as removed", [removedRow.deleted, removedRow.text, removedRow.removed], [true, "", true]);
+const ownOld = await call("POST", "", devon, { to: "nicholas", text: "an old one of mine" });
+ageBy(ownOld.data.message.id, 5 * 60_000);
+const ownGone = await call("DELETE", `?id=${ownOld.data.message.id}`, devon);
+is("the owner's own old messages can go too, as removed", [ownGone.status, ownGone.data.removed], [200, true]);
+is("a message that isn't there", (await call("DELETE", "?id=999999", devon)).status, 404);
 
 /* ── who is about ──
    One request says "I am here" and brings back the badge and the lights. */

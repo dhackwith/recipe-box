@@ -37,10 +37,11 @@
  * POST { here }                 -> I am using the site: the unread count and the lights
  * POST { read, with }           -> mark read up to a message id
  * POST { block } / { unblock }  -> keep your own block list
- * DELETE ?id=<n>                -> take back something you sent
+ * DELETE ?id=<n>                -> take back something you sent, within a minute of sending;
+ *                                  the owner may remove anybody's, at any age
  */
 
-import { identity, personFor, personName, people, isPerson } from "../../shared/access.js";
+import { identity, personFor, personName, people, isPerson, isOwner } from "../../shared/access.js";
 import { hasHate } from "../../shared/hate.js";
 
 const json = (data, status = 200) =>
@@ -58,6 +59,13 @@ const WAIT_MS = 25000;
 const TICK_MS = 900;
 /* Devon's five minutes: used the site inside this, and the light is on. */
 const ONLINE_MS = 5 * 60 * 1000;
+/* How long you have to take back something you sent. After that it has been
+   read, or could have been, and it stays. */
+const TAKE_BACK_MS = 60 * 1000;
+/* `deleted` says how a message went: 1 taken back by whoever sent it, 2
+   removed by the owner, so each end can tell which happened. */
+const TAKEN_BACK = 1;
+const REMOVED = 2;
 
 /* One name for a conversation, whichever end you look from. */
 const pairOf = (a, b) => [a, b].sort().join(":");
@@ -71,6 +79,7 @@ const shape = (row, me) => ({
   mine: row.sender === me,
   from: row.sender,
   deleted: !!row.deleted,
+  removed: row.deleted === REMOVED,
 });
 
 async function blockersBetween(env, me, them) {
@@ -159,7 +168,7 @@ export async function onRequest({ request, env }) {
          the server, because the page has no use for one. */
       if (url.searchParams.get("people") !== null) {
         return json({
-          me,
+          me: { ...me, owner: isOwner(email) },
           people: await lights(env, people().filter((p) => p.id !== me.id)),
           blocked: await blockedBy(env, me.id),
         });
@@ -311,21 +320,40 @@ export async function onRequest({ request, env }) {
         .bind(pairOf(me.id, to), me.id, to, text, at)
         .run();
       const id = written?.meta?.last_row_id ?? null;
-      return json({ message: { id, text, at, mine: true, from: me.id, deleted: false } }, 201);
+      return json({ message: { id, text, at, mine: true, from: me.id, deleted: false, removed: false } }, 201);
     }
 
     if (request.method === "DELETE") {
       const id = parseInt(url.searchParams.get("id") || "", 10);
       if (!Number.isFinite(id)) return json({ error: "which message?" }, 400);
-      /* Only your own, and only its words: the message stays as a gap in the
-         conversation, because a hole where a line was is easier to read than a
-         conversation that silently renumbers itself. */
-      const done = await env.MESSAGES
-        .prepare("UPDATE messages SET deleted = 1, text = '' WHERE id = ?1 AND sender = ?2")
-        .bind(id, me.id)
+      /* Only its words go: the message stays as a gap in the conversation,
+         because a hole where a line was is easier to read than a conversation
+         that silently renumbers itself.
+
+         Your own, within a minute of sending — after that it stays. The owner
+         may remove anybody's at any age, and that is marked as removed rather
+         than taken back, so nobody is left thinking the sender changed their
+         mind. The time is the server's own stamp, never the page's clock. */
+      const row = await env.MESSAGES
+        .prepare("SELECT sender, at, deleted FROM messages WHERE id = ?1")
+        .bind(id)
+        .first();
+      if (!row) return json({ error: "that message isn't there" }, 404);
+      if (row.deleted) return json({ id, deleted: true, removed: row.deleted === REMOVED });
+
+      const mine = row.sender === me.id;
+      const fresh = Date.now() - Date.parse(row.at) < TAKE_BACK_MS;
+      const owner = isOwner(email);
+      if (!owner) {
+        if (!mine) return json({ error: "that isn't yours to take back" }, 403);
+        if (!fresh) return json({ error: "It's been more than a minute since you sent that, so it stays" }, 403);
+      }
+      const how = mine && fresh ? TAKEN_BACK : REMOVED;
+      await env.MESSAGES
+        .prepare("UPDATE messages SET deleted = ?1, text = '' WHERE id = ?2")
+        .bind(how, id)
         .run();
-      if (!done?.meta?.changes) return json({ error: "that isn't yours to take back" }, 403);
-      return json({ id, deleted: true });
+      return json({ id, deleted: true, removed: how === REMOVED });
     }
 
     return json({ error: "method not allowed" }, 405);

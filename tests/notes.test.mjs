@@ -111,10 +111,15 @@ is("...so the names are unchanged",
 /* ── removing ── */
 const mine = renamed.data.entries.find((e) => e.mine);
 const theirs = renamed.data.entries.find((e) => !e.mine);
-is("somebody else's note is not yours to remove", (await call("DELETE", `?id=${theirs.id}`, devon)).status, 403);
-is("...and it is still there", kv.has(theirs.id), true);
+is("the owner may remove anybody's note", renamed.data.entries.map((e) => e.canRemove), [true, true]);
+const traceyView = (await call("GET", "?recipe=r2", tracey)).data.entries;
+is("...and anybody else only their own", traceyView.map((e) => [e.mine, e.canRemove]).sort(), [[false, false], [true, true]]);
+is("somebody else's note is not yours to remove", (await call("DELETE", `?id=${mine.id}`, tracey)).status, 403);
+is("...and it is still there", kv.has(mine.id), true);
 is("your own comes out", (await call("DELETE", `?id=${mine.id}`, devon)).status, 200);
 is("...and is gone", kv.has(mine.id), false);
+is("the owner can remove somebody else's", (await call("DELETE", `?id=${theirs.id}`, devon)).status, 200);
+is("...and it is gone too", kv.has(theirs.id), false);
 is("a missing id is refused", (await call("DELETE", "?id=note:r2:nope", devon)).status, 404);
 
 /* ── length ── */

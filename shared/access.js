@@ -57,7 +57,7 @@ export async function identity(request) {
  * Somebody not listed still gets in — Access, not this file, decides that — and
  * is named from their address until they are added here. */
 const PEOPLE = [
-  { id: "devon", name: "Devon Hackwith", addresses: ["devonhackwith@gmail.com"] },
+  { id: "devon", name: "Devon Hackwith", addresses: ["devonhackwith@gmail.com"], owner: true },
   { id: "tracey", name: "Tracey Hackwith", addresses: ["uktraceyj"] },
   { id: "haven", name: "Haven Hackwith", addresses: ["hhackwith"] },
   { id: "ashton", name: "Ashton Hackwith", addresses: ["ashtonhack"] },
@@ -123,3 +123,11 @@ export function personName(id) {
 
 /** Whether an id is somebody the box knows, which is who may be messaged. */
 export const isPerson = (id) => PEOPLE.some((p) => p.id === id);
+
+/** Whether a signed-in address belongs to the site's owner, who may remove
+    anybody's notes and messages. Read from the roster, like a name, so it can
+    only be granted by editing this file — never by anything a page sends. */
+export function isOwner(email) {
+  const person = personFor(email);
+  return !!person && PEOPLE.some((p) => p.id === person.id && p.owner === true);
+}

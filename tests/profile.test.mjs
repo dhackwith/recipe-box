@@ -76,6 +76,8 @@ is("nobody has a picture yet", first.data.faces, {});
 is("...and you are told who you are", first.data.me.id, "devon");
 is("...that you can keep one", first.data.me.canHaveFace, true);
 is("...and that you haven't", first.data.me.face, null);
+is("the owner is told so", first.data.me.owner, true);
+is("...and nobody else is", (await face("GET", "?faces", nick)).data.me.owner, false);
 
 /* ── what is let in ── */
 const refused = async (label, value) => is(label, (await face("PUT", "", devon, { face: value })).status, 400);

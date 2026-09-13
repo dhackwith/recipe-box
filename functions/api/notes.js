@@ -40,7 +40,7 @@
  * Requires the same RECIPES binding as /api/storage.
  */
 
-import { identity, displayName, personFor, isPerson } from "../../shared/access.js";
+import { identity, displayName, personFor, isPerson, isOwner } from "../../shared/access.js";
 import { hasHate } from "../../shared/hate.js";
 
 const json = (data, status = 200) =>
@@ -108,10 +108,12 @@ const authorOf = (email) => {
   const person = personFor(email);
   return person && isPerson(person.id) ? person.id : null;
 };
-function present(id, e, email) {
+/* `canRemove` is whether the reader may take this entry away: their own, or
+   anybody's when the reader is the site's owner. A placeholder is nobody's. */
+function present(id, e, email, owner = false) {
   const parent = okParent(e.parent) ? e.parent : null;
   if (e.deleted) {
-    return { id, kind: "note", text: "", at: e.at || "", name: "", who: null, mine: false, shot: null, hasPhoto: false, parent, deleted: true };
+    return { id, kind: "note", text: "", at: e.at || "", name: "", who: null, mine: false, canRemove: false, shot: null, hasPhoto: false, parent, deleted: true };
   }
   return {
     id,
@@ -121,6 +123,7 @@ function present(id, e, email) {
     name: displayName(e.email || ""),
     who: authorOf(e.email || ""),
     mine: e.email === email,
+    canRemove: e.email === email || owner,
     shot: typeof e.shot === "string" ? e.shot : null,
     hasPhoto: e.hasPhoto === true,
     parent,
@@ -168,6 +171,7 @@ export async function onRequest({ request, env }) {
   if (!email) {
     return json({ error: "Could not tell who is signed in, so there is nobody to sign this as" }, 403);
   }
+  const owner = isOwner(email);
 
   const url = new URL(request.url);
 
@@ -225,7 +229,7 @@ export async function onRequest({ request, env }) {
           let e;
           try { e = JSON.parse(raw); } catch { continue; }
           if (e.deleted) continue;
-          const shown = { ...present(k.name, e, email), recipe: k.recipe };
+          const shown = { ...present(k.name, e, email, owner), recipe: k.recipe };
           /* A reply in the feed says whose note it answers, so it reads as a
              reply and can take somebody to that note. One more read, and only
              for the replies among the handful shown. An empty name means the
@@ -249,7 +253,7 @@ export async function onRequest({ request, env }) {
         if (!raw) continue;                       // deleted between listing and reading
         let e;
         try { e = JSON.parse(raw); } catch { continue; }
-        entries.push(present(k.name, e, email));
+        entries.push(present(k.name, e, email, owner));
       }
 
       return json({ me: { name: displayName(email) }, entries, truncated: listed.list_complete === false });
@@ -309,7 +313,7 @@ export async function onRequest({ request, env }) {
       await env.RECIPES.put(key, JSON.stringify({ kind, text, email, at, shot, hasPhoto: !!photo, ...(parent ? { parent } : {}) }));
 
       return json({
-        entry: { id: key, kind, text, at, name: displayName(email), who: authorOf(email), mine: true, shot, hasPhoto: !!photo, parent, deleted: false },
+        entry: { id: key, kind, text, at, name: displayName(email), who: authorOf(email), mine: true, canRemove: true, shot, hasPhoto: !!photo, parent, deleted: false },
       }, 201);
     }
 
@@ -321,9 +325,11 @@ export async function onRequest({ request, env }) {
       if (!raw) return json({ error: "not found" }, 404);
       let e;
       try { e = JSON.parse(raw); } catch { e = null; }
-      /* Only the person who wrote it. The check is here rather than in the app
-         because the app is the thing being checked. */
-      if (!e || e.email !== email) {
+      /* Only the person who wrote it, or the site's owner. The check is here
+         rather than in the app because the app is the thing being checked. A
+         placeholder is refused to everybody: it is what holds a thread together,
+         and it goes on its own when its last reply does. */
+      if (!e || e.deleted || (e.email !== email && !owner)) {
         return json({ error: "that isn't yours to remove" }, 403);
       }
       /* The picture goes either way. Left behind it would be unreachable but

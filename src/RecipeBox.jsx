@@ -1014,6 +1014,9 @@ const mergeById = (all, incoming) => {
    room, one on a phone, where an open chat takes the width of the screen. */
 const CHATS_KEY = "recipe-box-chats";
 const MAX_CHATS = 5;
+/* How long Take back is offered after sending. The server holds the same line
+   by its own clock (functions/api/messages.js). */
+const TAKE_BACK_MS = 60 * 1000;
 const roomForChats = () => {
   const w = typeof window === "undefined" ? 1280 : window.innerWidth;
   return w < 700 ? 1 : Math.max(1, Math.min(3, Math.floor((w - 320) / 330)));
@@ -1026,7 +1029,7 @@ const roomForChats = () => {
    draft, and flashes when the friends list's own loop says something unread
    has arrived. Opened again, it catches up from the last message it had. */
 function ChatWindow({
-  id, name, minimized, focusAt, unread, blocked,
+  id, name, minimized, focusAt, unread, blocked, owner,
   face, faceWithLight, statusFor,
   onMinimize, onRestore, onClose, onBlock, onRead, onSent,
 }) {
@@ -1072,6 +1075,20 @@ function ChatWindow({
     return () => { stop = true; };
   }, [id, minimized]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* Take back is offered for a minute. The window redraws the moment the
+     youngest offer runs out, so the button goes when the server would start
+     refusing it, rather than whenever something next happens to redraw. */
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const left = messages
+      .filter((m) => m.mine && !m.deleted)
+      .map((m) => Date.parse(m.at) + TAKE_BACK_MS - Date.now())
+      .filter((ms) => ms > 0);
+    if (!left.length) return;
+    const t = setTimeout(() => setTick((n) => n + 1), Math.min(...left) + 250);
+    return () => clearTimeout(t);
+  });
+
   /* The newest line in view, as a chat window always has it. */
   useEffect(() => {
     const el = threadRef.current;
@@ -1105,10 +1122,13 @@ function ChatWindow({
     }
   };
 
-  const takeBack = async (messageId) => {
+  /* Taking back your own, or — for the owner — removing anybody's. Removing
+     is for good and reaches the other person's copy too, so it asks first. */
+  const takeBack = async (messageId, asOwner = false) => {
+    if (asOwner && !window.confirm("Remove this message for both of you? This can't be undone.")) return;
     try {
-      await messagesCall("DELETE", `?id=${encodeURIComponent(messageId)}`);
-      setMessages((all) => all.map((m) => (m.id === messageId ? { ...m, deleted: true, text: "" } : m)));
+      const res = await messagesCall("DELETE", `?id=${encodeURIComponent(messageId)}`);
+      setMessages((all) => all.map((m) => (m.id === messageId ? { ...m, deleted: true, text: "", removed: !!res.removed } : m)));
       onSent();
     } catch (err) {
       setError(String(err.message || err));
@@ -1173,15 +1193,19 @@ function ChatWindow({
                   {!m.mine && (endsRun ? face(id, name, 24) : <span className="rb-face-gap" aria-hidden />)}
                   <div className={`rb-msg${m.mine ? " is-mine" : ""}`}>
                     <p className={m.deleted ? "rb-msg-text rb-msg-gone" : "rb-msg-text"}>
-                      {m.deleted ? "Taken back" : m.text}
+                      {m.deleted ? (m.removed ? "Removed" : "Taken back") : m.text}
                     </p>
                     <p className="rb-msg-when">
                       <When iso={m.at} />
-                      {m.mine && !m.deleted && (
+                      {!m.deleted && (m.mine && Date.now() - Date.parse(m.at) < TAKE_BACK_MS ? (
                         <button type="button" className="rb-entry-x rb-focus" onClick={() => takeBack(m.id)}>
                           Take back
                         </button>
-                      )}
+                      ) : owner ? (
+                        <button type="button" className="rb-entry-x rb-focus" onClick={() => takeBack(m.id, true)} aria-label="Remove this message">
+                          Remove
+                        </button>
+                      ) : null)}
                     </p>
                   </div>
                 </li>
@@ -3008,7 +3032,7 @@ export default function RecipeBox() {
       setNotes((list) => (list || [])
         .filter((e) => !gone.has(e.id))
         .map((e) => (e.id === placeholder
-          ? { ...e, deleted: true, text: "", name: "", mine: false, shot: null, hasPhoto: false }
+          ? { ...e, deleted: true, text: "", name: "", who: null, mine: false, canRemove: false, shot: null, hasPhoto: false }
           : e)));
       if (replyTo && (gone.has(replyTo) || replyTo === placeholder)) setReplyTo(null);
     } catch (err) {
@@ -6498,13 +6522,18 @@ export default function RecipeBox() {
                               {beyondIndent && parent && (
                                 <span>to {parent.deleted ? "a removed note" : parent.name}</span>
                               )}
-                              {e.mine && (
+                              {(e.mine || e.canRemove) && (
                                 <button
                                   type="button"
                                   className="rb-focus rb-entry-x"
-                                  onClick={() => removeEntry(e.id)}
+                                  /* The owner removing somebody else's is asked first:
+                                     it is for good, and it is not theirs. */
+                                  onClick={() => {
+                                    if (!e.mine && !window.confirm(`Remove ${e.name}'s ${e.kind === "made" ? "entry" : "note"}? This can't be undone.`)) return;
+                                    removeEntry(e.id);
+                                  }}
                                   disabled={notesBusy}
-                                  aria-label="Remove what you wrote"
+                                  aria-label={e.mine ? "Remove what you wrote" : `Remove ${e.name}'s ${e.kind === "made" ? "entry" : "note"}`}
                                 >
                                   Remove
                                 </button>
@@ -7085,7 +7114,7 @@ export default function RecipeBox() {
                               {t.last && (
                                 <span className="rb-chat-last">
                                   {t.last.mine ? "You: " : ""}
-                                  {t.last.deleted ? "message taken back" : t.last.text}
+                                  {t.last.deleted ? (t.last.removed ? "message removed" : "message taken back") : t.last.text}
                                 </span>
                               )}
                               {statusFor(t.with) ? <span className="rb-chat-seen">{statusFor(t.with)}</span> : null}
@@ -7138,6 +7167,7 @@ export default function RecipeBox() {
             focusAt={c.focusAt}
             unread={waiting.find((w) => w.id === c.id)?.unread || 0}
             blocked={blockedIds.includes(c.id)}
+            owner={!!profile?.owner}
             face={face}
             faceWithLight={faceWithLight}
             statusFor={statusFor}
