@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Back buttons go back the way you came.** Opening the shopping list from the meal plan and going back used to leave the meal plan's back button doing nothing at all. Back on the meal plan, the shopping list and the nutrition tracker now retraces your steps one page at a time, always ends up at your recipes, and says where it is taking you.
 - **Reply to a note.** Every note and "I made this" on a recipe now has a Reply button, and replies sit indented under whatever they answer, so a question and its answer stay together. You can reply to a reply too. If someone removes a note that has replies, a small "Removed" marker keeps its place so the conversation still makes sense.
 - **Choose the photo when you import a recipe.** Importing a link still puts the page's main photo on the recipe straight away, and now lines up the other photos from the page beneath it. Tap one to use it instead. Only the one you pick is kept, and the sidebar pictures, cookbook covers and author photos that fill most recipe pages are left out.
 - **Imported recipes come with a description and tags.** When a recipe page doesn't describe or tag the recipe itself, the importer now uses the blurb the page shows when it's shared and the tags the post was filed under, so a Smitten Kitchen recipe arrives tagged cake, everyday cakes, peach, nectarine and summer. Tags show up as filters on the recipes page, so trim any you don't want before adding.

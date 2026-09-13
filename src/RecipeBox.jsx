@@ -13,6 +13,9 @@ import {
   dailyTargets, bmi, ACTIVITY, GOALS,
   lbToKg, kgToLb, feetInchesToCm, cmToFeetInches,
 } from "./body.js";
+/* The way back out of the meal plan, shopping list and tracker, which can each
+   be opened from the others. */
+import { trailTo, backFrom } from "./trail.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -2049,7 +2052,7 @@ export default function RecipeBox() {
   const [exporting, setExporting] = useState(false);
   const [list, setList] = useState(loadList);
   const listRef = useRef(list);              // the latest list, so quick successive changes build on each other
-  const shoppingFrom = useRef("list");
+  const toolTrail = useRef([]);              // the path back out of the tool pages — see trail.js
   const [newItem, setNewItem] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
   const [crossed, setCrossed] = useState(loadCrossed);
@@ -2407,6 +2410,10 @@ export default function RecipeBox() {
   const unfiled = box.recipes.filter((r) => !r.contributor).length;
 
   const openCard = (id) => {
+    /* A recipe opened from a tool page goes back to it, like one from the plan. */
+    if (view === "plan" || view === "shopping" || view === "today") {
+      toolTrail.current = trailTo(toolTrail.current, view, "detail");
+    }
     listStateRef.current = { query, scope, tagFilter, activeBox };
     listScrollRef.current = window.scrollY;
     setOpenId(id);
@@ -2424,6 +2431,10 @@ export default function RecipeBox() {
     setView("list");
     restoreScrollRef.current = listScrollRef.current;
   };
+
+  /* A recipe opened from a tool page — a planned meal, say — goes back there;
+     one opened from the recipes goes back to the list as it was left. */
+  const backFromRecipe = () => (toolTrail.current.length ? leaveShopping() : goBack());
 
   /* After the list is back on screen, not before — the page cannot be scrolled
      to a position the content does not occupy yet. Laid out rather than merely
@@ -2960,26 +2971,40 @@ export default function RecipeBox() {
       clearTimeout(daySyncTimer.current);
     };
   }, [syncDay]);
-  const openToday = () => {
-    if (view !== "today") shoppingFrom.current = view;
-    setView("today");
+  /* The tool pages keep a path back rather than one remembered page. With one
+     page, recipes → meal plan → shopping list → back left the meal plan
+     remembering it came from itself, and its back button went nowhere. */
+  const openTool = (to) => {
+    toolTrail.current = trailTo(toolTrail.current, view, to);
+    setView(to);
     window.scrollTo(0, 0);
   };
-  const openPlan = () => {
-    if (view !== "plan") shoppingFrom.current = view;
-    setView("plan");
-    window.scrollTo(0, 0);
-  };
+  const openToday = () => openTool("today");
+  const openPlan = () => openTool("plan");
   const openShopping = () => {
-    if (view !== "shopping") shoppingFrom.current = view;
     setConfirmClear(false);
-    setView("shopping");
-    window.scrollTo(0, 0);
+    openTool("shopping");
   };
   const leaveShopping = () => {
-    const back = shoppingFrom.current;
-    setView(back === "detail" && !openRecipe ? "list" : back);
+    const { to, trail } = backFrom(toolTrail.current);
+    toolTrail.current = trail;
+    setView(to === "detail" && !openRecipe ? "list" : to);
   };
+  const BACK_TO = {
+    list: "Back to recipes", detail: "Back to the recipe", form: "Back to editing", import: "Back to the import",
+    plan: "Back to the meal plan", shopping: "Back to the shopping list", today: "Back to the tracker",
+  };
+  /* what a tool page's back button will say: wherever the path actually leads */
+  const toolBackLabel = () => {
+    const { to } = backFrom(toolTrail.current);
+    return to === "detail" && !openRecipe ? BACK_TO.list : BACK_TO[to] || BACK_TO.list;
+  };
+  /* Arriving at the recipes is arriving home. There is nothing further back,
+     and a path left over from before would only send a later back button
+     somewhere stale. */
+  useEffect(() => {
+    if (view === "list") toolTrail.current = [];
+  }, [view]);
 
   /* Home: back to the list from anywhere. The search, filters and chosen box
      live outside the views, so they are still set when the list comes back.
@@ -3045,7 +3070,7 @@ export default function RecipeBox() {
   /* Tapping a planned meal opens the recipe, and Back comes here rather than to
      the list — somebody checking what Thursday needs is still planning. */
   const openFromPlan = (recipe) => {
-    shoppingFrom.current = "plan";
+    toolTrail.current = trailTo(toolTrail.current, "plan", "detail");
     setOpenId(recipe.id);
     setFactor(1);
     setView("detail");
@@ -3163,7 +3188,7 @@ export default function RecipeBox() {
   /* Escape backs out of a recipe, the same as the button */
   useEffect(() => {
     if (view !== "detail" || cooking) return;
-    const onKey = (e) => { if (e.key === "Escape") goBack(); };
+    const onKey = (e) => { if (e.key === "Escape") backFromRecipe(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [view, cooking]);
@@ -4424,7 +4449,7 @@ export default function RecipeBox() {
                 }}
               >
                 <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
-                Back to recipes
+                {toolBackLabel()}
               </button>
 
               <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Meal plan</h2>
@@ -4638,7 +4663,7 @@ export default function RecipeBox() {
                 }}
               >
                 <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
-                Back to recipes
+                {toolBackLabel()}
               </button>
 
               <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Daily nutrition tracker</h2>
@@ -5057,7 +5082,7 @@ export default function RecipeBox() {
           const needed = list.items.filter((i) => !i.checked);
           const got = list.items.filter((i) => i.checked);
           const onList = Object.entries(list.recipes);
-          const backLabel = { detail: "Back to the recipe", form: "Back to editing", import: "Back to the import" }[shoppingFrom.current] || "Back to recipes";
+          const backLabel = toolBackLabel();
           const row = (item) => {
             const described = describeItem(item);
             /* Converted here rather than when the item was added: the stored
@@ -5210,7 +5235,7 @@ export default function RecipeBox() {
             <div className="rb-pad" style={{ position: "relative", padding: "38px 34px 42px" }}>
               <button
                 className="rb-btn rb-focus rb-noprint"
-                onClick={goBack}
+                onClick={backFromRecipe}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 18,
                   background: "transparent", border: "none", padding: "4px 0",
@@ -5218,7 +5243,7 @@ export default function RecipeBox() {
                 }}
               >
                 <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
-                {backLabel()}
+                {toolTrail.current.length ? toolBackLabel() : backLabel()}
               </button>
               <h2 style={{ font: `300 clamp(30px, 4.6vw, 42px)/1.08 ${DISPLAY}`, margin: "0 0 10px", letterSpacing: "-0.02em", color: "var(--card-text)" }}>
                 {openRecipe.title}
