@@ -2536,14 +2536,42 @@ function Popover({ trigger, children, align = "left", width = 300, label, onOpen
     return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
   }, [open]);
   const toggle = () => setOpen((o) => { if (!o && onOpen) onOpen(); return !o; });
+
+  /* Lined up with the button's own edge, the panel can run off the screen when
+     the button is not where `align` expects — on a phone the toolbar wraps and
+     a right-aligned Filters button lands at the left, sending its panel out past
+     the left edge. So once it is open it is measured, and slid back in to sit
+     at least EDGE from either side. Measured before paint, so it never jumps. */
+  const EDGE = 16;
+  const panelRef = useRef(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!open) { setShift(0); return; }
+    const fit = () => {
+      const el = panelRef.current;
+      if (!el) return;
+      el.style.transform = "none";
+      const r = el.getBoundingClientRect();
+      const room = document.documentElement.clientWidth;
+      const dx = r.left < EDGE ? EDGE - r.left : r.right > room - EDGE ? room - EDGE - r.right : 0;
+      el.style.transform = dx ? `translateX(${Math.round(dx)}px)` : "none";
+      setShift(Math.round(dx));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [open]);
+
   return (
     <div ref={ref} style={{ position: "relative" }}>
       {trigger({ open, toggle })}
       {open && (
         <div
+          ref={panelRef}
           role="dialog"
           aria-label={label}
           style={{
+            transform: shift ? `translateX(${shift}px)` : "none",
             position: "absolute", top: "calc(100% + 6px)", [align]: 0, zIndex: 30, width, maxWidth: "calc(100vw - 32px)",
             background: "var(--card-bg)", color: "var(--card-text)", border: "1px solid var(--card-edge)", borderRadius: 3,
             padding: 10, boxShadow: "0 22px 44px -18px rgba(0,0,0,.6)", maxHeight: "min(74vh, 640px)", overflowY: "auto",
