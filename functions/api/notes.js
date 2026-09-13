@@ -40,7 +40,7 @@
  * Requires the same RECIPES binding as /api/storage.
  */
 
-import { identity, displayName } from "../../shared/access.js";
+import { identity, displayName, personFor, isPerson } from "../../shared/access.js";
 import { hasHate } from "../../shared/hate.js";
 
 const json = (data, status = 200) =>
@@ -101,10 +101,17 @@ function readKey(key) {
 /* One stored entry as the app sees it. A placeholder shows its place in the
    thread and nothing more: no words, no picture, and no name. */
 const okParent = (v) => typeof v === "string" && v.startsWith("note:");
+/* Whose profile picture goes beside an entry: the roster id, never the
+   address. Somebody off the roster has no id but their address, so they get
+   no picture rather than having that published (see /api/profile). */
+const authorOf = (email) => {
+  const person = personFor(email);
+  return person && isPerson(person.id) ? person.id : null;
+};
 function present(id, e, email) {
   const parent = okParent(e.parent) ? e.parent : null;
   if (e.deleted) {
-    return { id, kind: "note", text: "", at: e.at || "", name: "", mine: false, shot: null, hasPhoto: false, parent, deleted: true };
+    return { id, kind: "note", text: "", at: e.at || "", name: "", who: null, mine: false, shot: null, hasPhoto: false, parent, deleted: true };
   }
   return {
     id,
@@ -112,6 +119,7 @@ function present(id, e, email) {
     text: typeof e.text === "string" ? e.text : "",
     at: e.at || "",
     name: displayName(e.email || ""),
+    who: authorOf(e.email || ""),
     mine: e.email === email,
     shot: typeof e.shot === "string" ? e.shot : null,
     hasPhoto: e.hasPhoto === true,
@@ -301,7 +309,7 @@ export async function onRequest({ request, env }) {
       await env.RECIPES.put(key, JSON.stringify({ kind, text, email, at, shot, hasPhoto: !!photo, ...(parent ? { parent } : {}) }));
 
       return json({
-        entry: { id: key, kind, text, at, name: displayName(email), mine: true, shot, hasPhoto: !!photo, parent, deleted: false },
+        entry: { id: key, kind, text, at, name: displayName(email), who: authorOf(email), mine: true, shot, hasPhoto: !!photo, parent, deleted: false },
       }, 201);
     }
 

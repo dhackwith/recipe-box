@@ -13,6 +13,8 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **Chat with several people at once.** Messenger now works like Facebook's chat. Your friends list sits in the bottom corner, and tapping a name opens a chat window beside it. Open a few and they line up side by side. Each has a _ to shrink it to a small tab along the bottom, which flashes when something new arrives, and an × to close it. Your chats are still there the next time you visit.
+- **Put a face to your name.** Menu → Profile lets you choose a picture of yourself. It shows beside your notes and replies, in Lately, and all through Messenger, so you can tell who's talking at a glance. Anyone without a picture shows their initials instead.
 - **The messenger follows you around the site.** It's a button in the bottom right of every page now, rather than a page of its own. When somebody writes, their name flashes above it; tap the name and the conversation opens in a small window in the corner, so you can answer without leaving the recipe you were reading. Cooking mode still covers it, on purpose.
 - **A message you send no longer appears twice.** Sending added it to the page, and the check for new messages added it again a moment later.
 - **The family's own words have their own typeface.** Messenger, the notes and replies under a recipe, and Lately on the front page are now set in Nunito Sans, a rounder, friendlier face, so talking to each other looks different from reading a recipe.
