@@ -230,5 +230,69 @@ is("the entry goes", kv.has(picId), false);
 is("...and the picture goes with it, rather than sitting unreachable in the account",
   kv.has(shotKey), false);
 
+/* ── Replies ───────────────────────────────────────────────────────────
+   A reply names what it answers. Removing something that has replies leaves a
+   placeholder so the thread holds together, and the placeholder is cleared
+   away once nothing hangs from it. */
+const enc = encodeURIComponent;
+const threadRoot = await call("POST", "", devon, { recipe: "pie", text: "Blind bake the crust first" });
+const rootId = threadRoot.data.entry.id;
+const threadReply = await call("POST", "", tracey, { recipe: "pie", text: "How long for?", parent: rootId });
+is("a reply is created", threadReply.status, 201);
+is("...pointing at what it answers", threadReply.data.entry.parent, rootId);
+is("...and stored that way", JSON.parse(kv.get(threadReply.data.entry.id)).parent, rootId);
+const replyId = threadReply.data.entry.id;
+
+const threadDeep = await call("POST", "", devon, { recipe: "pie", text: "About fifteen minutes", parent: replyId });
+is("a reply can answer a reply", threadDeep.status, 201);
+const deepId = threadDeep.data.entry.id;
+
+const threadMade = await call("POST", "", tracey, { recipe: "pie", kind: "made", text: "Did it", parent: rootId });
+is("a reply is always a note, never a made-it", threadMade.data.entry.kind, "note");
+const madeId = threadMade.data.entry.id;
+
+is("a plain note has no parent", threadRoot.data.entry.parent, null);
+is("a reply to another recipe's note is refused",
+  (await call("POST", "", devon, { recipe: "stew2", text: "x", parent: rootId })).status, 400);
+is("a reply to something that isn't there is refused",
+  (await call("POST", "", devon, { recipe: "pie", text: "x", parent: "note:pie:2020-01-01T00:00:00.000Z-zzzz" })).status, 404);
+is("a parent that isn't a note id is refused",
+  (await call("POST", "", devon, { recipe: "pie", text: "x", parent: "shot:pie:whatever" })).status, 400);
+
+const pieList = await call("GET", "?recipe=pie", devon);
+const parentOf = Object.fromEntries(pieList.data.entries.map((e) => [e.id, e.parent]));
+is("the listing carries each entry's parent",
+  [parentOf[rootId], parentOf[replyId], parentOf[deepId], parentOf[madeId]], [null, rootId, replyId, rootId]);
+
+const tombstoned = await call("DELETE", `?id=${enc(rootId)}`, devon);
+is("removing a note with replies leaves a placeholder", tombstoned.data.placeholder, rootId);
+is("...so nothing is reported gone", tombstoned.data.removed, []);
+const stub = JSON.parse(kv.get(rootId));
+is("the placeholder keeps no words and no author", [stub.deleted, stub.text, stub.email], [true, undefined, undefined]);
+
+const afterStub = await call("GET", "?recipe=pie", devon);
+const shownStub = afterStub.data.entries.find((e) => e.id === rootId);
+is("the listing shows it as removed, with no name and no words",
+  [shownStub.deleted, shownStub.name, shownStub.text, shownStub.mine], [true, "", "", false]);
+is("...and its replies are still under it", afterStub.data.entries.filter((e) => e.parent === rootId).length, 2);
+is("nobody can remove a placeholder directly", (await call("DELETE", `?id=${enc(rootId)}`, devon)).status, 403);
+is("nobody can reply to one", (await call("POST", "", devon, { recipe: "pie", text: "x", parent: rootId })).status, 404);
+
+is("a reply with nothing under it just goes", (await call("DELETE", `?id=${enc(deepId)}`, devon)).data.removed, [deepId]);
+is("the placeholder stays while anything still hangs from it",
+  (await call("DELETE", `?id=${enc(madeId)}`, tracey)).data.removed, [madeId]);
+is("when the last reply goes, the placeholder goes with it",
+  (await call("DELETE", `?id=${enc(replyId)}`, tracey)).data.removed, [replyId, rootId]);
+is("...and nothing of the thread is left", [...kv.keys()].filter((k) => k.startsWith("note:pie:")), []);
+
+/* the feed: placeholders are not news, and replies say they are replies */
+const soupQ = await call("POST", "", devon, { recipe: "soup", text: "Too salty?" });
+const soupA = await call("POST", "", tracey, { recipe: "soup", text: "Use less stock", parent: soupQ.data.entry.id });
+await call("DELETE", `?id=${enc(soupQ.data.entry.id)}`, devon);
+const feedNow = await call("GET", "?recent=2", devon);
+is("the feed skips placeholders", feedNow.data.entries.some((e) => e.deleted || e.id === soupQ.data.entry.id), false);
+is("...and still fills its count from further back", feedNow.data.entries.length, 2);
+is("...and says which entries are replies", feedNow.data.entries[0].id === soupA.data.entry.id && feedNow.data.entries[0].parent, soupQ.data.entry.id);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

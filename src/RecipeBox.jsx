@@ -881,6 +881,29 @@ function loadList() {
    The server stamps who wrote each entry from the Access token, so nothing
    here sends an author and nothing here could usefully lie about one.
    ══════════════════════════════════════════════════════════════════ */
+/* How many levels a reply thread indents before it stops. Past this a long
+   back-and-forth would squeeze itself off a phone, so deeper replies line up
+   with the last indented level and say who they answer instead. */
+const REPLY_INDENTS = 3;
+
+/* Notes arrive flat, oldest first; replies hang under what they answer, in the
+   order they were written. An entry whose parent isn't in the list — past the
+   listing limit, say — is shown at the top rather than lost. */
+function threadNotes(entries) {
+  const ids = new Set(entries.map((e) => e.id));
+  const kids = new Map();
+  const roots = [];
+  for (const e of entries) {
+    if (e.parent && e.parent !== e.id && ids.has(e.parent)) {
+      if (!kids.has(e.parent)) kids.set(e.parent, []);
+      kids.get(e.parent).push(e);
+    } else {
+      roots.push(e);
+    }
+  }
+  return { roots, kids };
+}
+
 const NOTES_API = "/api/notes";
 
 async function notesCall(method, query = "", body) {
@@ -2253,6 +2276,10 @@ export default function RecipeBox() {
   const [noteText, setNoteText] = useState("");
   const [notesBusy, setNotesBusy] = useState(false);
   const [notesError, setNotesError] = useState("");
+  /* The entry a reply is being written to, and what it says so far. One at a
+     time: opening another reply box closes the first. */
+  const [replyTo, setReplyTo] = useState(null);
+  const [replyText, setReplyText] = useState("");
   const [notePhoto, setNotePhoto] = useState(null);   // { full, shot } waiting to be posted
   const [photoBusyNote, setPhotoBusyNote] = useState(false);
   const [lightbox, setLightbox] = useState(null);     // the entry being looked at full size
@@ -2262,6 +2289,8 @@ export default function RecipeBox() {
     let cancelled = false;
     setNotes(null);
     setNoteText("");
+    setReplyTo(null);
+    setReplyText("");
     setNotesError("");
     setNotePhoto(null);
     (async () => {
@@ -2321,11 +2350,39 @@ export default function RecipeBox() {
     }
   };
 
+  const addReply = async (parent) => {
+    const text = replyText.trim();
+    if (!text) return;
+    setNotesBusy(true);
+    setNotesError("");
+    try {
+      const { entry } = await notesCall("POST", "", { recipe: openId, kind: "note", text, parent });
+      setNotes((list) => [...(list || []), entry]);
+      setReplyTo(null);
+      setReplyText("");
+      flash("Reply added");
+    } catch (err) {
+      setNotesError(String(err.message || err));
+    } finally {
+      setNotesBusy(false);
+    }
+  };
+
+  /* The server says what actually went: the entry itself, any placeholders
+     above it left with nothing under them — or nothing at all, when it had
+     replies and was turned into a placeholder instead. */
   const removeEntry = async (id) => {
     setNotesBusy(true);
     try {
-      await notesCall("DELETE", `?id=${encodeURIComponent(id)}`);
-      setNotes((list) => (list || []).filter((e) => e.id !== id));
+      const res = await notesCall("DELETE", `?id=${encodeURIComponent(id)}`);
+      const placeholder = res?.placeholder || null;
+      const gone = new Set(Array.isArray(res?.removed) ? res.removed : placeholder ? [] : [id]);
+      setNotes((list) => (list || [])
+        .filter((e) => !gone.has(e.id))
+        .map((e) => (e.id === placeholder
+          ? { ...e, deleted: true, text: "", name: "", mine: false, shot: null, hasPhoto: false }
+          : e)));
+      if (replyTo && (gone.has(replyTo) || replyTo === placeholder)) setReplyTo(null);
     } catch (err) {
       setNotesError(String(err.message || err));
     } finally {
@@ -3454,7 +3511,18 @@ export default function RecipeBox() {
     .rb-photo-choice[aria-pressed="true"] { border-color: var(--card-accent); box-shadow: 0 0 0 2px var(--card-accent); }
     .rb-photo-choice:disabled { cursor: progress; opacity: .55; }
     .rb-entry-x { background: none; border: 0; padding: 0; cursor: pointer; font: 500 12px/1.4 ${UI}; color: var(--card-accent); text-decoration: underline; text-underline-offset: 2px; }
-    .rb-entry-x:disabled { cursor: default; opacity: .5; }    /* Something you can catch from the other side of the room without it
+    .rb-entry-x:disabled { cursor: default; opacity: .5; }
+    /* Replies sit inside the entry they answer, so the entry's own left rule
+       runs down beside them as the thread line. Each level steps in a little;
+       past REPLY_INDENTS the step is taken back out, cancelling the entry's
+       padding and rule, so a long exchange never runs off a phone. */
+    .rb-entry-actions { display: flex; gap: 14px; margin-top: 6px; }
+    .rb-replies { list-style: none; margin: 12px 0 0; padding: 0 0 0 10px; display: flex; flex-direction: column; gap: 12px; }
+    .rb-replies-flat { padding-left: 0; margin-left: -15px; }
+    .rb-entry-gone { border-left-style: dashed; }
+    .rb-entry-who > .rb-entry-removed { font-weight: 500; font-style: italic; color: var(--card-muted); }
+    .rb-reply-box { margin-top: 10px; max-width: 540px; }
+    /* Something you can catch from the other side of the room without it
        covering what you are reading: a band of the theme's accent around the
        edge of the window, breathing rather than blinking.
 
@@ -4267,7 +4335,7 @@ export default function RecipeBox() {
                           <span className="rb-lately-who">
                             <span className="rb-lately-name">{e.name}</span>
                             <span aria-hidden>·</span>
-                            <span>{e.kind === "made" ? "made" : "wrote about"}</span>
+                            <span>{e.kind === "made" ? "made" : e.parent ? "replied on" : "wrote about"}</span>
                             <span className="rb-lately-what">{r ? r.title : "a recipe since removed"}</span>
                             <span aria-hidden>·</span>
                             <span>{whenLabel(e.at)}</span>
@@ -5363,42 +5431,121 @@ export default function RecipeBox() {
                   </p>
                 )}
 
-                {notes !== null && notes.length > 0 && (
-                  <ul style={{ listStyle: "none", margin: "0 0 20px", padding: 0, display: "flex", flexDirection: "column", gap: 14 }}>
-                    {notes.map((e) => (
-                      <li key={e.id} className={e.kind === "made" ? "rb-entry rb-entry-made" : "rb-entry"}>
-                        <p className="rb-entry-who">
-                          <span>{e.name}</span>
-                          <span aria-hidden>·</span>
-                          <span>{e.kind === "made" ? `made this on ${whenLabel(e.at)}` : whenLabel(e.at)}</span>
-                          {e.mine && (
-                            <button
-                              type="button"
-                              className="rb-focus rb-entry-x"
-                              onClick={() => removeEntry(e.id)}
-                              disabled={notesBusy}
-                              aria-label="Remove what you wrote"
-                            >
-                              Remove
-                            </button>
-                          )}
-                        </p>
-                        {e.kind === "note" && e.text && <p className="rb-entry-text">{e.text}</p>}
-                        {e.shot && (
-                          <button
-                            type="button"
-                            className="rb-madeshot rb-focus"
-                            onClick={() => e.hasPhoto && setLightbox(e)}
-                            aria-label={`See ${e.name}'s photo full size`}
-                            disabled={!e.hasPhoto}
-                          >
-                            <img src={e.shot} alt={`Cooked by ${e.name}`} loading="lazy" />
-                          </button>
+                {notes !== null && notes.length > 0 && (() => {
+                  const { roots, kids } = threadNotes(notes);
+                  /* One entry and, nested inside it, everything that answers
+                     it. Nesting the replies inside the entry's own left rule is
+                     what draws the thread line down beside them. */
+                  const entry = (e, depth, parent) => {
+                    const replies = kids.get(e.id) || [];
+                    const beyondIndent = depth > REPLY_INDENTS;
+                    return (
+                      <li
+                        key={e.id}
+                        className={e.deleted ? "rb-entry rb-entry-gone" : e.kind === "made" ? "rb-entry rb-entry-made" : "rb-entry"}
+                      >
+                        {e.deleted ? (
+                          <p className="rb-entry-who">
+                            <span className="rb-entry-removed">Removed</span>
+                            <span aria-hidden>·</span>
+                            <span>{whenLabel(e.at)}</span>
+                          </p>
+                        ) : (
+                          <>
+                            <p className="rb-entry-who">
+                              <span>{e.name}</span>
+                              <span aria-hidden>·</span>
+                              <span>{e.kind === "made" ? `made this on ${whenLabel(e.at)}` : whenLabel(e.at)}</span>
+                              {beyondIndent && parent && (
+                                <span>to {parent.deleted ? "a removed note" : parent.name}</span>
+                              )}
+                              {e.mine && (
+                                <button
+                                  type="button"
+                                  className="rb-focus rb-entry-x"
+                                  onClick={() => removeEntry(e.id)}
+                                  disabled={notesBusy}
+                                  aria-label="Remove what you wrote"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </p>
+                            {e.kind === "note" && e.text && <p className="rb-entry-text">{e.text}</p>}
+                            {e.shot && (
+                              <button
+                                type="button"
+                                className="rb-madeshot rb-focus"
+                                onClick={() => e.hasPhoto && setLightbox(e)}
+                                aria-label={`See ${e.name}'s photo full size`}
+                                disabled={!e.hasPhoto}
+                              >
+                                <img src={e.shot} alt={`Cooked by ${e.name}`} loading="lazy" />
+                              </button>
+                            )}
+                            {replyTo !== e.id && (
+                              <div className="rb-entry-actions rb-noprint">
+                                <button
+                                  type="button"
+                                  className="rb-focus rb-entry-x"
+                                  onClick={() => { setReplyTo(e.id); setReplyText(""); }}
+                                  disabled={notesBusy}
+                                  aria-label={`Reply to ${e.name}`}
+                                >
+                                  Reply
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        )}
+
+                        {replyTo === e.id && !e.deleted && (
+                          <div className="rb-reply-box rb-noprint">
+                            <textarea
+                              className="rb-focus"
+                              value={replyText}
+                              onChange={(ev) => setReplyText(ev.target.value)}
+                              rows={2}
+                              maxLength={2000}
+                              autoFocus
+                              placeholder={`Reply to ${e.name}`}
+                              aria-label={`Reply to ${e.name}`}
+                              style={{ ...input, resize: "vertical", font: `400 14px/1.6 ${UI}` }}
+                            />
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                              <button
+                                className="rb-btn rb-focus"
+                                style={{ ...btnPrimary, padding: "7px 14px", fontSize: 13 }}
+                                onClick={() => addReply(e.id)}
+                                disabled={notesBusy || !replyText.trim()}
+                              >
+                                Post reply
+                              </button>
+                              <button
+                                className="rb-btn rb-focus"
+                                style={{ ...btnQuiet, padding: "7px 14px", fontSize: 13 }}
+                                onClick={() => { setReplyTo(null); setReplyText(""); }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {replies.length > 0 && (
+                          <ul className={depth + 1 > REPLY_INDENTS ? "rb-replies rb-replies-flat" : "rb-replies"}>
+                            {replies.map((r) => entry(r, depth + 1, e))}
+                          </ul>
                         )}
                       </li>
-                    ))}
-                  </ul>
-                )}
+                    );
+                  };
+                  return (
+                    <ul style={{ listStyle: "none", margin: "0 0 20px", padding: 0, display: "flex", flexDirection: "column", gap: 14 }}>
+                      {roots.map((e) => entry(e, 0, null))}
+                    </ul>
+                  );
+                })()}
 
                 {notesError && (
                   <p style={{ font: `400 13px/1.6 ${UI}`, color: "var(--card-danger)", margin: "12px 0 0" }}>{notesError}</p>

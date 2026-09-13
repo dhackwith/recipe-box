@@ -25,6 +25,13 @@
  * the whole point: a feed of a dozen entries would otherwise drag a dozen
  * full-size photographs across the wire to show them at 90 pixels.
  *
+ * REPLIES
+ * A reply is a note that names the entry it answers in `parent`. Threads are
+ * built by the app from that one field, so a reply costs exactly what a note
+ * does: one write. Removing an entry that has replies under it would cut them
+ * loose, so it becomes a placeholder instead — its place in the thread and
+ * nothing else — and is cleared away once nothing hangs from it.
+ *
  * GET ?recipe=<id>   everything said about one recipe
  * GET ?recent=<n>    the newest few from across the whole box, for the feed
  * GET ?photo=<noteId>  the full-size picture, as an image rather than as JSON
@@ -87,6 +94,40 @@ function readKey(key) {
   const cut = rest.indexOf(":");
   if (cut < 0) return null;
   return { recipe: rest.slice(0, cut), stamp: rest.slice(cut + 1) };
+}
+
+/* One stored entry as the app sees it. A placeholder shows its place in the
+   thread and nothing more: no words, no picture, and no name. */
+const okParent = (v) => typeof v === "string" && v.startsWith("note:");
+function present(id, e, email) {
+  const parent = okParent(e.parent) ? e.parent : null;
+  if (e.deleted) {
+    return { id, kind: "note", text: "", at: e.at || "", name: "", mine: false, shot: null, hasPhoto: false, parent, deleted: true };
+  }
+  return {
+    id,
+    kind: e.kind === "made" ? "made" : "note",
+    text: typeof e.text === "string" ? e.text : "",
+    at: e.at || "",
+    name: displayName(e.email || ""),
+    mine: e.email === email,
+    shot: typeof e.shot === "string" ? e.shot : null,
+    hasPhoto: e.hasPhoto === true,
+    parent,
+    deleted: false,
+  };
+}
+
+/* Every entry on one recipe, by id, for working out who answers whom. */
+async function threadOf(env, recipe) {
+  const listed = await env.RECIPES.list({ prefix: `note:${recipe}:`, limit: LIST_MAX });
+  const thread = new Map();
+  for (const k of listed.keys) {
+    const raw = await env.RECIPES.get(k.name);
+    if (!raw) continue;
+    try { thread.set(k.name, JSON.parse(raw)); } catch { /* skip it */ }
+  }
+  return thread;
 }
 
 /* Every note key on the site, newest last.
@@ -161,25 +202,20 @@ export async function onRequest({ request, env }) {
             .map((name) => ({ name, ...(readKey(name) || {}) }))
             .filter((k) => k.stamp)
             .sort((a, b) => (a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : 0))
-            .slice(0, want));
+            .slice(0, want * 4));
 
+        /* A few more are read than are wanted, because placeholders are
+           skipped — a removed note is not news — and the feed should still
+           come back full. */
         const entries = [];
         for (const k of await ordered) {
+          if (entries.length === want) break;
           const raw = await env.RECIPES.get(k.name);
           if (!raw) continue;
           let e;
           try { e = JSON.parse(raw); } catch { continue; }
-          entries.push({
-            id: k.name,
-            recipe: k.recipe,
-            kind: e.kind === "made" ? "made" : "note",
-            text: typeof e.text === "string" ? e.text : "",
-            at: e.at || "",
-            name: displayName(e.email || ""),
-            mine: e.email === email,
-            shot: typeof e.shot === "string" ? e.shot : null,
-            hasPhoto: e.hasPhoto === true,
-          });
+          if (e.deleted) continue;
+          entries.push({ ...present(k.name, e, email), recipe: k.recipe });
         }
         return json({ entries });
       }
@@ -193,16 +229,7 @@ export async function onRequest({ request, env }) {
         if (!raw) continue;                       // deleted between listing and reading
         let e;
         try { e = JSON.parse(raw); } catch { continue; }
-        entries.push({
-          id: k.name,
-          kind: e.kind === "made" ? "made" : "note",
-          text: typeof e.text === "string" ? e.text : "",
-          at: e.at || "",
-          name: displayName(e.email || ""),
-          mine: e.email === email,
-          shot: typeof e.shot === "string" ? e.shot : null,
-          hasPhoto: e.hasPhoto === true,
-        });
+        entries.push(present(k.name, e, email));
       }
 
       return json({ me: { name: displayName(email) }, entries, truncated: listed.list_complete === false });
@@ -213,7 +240,22 @@ export async function onRequest({ request, env }) {
       const recipe = body && body.recipe;
       if (!okId(recipe)) return json({ error: "recipe required" }, 400);
 
-      const kind = body.kind === "made" ? "made" : "note";
+      /* A reply names the entry it answers, which has to be on this same
+         recipe and still there: a reply to nothing would float free of any
+         thread. A reply is always a note, because "I made this" is news, not
+         an answer to anyone. */
+      let parent = null;
+      if (body.parent != null) {
+        parent = String(body.parent);
+        if (!parent.startsWith(`note:${recipe}:`)) {
+          return json({ error: "a reply has to answer something on the same recipe" }, 400);
+        }
+        let answered = null;
+        try { answered = JSON.parse((await env.RECIPES.get(parent)) || "null"); } catch { answered = null; }
+        if (!answered || answered.deleted) return json({ error: "what you're replying to has been removed" }, 404);
+      }
+
+      const kind = body.kind === "made" && !parent ? "made" : "note";
       const text = String(body.text ?? "").trim().slice(0, NOTE_MAX);
 
       /* A picture is optional, but a malformed one is refused rather than
@@ -238,10 +280,10 @@ export async function onRequest({ request, env }) {
          nobody can reach, which costs a little space; the other order would
          show an entry promising a photograph that was never stored. */
       if (photo) await env.RECIPES.put(photoKeyFor(key), photo);
-      await env.RECIPES.put(key, JSON.stringify({ kind, text, email, at, shot, hasPhoto: !!photo }));
+      await env.RECIPES.put(key, JSON.stringify({ kind, text, email, at, shot, hasPhoto: !!photo, ...(parent ? { parent } : {}) }));
 
       return json({
-        entry: { id: key, kind, text, at, name: displayName(email), mine: true, shot, hasPhoto: !!photo },
+        entry: { id: key, kind, text, at, name: displayName(email), mine: true, shot, hasPhoto: !!photo, parent, deleted: false },
       }, 201);
     }
 
@@ -258,14 +300,41 @@ export async function onRequest({ request, env }) {
       if (!e || e.email !== email) {
         return json({ error: "that isn't yours to remove" }, 403);
       }
-      await env.RECIPES.delete(id);
-      /* The picture goes too. Left behind it would be unreachable but still
-         counted against the space this site is allowed to use for free. */
+      /* The picture goes either way. Left behind it would be unreachable but
+         still counted against the space this site is allowed to use for free. */
       if (e.hasPhoto) {
         const shotKey = photoKeyFor(id);
         if (shotKey) await env.RECIPES.delete(shotKey);
       }
-      return json({ id, deleted: true });
+
+      /* An entry with replies can't simply vanish: they would lose what they
+         were answering and the thread would come apart. It stays as a
+         placeholder — its place and nothing else — until the last reply under
+         it goes. Then it goes too, and so does any placeholder above it left
+         with nothing hanging from it. The answer lists every id that is really
+         gone, so the app can take out exactly those. */
+      const where = readKey(id);
+      const thread = where ? await threadOf(env, where.recipe) : new Map();
+      const answered = (key) => [...thread].some(([k, v]) => k !== key && v && v.parent === key);
+
+      if (answered(id)) {
+        await env.RECIPES.put(id, JSON.stringify({ deleted: true, at: e.at || "", ...(e.parent ? { parent: e.parent } : {}) }));
+        return json({ id, deleted: true, placeholder: id, removed: [] });
+      }
+
+      await env.RECIPES.delete(id);
+      thread.delete(id);
+      const removed = [id];
+      let up = e.parent;
+      for (let hops = 0; up && hops < LIST_MAX; hops++) {
+        const above = thread.get(up);
+        if (!above || !above.deleted || answered(up)) break;
+        await env.RECIPES.delete(up);
+        thread.delete(up);
+        removed.push(up);
+        up = above.parent;
+      }
+      return json({ id, deleted: true, placeholder: null, removed });
     }
 
     return json({ error: "method not allowed" }, 405);
