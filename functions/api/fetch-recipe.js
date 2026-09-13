@@ -6,9 +6,10 @@
  *
  * POST { url }                 -> { recipe, url }   the Recipe node, and where it was found
  *
- * A page can describe its recipe two ways: a block of ld+json, or microdata
- * hung on the visible markup. Both are read, and what comes back is the same
- * shape either way, so nothing downstream has to care which it was.
+ * A page can describe its recipe three ways: a block of ld+json, microdata
+ * attributes hung on the visible markup, or h-recipe class names. All are
+ * read, and what comes back is the same shape either way, so nothing
+ * downstream has to care which it was.
  * POST { url, kind: "image" }  -> the image bytes, for the recipe's photo
  *
  * It is deliberately not a general proxy: pages come back only as the parsed
@@ -17,6 +18,7 @@
  */
 
 import { findMicrodataRecipe } from "../../shared/microdata.js";
+import { findHRecipe } from "../../shared/hrecipe.js";
 
 const MAX_PAGE = 5 * 1024 * 1024;
 const MAX_IMAGE = 10 * 1024 * 1024;
@@ -111,6 +113,17 @@ export function findRecipe(node, depth = 0) {
   return null;
 }
 
+/* Microdata as found, with h-recipe supplying only what it left empty. On a
+   Jetpack page that is the directions and the notes: the name, yield and
+   ingredients are labelled both ways, and must not be read twice. */
+export function fillGaps(recipe, extra) {
+  if (!recipe || !extra) return recipe || extra;
+  const out = { ...recipe };
+  const empty = (v) => v == null || v === "" || (Array.isArray(v) && !v.length);
+  for (const [k, v] of Object.entries(extra)) if (empty(out[k])) out[k] = v;
+  return out;
+}
+
 async function page(url) {
   let res;
   try { res = await fetchFrom(url, "text/html,application/xhtml+xml"); }
@@ -131,11 +144,11 @@ async function page(url) {
   try { html = new TextDecoder().decode(await readCapped(res, MAX_PAGE)); }
   catch { return json({ error: "That page is too large to read" }, 502); }
 
-  /* JSON-LD first, because when a page has it, it is the tidier and more
-     complete of the two. Microdata is the fallback, not a second opinion: it is
-     read only when there is no ld+json at all, so the cost lands on the pages
-     that would otherwise have failed outright. */
-  const recipe = findRecipe(ldBlocks(html)) || findMicrodataRecipe(html);
+  /* JSON-LD first, because when a page has it, it is the tidiest and most
+     complete of the three. Microdata and h-recipe are the fallback, not a
+     second opinion: they are read only when there is no ld+json at all, so the
+     cost lands on the pages that would otherwise have failed outright. */
+  const recipe = findRecipe(ldBlocks(html)) || fillGaps(findMicrodataRecipe(html), findHRecipe(html));
   if (!recipe) {
     return json({ error: "That page doesn't publish a recipe this can read — try copying the recipe text into the paste box instead" }, 422);
   }

@@ -18,7 +18,7 @@
  */
 
 /* Elements that never have a closing tag, so the stack must not wait for one. */
-const VOID = new Set([
+export const VOID = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input",
   "link", "meta", "param", "source", "track", "wbr",
 ]);
@@ -41,7 +41,7 @@ const FROM_ATTR = {
 
 const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'", "#x27": "'" };
 
-const decode = (s) =>
+export const decode = (s) =>
   String(s).replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (whole, code) => {
     const key = code.toLowerCase();
     if (ENTITIES[key] !== undefined) return ENTITIES[key];
@@ -56,7 +56,7 @@ const tidy = (s) => decode(s).replace(/\s+/g, " ").trim();
 
 const ATTR = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 
-function attrs(raw) {
+export function attrs(raw) {
   const out = {};
   let m;
   ATTR.lastIndex = 0;

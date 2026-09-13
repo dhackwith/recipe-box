@@ -1475,8 +1475,19 @@ const minutesLabel = (n) => {
 function schemaServings(y) {
   const list = [].concat(y ?? []).map(htmlToText).filter((v) => /\d/.test(v));
   if (!list.length) return "";
-  const best = list.reduce((a, b) => (b.length > a.length ? b : a));
+  /* Jetpack's yield arrives with its visible label, "Servings: 8 slices". */
+  const best = list.reduce((a, b) => (b.length > a.length ? b : a)).replace(/^(servings?|serves|yields?|makes)\s*:\s*/i, "");
   return /^\d+$/.test(best) ? `Serves ${best}` : best;
+}
+
+/* Most sites give ISO durations. Some give words — Jetpack's is "1.5 hours,
+   with prep time" — and those are kept as written, less any "Time:" label,
+   so long as they are short and mention a number. */
+function schemaTime(node) {
+  const minutes = isoMinutes(node.totalTime) ?? (((isoMinutes(node.prepTime) || 0) + (isoMinutes(node.cookTime) || 0)) || null);
+  if (minutes) return minutesLabel(minutes);
+  const words = htmlToText(node.totalTime).replace(/^[a-z ]{0,12}time\s*:\s*/i, "");
+  return /\d/.test(words) && !/^P[\dT]/i.test(words) && words.length <= 40 ? words : "";
 }
 
 /* Instructions come as one blob, a list of strings, HowToSteps, or HowToSections
@@ -1534,7 +1545,6 @@ function fromSchemaRecipe(node, pageUrl) {
      offers neither. */
   const primary = [...words(node.recipeCategory), ...words(node.recipeCuisine)];
   const tags = [...new Set(primary.length ? primary : words(node.keywords).filter((k) => k.split(" ").length <= 2))].slice(0, 6);
-  const minutes = isoMinutes(node.totalTime) ?? (((isoMinutes(node.prepTime) || 0) + (isoMinutes(node.cookTime) || 0)) || null);
   const nutrition = {};
   if (node.nutrition && typeof node.nutrition === "object") {
     for (const [k, v] of Object.entries(node.nutrition)) {
@@ -1553,12 +1563,16 @@ function fromSchemaRecipe(node, pageUrl) {
     title: htmlToText(node.name || node.headline),
     description: htmlToText(node.description),
     servings: schemaServings(node.recipeYield ?? node.yield),
-    time: minutes ? minutesLabel(minutes) : "",
+    time: schemaTime(node),
     tags,
     ingredients: [].concat(node.recipeIngredient ?? node.ingredients ?? []).map(htmlToText).filter(Boolean),
     steps: schemaSteps(node.recipeInstructions),
     nutrition: Object.keys(nutrition).length ? nutrition : null,
-    notes: [`From ${host || "the web"}${by.length ? `, by ${by.join(" and ")}` : ""}.`, pageUrl].join("\n"),
+    /* the recipe's own note, when the site has one, above where it came from */
+    notes: [
+      htmlToLines(node.notes).join("\n"),
+      [`From ${host || "the web"}${by.length ? `, by ${by.join(" and ")}` : ""}.`, pageUrl].join("\n"),
+    ].filter(Boolean).join("\n\n"),
   });
 }
 

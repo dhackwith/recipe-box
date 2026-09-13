@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-12
 
+- **Imported recipes bring their steps.** Recipes from Smitten Kitchen and the many other blogs built on WordPress.com used to arrive with every ingredient but no method. The steps now come through too, along with the recipe's own note and its time as the site wrote it.
 - **Read any recipe in your own units.** Menu → Units switches the whole site between metric and US, or leaves every recipe as whoever wrote it down. Ingredients, steps, oven temperatures and the shopping list all follow, rounded to numbers a person would actually write — a cup becomes 240ml, not 236.588. Teaspoons and tablespoons are left alone, because metric kitchens have those too.
 - **Recipe photos fill the page again on a phone.** Yesterday's photo change accidentally shrank every preview in the box to a fraction of its column. They are back to the full width of the screen.
 - **Show what it actually looked like.** A note or an "I made this" can now carry a photo. It appears with what you wrote, on the recipe and in the recent posts at the foot of the box, and tapping one opens it full size. Pictures are shrunk on your own device before they are sent, so posting one from a phone is quick and costs the site almost nothing.

@@ -22,10 +22,10 @@ const slice = (from, to) => {
 
 /* fold() lives far from the rest, so it is restated rather than dragged in */
 const fold = "const fold = (v) => String(v || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\n";
-const { isoMinutes, schemaSteps, schemaServings } = await import(
+const { isoMinutes, schemaSteps, schemaServings, schemaTime } = await import(
   "data:text/javascript," +
     encodeURIComponent(fold + slice("const htmlToText", "function schemaImage") +
-      "\nexport { isoMinutes, schemaSteps, schemaServings };")
+      "\nexport { isoMinutes, schemaSteps, schemaServings, schemaTime };")
 );
 const { findRecipe } = await import(new URL("../functions/api/fetch-recipe.js", here));
 
@@ -76,6 +76,16 @@ is("nothing is not a duration", isoMinutes(""), null);
 /* ── yields ── */
 is("a bare number becomes Serves N", schemaServings("6"), "Serves 6");
 is("a phrase is kept as written", schemaServings("12 cookies"), "12 cookies");
+is("Jetpack's visible label is dropped", schemaServings("Servings: 8 generous slices"), "8 generous slices");
+is("...and a labelled bare number still reads as servings", schemaServings("Yield: 4"), "Serves 4");
+
+/* ── times ── */
+is("an ISO total time becomes words", schemaTime({ totalTime: "PT1H30M" }), "1 hour 30 minutes");
+is("prep and cook add up when there is no total", schemaTime({ prepTime: "PT10M", cookTime: "PT20M" }), "30 minutes");
+is("a time in words is kept, less its label", schemaTime({ totalTime: "Time: 1.5 hours, with prep time" }), "1.5 hours, with prep time");
+is("words with no number in them are not a time", schemaTime({ totalTime: "not long" }), "");
+is("a broken ISO value is not shown raw", schemaTime({ totalTime: "PT1X" }), "");
+is("no time at all is empty", schemaTime({}), "");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
