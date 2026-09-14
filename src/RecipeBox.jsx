@@ -1012,6 +1012,26 @@ async function messagesCall(method, query = "", body) {
   return data;
 }
 
+/* Making and running group chats (functions/api/groups.js). Same shape as
+   messagesCall. */
+const GROUPS_API = "/api/groups";
+async function groupsCall(method, query = "", body) {
+  const res = await fetch(GROUPS_API + query, {
+    method,
+    credentials: "same-origin",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok) {
+    const message = (data && data.error) || (res.status >= 500 ? "Can't reach group chats just now — try again" : `Couldn't reach group chats (${res.status})`);
+    throw Object.assign(new Error(message), { status: res.status });
+  }
+  if (data === null) throw Object.assign(new Error("Group chats aren't available here — this needs the deployed site"), { status: 501 });
+  return data;
+}
+
 /* Sending a photo or a file goes as a form, so the file travels as bytes rather
    than swollen into text (functions/api/messages.js). */
 async function messagesUpload(fields) {
@@ -1122,6 +1142,10 @@ const QUICK_EMOJI_KEY = "recipe-box-quick-emoji";
 /* how long a press on the quick emoji is held before it opens the menu instead */
 const HOLD_MS = 450;
 const MAX_CHATS = 5;
+/* Group chats (functions/api/groups.js): a chat id like "grp:4", twelve people at most. */
+const GROUP_MAX = 12;
+const isGroupId = (id) => /^grp:\d+$/.test(String(id || ""));
+const firstOf = (name) => String(name || "").trim().split(/\s+/)[0] || "Someone";
 /* How long Take back is offered after sending. The server holds the same line
    by its own clock (functions/api/messages.js). */
 const TAKE_BACK_MS = 60 * 1000;
@@ -1271,6 +1295,69 @@ function GifPicker({ onPick, onClose, busy }) {
   );
 }
 
+/* Choosing people: for starting a conversation, and for adding people to a
+   group. A search box, a list to tick, up to `max`, and one button whose words
+   say what will happen. */
+function PeoplePicker({ people, face, max, title, lead, busy, error, allowName = false, onCancel, onDone, doneLabel }) {
+  const [chosen, setChosen] = useState([]);
+  const [query, setQuery] = useState("");
+  const [groupName, setGroupName] = useState("");
+  const q = query.trim().toLowerCase();
+  const shown = people.filter((p) => !q || p.name.toLowerCase().includes(q));
+  const full = chosen.length >= max;
+  const toggle = (p) =>
+    setChosen((all) => (all.some((x) => x.id === p.id) ? all.filter((x) => x.id !== p.id) : all.length >= max ? all : [...all, p]));
+  return (
+    <div className="rb-picker">
+      <div className="rb-picker-head">
+        <p className="rb-picker-title">{title}</p>
+        {lead ? <p className="rb-picker-lead">{lead}</p> : null}
+      </div>
+      <input
+        type="search"
+        className="rb-picker-search rb-focus"
+        placeholder="Search people"
+        aria-label="Search people"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        autoFocus
+      />
+      <ul className="rb-picker-list">
+        {shown.length === 0 && <li className="rb-chat-empty" style={{ fontSize: 12.5 }}>Nobody by that name.</li>}
+        {shown.map((p) => {
+          const on = chosen.some((x) => x.id === p.id);
+          return (
+            <li key={p.id}>
+              <label className={`rb-picker-row${on ? " is-on" : ""}${!on && full ? " is-full" : ""}`}>
+                <input type="checkbox" checked={on} disabled={!on && full} onChange={() => toggle(p)} />
+                {face(p.id, p.name, 30)}
+                <span>{p.name}</span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {allowName && chosen.length >= 2 && (
+        <input
+          className="rb-picker-name rb-focus"
+          placeholder="Name the group (optional)"
+          aria-label="Group name"
+          maxLength={60}
+          value={groupName}
+          onChange={(e) => setGroupName(e.target.value)}
+        />
+      )}
+      {error ? <p className="rb-messenger-error">{error}</p> : null}
+      <div className="rb-picker-actions">
+        <button type="button" className="rb-picker-cancel rb-focus" onClick={onCancel}>Cancel</button>
+        <button type="button" className="rb-picker-go rb-focus" disabled={!chosen.length || busy} onClick={() => onDone(chosen, groupName)}>
+          {doneLabel(chosen)}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ChatWindow({
   id, name, minimized, focusAt, unread, blocked, owner,
   face, faceWithLight, statusFor,
@@ -1278,7 +1365,10 @@ function ChatWindow({
   quickEmoji, onQuickEmoji,
   onCall, callBusy,
   live,
+  me, group, groupFace, people, onGroup, onLeft,
 }) {
+  const isGroup = isGroupId(id);
+  const memberName = (pid) => group?.members.find((mb) => mb.id === pid)?.name || "Someone";
   const [messages, setMessages] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [draft, setDraft] = useState("");
@@ -1363,6 +1453,30 @@ function ChatWindow({
   const closePersonMenu = () => {
     setPersonMenu(false);
     personRef.current?.querySelector(".rb-chatwin-title")?.focus();
+  };
+
+  /* A group's name menu: rename, picture, add people, members, leave. Each
+     change comes back as the group, which the dock remembers for every window
+     and list that shows it. */
+  const [menuMode, setMenuMode] = useState("menu");
+  const [renameTo, setRenameTo] = useState("");
+  const [groupBusy, setGroupBusy] = useState(false);
+  const pictureRef = useRef(null);
+  useEffect(() => { if (!personMenu) setMenuMode("menu"); }, [personMenu]);
+  const groupAct = async (body) => {
+    setGroupBusy(true);
+    setError("");
+    try {
+      const res = await groupsCall("POST", "", body);
+      if (res.group) onGroup?.(res.group);
+      if (res.left) onLeft?.();
+      return res;
+    } catch (err) {
+      setError(String(err.message || err));
+      return null;
+    } finally {
+      setGroupBusy(false);
+    }
   };
 
   /* The quick emoji beside Send. A tap sends it. Pressing and holding opens a
@@ -1463,7 +1577,7 @@ function ChatWindow({
     /* With a live connection (src/live.js), ask once, then again only when a
        notice about this conversation arrives — or every RESYNC_MS, in case one
        was lost. Without one, hold a waiting request open as before. */
-    const heard = watcher(live, (n) => n.with === id && (n.kind === "message" || n.kind === "love" || n.kind === "block"));
+    const heard = watcher(live, (n) => n.with === id && (n.kind === "message" || n.kind === "love" || n.kind === "block" || n.kind === "group"));
     (async () => {
       let wait = false;
       let failures = 0;
@@ -1483,6 +1597,7 @@ function ChatWindow({
           failures = 0;
           setLoaded(true);
           setError("");
+          if (got.group) onGroup?.(got.group);
           if (got.messages && got.messages.length) {
             since.current = Math.max(since.current, lastMessageId(got.messages));
             setMessages((all) => mergeById(all, got.messages));
@@ -1497,6 +1612,8 @@ function ChatWindow({
           if (!holding) await heard.sleep(pushed ? RESYNC_MS : RECONNECTING_MS);
         } catch (err) {
           if (stop) return;
+          /* Taken out of a group, or it's gone: the window closes itself. */
+          if (isGroup && err?.status === 404) { onLeft?.(); return; }
           /* One failed look is usually Cloudflare starting up or the network
              waking; it is only said once it keeps happening. */
           failures += 1;
@@ -1626,7 +1743,7 @@ function ChatWindow({
           aria-label={`Open your chat with ${name}${unread ? ` — ${unread} unread` : ""}`}
           title={name}
         >
-          {faceWithLight(id, name, 44)}
+          {isGroup ? groupFace(id, 44, name) : faceWithLight(id, name, 44)}
           {unread ? <span className="rb-chathead-count" aria-hidden>{unread}</span> : null}
         </button>
         <button type="button" className="rb-chathead-close rb-focus" onClick={onClose} aria-label={`Close your chat with ${name}`} title="Close">
@@ -1649,16 +1766,147 @@ function ChatWindow({
             aria-expanded={personMenu}
             title={`Options for ${name}`}
           >
-            {faceWithLight(id, name, 30)}
+            {isGroup ? groupFace(id, 30, name) : faceWithLight(id, name, 30)}
             <span className="rb-chatwin-lines">
               <span className="rb-chatwin-nameline">
                 <span className="rb-chatwin-name">{name}</span>
                 <span className="rb-chatwin-caret" aria-hidden>▾</span>
               </span>
-              {status ? <span className="rb-chat-seen">{status}</span> : null}
+              {isGroup
+                ? (group ? <span className="rb-chat-seen">{group.members.length} people</span> : null)
+                : status ? <span className="rb-chat-seen">{status}</span> : null}
             </span>
           </button>
-          {personMenu && (
+          {personMenu && isGroup && group && (
+            <div
+              className={`rb-person-menu${menuMode !== "menu" ? " is-wide" : ""}`}
+              role={menuMode === "menu" ? "menu" : "group"}
+              aria-label={`Options for ${name}`}
+              onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); closePersonMenu(); } }}
+            >
+              {menuMode === "menu" && (
+                <>
+                  <button type="button" role="menuitem" autoFocus onClick={() => { setRenameTo(group.name || ""); setMenuMode("rename"); }}>
+                    Rename the group
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => pictureRef.current?.click()}>
+                    {group.picture ? "Change the group picture" : "Choose a group picture"}
+                  </button>
+                  {group.picture && (
+                    <button type="button" role="menuitem" onClick={() => { setPersonMenu(false); groupAct({ picture: group.id, image: null }); }}>
+                      Remove the group picture
+                    </button>
+                  )}
+                  <button type="button" role="menuitem" disabled={group.members.length >= GROUP_MAX} onClick={() => setMenuMode("add")}>
+                    {group.members.length >= GROUP_MAX ? `Add people (the group is full)` : "Add people"}
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => setMenuMode("members")}>
+                    People in the group ({group.members.length})
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={async () => {
+                      if (!window.confirm(`Leave ${name}? You won't see its messages any more unless somebody adds you back.`)) return;
+                      setPersonMenu(false);
+                      await groupAct({ leave: group.id });
+                    }}
+                  >
+                    Leave the group
+                  </button>
+                </>
+              )}
+              {menuMode === "rename" && (
+                <form
+                  className="rb-menu-form"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (hasHate(renameTo)) { setError(HATE_MESSAGE); return; }
+                    if (await groupAct({ rename: group.id, name: renameTo })) setPersonMenu(false);
+                  }}
+                >
+                  <label className="rb-menu-label" htmlFor={`rb-rename-${group.id}`}>Group name</label>
+                  <input
+                    id={`rb-rename-${group.id}`}
+                    className="rb-menu-input rb-focus"
+                    value={renameTo}
+                    maxLength={60}
+                    autoFocus
+                    placeholder={group.members.filter((mb) => mb.id !== me).map((mb) => firstOf(mb.name)).join(", ")}
+                    onChange={(e) => setRenameTo(e.target.value)}
+                  />
+                  <p className="rb-menu-note">Leave it empty to name the group after the people in it. Everyone in the group sees the new name.</p>
+                  <div className="rb-menu-actions">
+                    <button type="button" className="rb-picker-cancel rb-focus" onClick={() => setMenuMode("menu")}>Back</button>
+                    <button type="submit" className="rb-picker-go rb-focus" disabled={groupBusy}>Save</button>
+                  </div>
+                </form>
+              )}
+              {menuMode === "members" && (
+                <div>
+                  <p className="rb-menu-label">People in the group</p>
+                  <ul className="rb-menu-members">
+                    {group.members.map((mb) => (
+                      <li key={mb.id}>
+                        {face(mb.id, mb.name, 26)}
+                        <span>
+                          {mb.id === me ? "You" : mb.name}
+                          {mb.id === group.creator ? <small> · made the group</small> : null}
+                        </span>
+                        {group.youMadeIt && mb.id !== me && (
+                          <button
+                            type="button"
+                            className="rb-menu-remove rb-focus"
+                            disabled={groupBusy}
+                            onClick={async () => {
+                              if (!window.confirm(`Remove ${mb.name} from ${name}?`)) return;
+                              await groupAct({ remove: group.id, person: mb.id });
+                            }}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="rb-menu-actions">
+                    <button type="button" className="rb-picker-cancel rb-focus" onClick={() => setMenuMode("menu")}>Back</button>
+                  </div>
+                </div>
+              )}
+              {menuMode === "add" && (
+                <PeoplePicker
+                  people={(people || []).filter((p) => !group.members.some((mb) => mb.id === p.id))}
+                  face={face}
+                  max={GROUP_MAX - group.members.length}
+                  title="Add people"
+                  lead={`There's room for ${GROUP_MAX - group.members.length} more. They'll be able to read what's already been said.`}
+                  busy={groupBusy}
+                  onCancel={() => setMenuMode("menu")}
+                  onDone={async (chosen) => { if (await groupAct({ add: group.id, people: chosen.map((p) => p.id) })) setPersonMenu(false); }}
+                  doneLabel={(chosen) => (chosen.length ? `Add ${chosen.length}` : "Add")}
+                />
+              )}
+            </div>
+          )}
+          {isGroup && (
+            <input
+              ref={pictureRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (!file || !group) return;
+                setPersonMenu(false);
+                let image;
+                try { image = await prepFace(file); } catch { setError("That file didn't look like a photo"); return; }
+                await groupAct({ picture: group.id, image });
+              }}
+            />
+          )}
+          {personMenu && !isGroup && (
             <div
               className="rb-person-menu"
               role="menu"
@@ -1671,7 +1919,7 @@ function ChatWindow({
             </div>
           )}
         </span>
-        {onCall && (
+        {onCall && !isGroup && (
           <button
             type="button"
             className="rb-chatwin-ctl rb-focus"
@@ -1704,17 +1952,22 @@ function ChatWindow({
               const next = messages[i + 1];
               const at = Date.parse(m.at);
               const newTime = !prev || at - Date.parse(prev.at) >= TIME_GAP_MS;
-              const runStart = newTime || prev.mine !== m.mine;
-              const runEnd = !next || next.mine !== m.mine || Date.parse(next.at) - at >= TIME_GAP_MS;
+              /* A run is one person's messages in a row: in a group, who sent
+                 it matters, not just whether it was you. */
+              const sender = (x) => (isGroup ? x.from : x.mine);
+              const runStart = newTime || sender(prev) !== sender(m);
+              const runEnd = !next || sender(next) !== sender(m) || Date.parse(next.at) - at >= TIME_GAP_MS;
               const gif = !m.deleted && !m.attachment ? gifUrl(m.text) : null;
               const photo = (m.attachment?.picture && !m.deleted) || gif;
               const bigEmoji = !m.deleted && !m.attachment && !gif && emojiOnly(m.text);
               const given = m.deleted ? [] : m.reactions || (m.loves || []).map((who) => ({ who, emoji: "❤️" }));
-              const canReact = !m.mine && !m.deleted && !blocked;
+              const canReact = !m.mine && !m.deleted && (isGroup || !blocked);
               const fresh = m.mine && Date.now() - at < TAKE_BACK_MS;
               const hasMenu = !m.deleted && (m.mine || owner);
               const nearTop = i < 2;
-              const reactedBy = given.map((r) => `${r.who === id ? first : "You"} ${r.emoji}`).join(", ");
+              const reactedBy = given
+                .map((r) => `${isGroup ? (r.who === me ? "You" : firstOf(memberName(r.who))) : r.who === id ? first : "You"} ${r.emoji}`)
+                .join(", ");
               const more = hasMenu && (
                 <button
                   type="button"
@@ -1730,8 +1983,11 @@ function ChatWindow({
               return (
                 <React.Fragment key={m.id}>
                   {newTime && <li className="rb-chat-time" role="separator"><When iso={m.at} /></li>}
+                  {isGroup && !m.mine && runStart && <li className="rb-msg-sender">{firstOf(memberName(m.from))}</li>}
                   <li className={`rb-msg-row${m.mine ? " is-mine" : ""}${runStart ? " is-run-start" : ""}${runEnd ? " is-run-end" : ""}${given.length ? " has-reactions" : ""}${nearTop ? " is-near-top" : ""}`}>
-                  {!m.mine && (runEnd ? face(id, name, 24) : <span className="rb-face-gap" aria-hidden />)}
+                  {!m.mine && (runEnd
+                    ? (isGroup ? face(m.from, memberName(m.from), 24) : face(id, name, 24))
+                    : <span className="rb-face-gap" aria-hidden />)}
                   <div className={`rb-msg-wrap${openMsg === m.id || menuMsg === m.id ? " is-open" : ""}`}>
                   {m.mine && more}
                   <div className="rb-msg-hold">
@@ -3499,6 +3755,14 @@ export default function RecipeBox() {
   };
   const [listError, setListError] = useState("");
   const [waiting, setWaiting] = useState([]);
+  /* Group chats the dock knows about, by chat id ("grp:4"): title, members and
+     picture version, from the inbox, from each open group window, and from
+     any change somebody makes. */
+  const [groups, setGroups] = useState({});
+  const rememberGroup = (g) => { if (g && g.chat) setGroups((all) => ({ ...all, [g.chat]: g })); };
+  const [starting, setStarting] = useState(false);
+  const [startBusy, setStartBusy] = useState(false);
+  const [startError, setStartError] = useState("");
   const [chats, setChats] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(CHATS_KEY) || "[]");
@@ -3655,6 +3919,11 @@ export default function RecipeBox() {
     };
   }, [live]);
 
+  /* Somebody renamed, re-pictured, added to or left a group: the list and the
+     flashing names ask again. */
+  const refreshInboxRef = useRef(null);
+  useEffect(() => live.onNotice((n) => { if (n.kind === "group") refreshInboxRef.current?.(); }), [live]);
+
   /* Being here, and the badge beside Meal plan and Shopping list. One request
      does both: it records that this person is using the site — anywhere on it,
      not only on the messages page — and brings back the unread count and
@@ -3687,7 +3956,7 @@ export default function RecipeBox() {
     let known = -1;
     /* With a live connection, asked again only when a notice says something
        was sent, read or blocked (or every RESYNC_MS). */
-    const heard = watcher(live, (n) => n.kind === "message" || n.kind === "read" || n.kind === "block");
+    const heard = watcher(live, (n) => n.kind === "message" || n.kind === "read" || n.kind === "block" || n.kind === "group");
     (async () => {
       while (!stop) {
         try {
@@ -4075,6 +4344,50 @@ export default function RecipeBox() {
             : c);
     });
   };
+  refreshInboxRef.current = refreshInbox;
+
+  /* The groups the inbox knows, remembered for every window and list; and a
+     group that's waiting or open in the dock but not yet known is asked for. */
+  useEffect(() => {
+    const found = (inbox || []).filter((t) => t.group);
+    if (found.length) setGroups((all) => ({ ...all, ...Object.fromEntries(found.map((t) => [t.with, t.group])) }));
+  }, [inbox]);
+  useEffect(() => {
+    const missing = [...new Set([...waiting.map((w) => w.id), ...chats.map((c) => c.id)])].filter((cid) => isGroupId(cid) && !groups[cid]);
+    if (!missing.length) return;
+    let cancelled = false;
+    missing.forEach(async (cid) => {
+      try {
+        const { group } = await groupsCall("GET", `?id=${cid.slice(4)}`);
+        if (!cancelled) rememberGroup(group);
+      } catch { /* the window itself will say, if it's open */ }
+    });
+    return () => { cancelled = true; };
+  }, [waiting, chats]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Start a conversation: one person opens the chat with them; two or more
+     make a group. */
+  const startConversation = async (chosen, groupName) => {
+    if (chosen.length === 1) {
+      setStarting(false);
+      openChat(chosen[0].id, chosen[0].name);
+      return;
+    }
+    setStartBusy(true);
+    setStartError("");
+    try {
+      const { group } = await groupsCall("POST", "", { create: chosen.map((p) => p.id), name: groupName });
+      rememberGroup(group);
+      setStarting(false);
+      openChat(group.chat, group.title);
+      refreshInbox();
+    } catch (err) {
+      setStartError(String(err.message || err));
+    } finally {
+      setStartBusy(false);
+    }
+  };
+
   const minimizeChat = (id) => setChats((all) => all.map((c) => (c.id === id ? { ...c, minimized: true } : c)));
   const closeChat = (id) => setChats((all) => all.filter((c) => c.id !== id));
   const toggleList = () => {
@@ -4099,7 +4412,7 @@ export default function RecipeBox() {
 
   /* A name for an id, from whichever list already holds it. */
   const personLabel = (id) =>
-    messagePeople.find((p) => p.id === id)?.name || (inbox || []).find((t) => t.with === id)?.name || id;
+    messagePeople.find((p) => p.id === id)?.name || groups[id]?.title || (inbox || []).find((t) => t.with === id)?.name || id;
 
   /* Green if they have used the site in the last five minutes, unlit
      otherwise — and said in words too, because a colour on its own is no use
@@ -4141,6 +4454,38 @@ export default function RecipeBox() {
       <span className={`rb-chat-light${lightOn(id) ? " is-on" : ""}`} aria-hidden />
     </span>
   );
+
+  /* A group's face: the picture somebody chose for it, or else the other
+     people in it — two side by side, three in a triangle, four or more in
+     quarters. Decoration, like a person's face: the name is always beside it. */
+  const groupFace = (chatId, size = 28, label = "") => {
+    const g = groups[chatId];
+    const style = { "--face": `${size}px` };
+    if (g?.picture) {
+      return (
+        <img
+          className="rb-face"
+          src={`${GROUPS_API}?picture=${g.id}&v=${encodeURIComponent(g.picture)}`}
+          alt=""
+          aria-hidden
+          width={size}
+          height={size}
+          loading="lazy"
+          style={style}
+        />
+      );
+    }
+    const everyone = g?.members || [];
+    const others = everyone.filter((mb) => mb.id !== profile?.id);
+    const shown = (others.length ? others : everyone).slice(0, 4);
+    if (!shown.length) return <span className="rb-face rb-face-blank" aria-hidden style={style}>{initialsOf(label || "Group")}</span>;
+    const layout = shown.length >= 4 ? "quad" : shown.length === 3 ? "tri" : shown.length === 2 ? "pair" : "one";
+    return (
+      <span className={`rb-group-face is-${layout}`} aria-hidden style={style}>
+        {shown.map((mb) => <span key={mb.id} className="rb-group-tile">{face(mb.id, mb.name, size)}</span>)}
+      </span>
+    );
+  };
 
   const chooseFace = async (file) => {
     if (!file || !profile) return;
@@ -5874,6 +6219,63 @@ export default function RecipeBox() {
        only where 5 minutes or more have passed, rounded bubbles that hold just
        the message, and a run of messages from one person tucked together. */
     .rb-chat-time { align-self: center; margin: 12px 0 4px; font: 600 11.5px/1.3 ${SOCIAL}; color: var(--card-muted); }
+    /* In a group, the first name of whoever is talking, over their run. */
+    .rb-msg-sender { margin: 8px 0 1px 43px; font: 600 11px/1.3 ${SOCIAL}; color: var(--card-muted); }
+    .rb-msg-sender + .rb-msg-row { margin-top: 0; }
+    /* A group without a picture, drawn from the others in it: two side by
+       side and cut off, three in a triangle, four or more in quarters. */
+    .rb-group-face { --group: var(--face, 28px); position: relative; flex: none; display: inline-block; box-sizing: border-box; width: var(--group); height: var(--group); border-radius: 50%; overflow: hidden; background: var(--card-lift); border: 1px solid var(--card-edge); }
+    .rb-group-tile { position: absolute; display: block; overflow: hidden; }
+    .rb-group-tile > .rb-face { width: 100%; height: 100%; border: 0; border-radius: 0; font-size: calc(var(--group) * .26); }
+    .rb-group-face.is-one .rb-group-tile { inset: 0; }
+    .rb-group-face.is-pair .rb-group-tile { top: 0; bottom: 0; width: calc(50% - .5px); }
+    .rb-group-face.is-pair .rb-group-tile:first-child { left: 0; }
+    .rb-group-face.is-pair .rb-group-tile:last-child { right: 0; }
+    .rb-group-face.is-tri { overflow: visible; background: transparent; border: 0; }
+    .rb-group-face.is-tri .rb-group-tile { width: 56%; height: 56%; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--card-bg); }
+    .rb-group-face.is-tri .rb-group-tile > .rb-face { border-radius: 50%; font-size: calc(var(--group) * .22); }
+    .rb-group-face.is-tri .rb-group-tile:nth-child(1) { top: 0; left: 22%; }
+    .rb-group-face.is-tri .rb-group-tile:nth-child(2) { bottom: 0; left: 0; }
+    .rb-group-face.is-tri .rb-group-tile:nth-child(3) { bottom: 0; right: 0; }
+    .rb-group-face.is-quad .rb-group-tile { width: calc(50% - .5px); height: calc(50% - .5px); }
+    .rb-group-face.is-quad .rb-group-tile > .rb-face { font-size: calc(var(--group) * .2); }
+    .rb-group-face.is-quad .rb-group-tile:nth-child(1) { top: 0; left: 0; }
+    .rb-group-face.is-quad .rb-group-tile:nth-child(2) { top: 0; right: 0; }
+    .rb-group-face.is-quad .rb-group-tile:nth-child(3) { bottom: 0; left: 0; }
+    .rb-group-face.is-quad .rb-group-tile:nth-child(4) { bottom: 0; right: 0; }
+    /* Starting a conversation, and choosing people. */
+    .rb-start-chat { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin: 10px 0 2px; padding: 9px 12px; box-sizing: border-box; border: 1px solid var(--card-edge); border-radius: 999px; background: var(--card-lift); color: var(--card-text); cursor: pointer; font: 700 13px/1.2 ${SOCIAL}; }
+    .rb-start-chat:hover { border-color: var(--card-accent); }
+    .rb-picker { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 4px; }
+    .rb-picker-head { display: flex; flex-direction: column; gap: 2px; }
+    .rb-picker-title { margin: 0; font: 700 14px/1.3 ${SOCIAL}; color: var(--card-text); }
+    .rb-picker-lead { margin: 0; font: 400 12px/1.45 ${SOCIAL}; color: var(--card-muted); }
+    .rb-picker-search, .rb-picker-name, .rb-menu-input { width: 100%; box-sizing: border-box; padding: 7px 12px; border: 1px solid var(--card-edge); border-radius: 999px; background: var(--card-bg); color: var(--card-text); font: 400 13.5px/1.3 ${SOCIAL}; }
+    .rb-picker-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+    .rb-picker-row { display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 10px; cursor: pointer; color: var(--card-text); font: 600 13.5px/1.3 ${SOCIAL}; }
+    .rb-picker-row:hover, .rb-picker-row:focus-within { background: var(--card-lift); }
+    .rb-picker-row.is-on { background: color-mix(in srgb, var(--card-accent) 14%, transparent); }
+    .rb-picker-row.is-full { opacity: .45; cursor: default; }
+    .rb-picker-row input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--card-accent); }
+    .rb-picker-actions, .rb-menu-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .rb-picker-cancel { display: inline-flex; width: auto; align-items: center; padding: 7px 14px; border: 1px solid var(--card-edge); border-radius: 999px; background: var(--card-bg); color: var(--card-text); cursor: pointer; font: 700 13px/1.2 ${SOCIAL}; }
+    .rb-picker-go { display: inline-flex; width: auto; align-items: center; padding: 7px 14px; border: 1px solid var(--card-accent); border-radius: 999px; background: var(--card-accent); color: var(--on-accent); cursor: pointer; font: 700 13px/1.2 ${SOCIAL}; }
+    .rb-picker-actions .rb-picker-go:disabled, .rb-menu-actions .rb-picker-go:disabled { opacity: .5; cursor: default; }
+    /* inside a name menu, whose own buttons are full-width rows */
+    .rb-person-menu .rb-picker-cancel, .rb-person-menu .rb-picker-go { display: inline-flex; width: auto; padding: 7px 14px; font: 700 13px/1.2 ${SOCIAL}; }
+    .rb-person-menu .rb-picker-cancel { background: var(--card-bg); }
+    .rb-person-menu .rb-picker-go, .rb-person-menu .rb-picker-go:hover { background: var(--card-accent); color: var(--on-accent); }
+    /* A group's name menu, widened when it holds a form or a list. */
+    .rb-person-menu.is-wide { width: min(286px, calc(100vw - 40px)); max-height: 360px; overflow-y: auto; padding: 8px 10px; box-sizing: border-box; }
+    .rb-person-menu button:disabled { opacity: .5; cursor: default; }
+    .rb-menu-form { display: flex; flex-direction: column; }
+    .rb-menu-label { margin: 2px 0 6px; font: 700 11px/1.3 ${SOCIAL}; letter-spacing: .05em; text-transform: uppercase; color: var(--card-muted); }
+    .rb-menu-note { margin: 6px 2px 8px; font: 400 11.5px/1.4 ${SOCIAL}; color: var(--card-muted); }
+    .rb-menu-members { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .rb-menu-members li { display: flex; align-items: center; gap: 8px; font: 600 13px/1.3 ${SOCIAL}; color: var(--card-text); }
+    .rb-menu-members li > span:not(.rb-face) { flex: 1; min-width: 0; }
+    .rb-menu-members small { font-weight: 400; color: var(--card-muted); }
+    .rb-person-menu .rb-menu-remove { display: inline; width: auto; padding: 4px 8px; font: 600 12px/1.2 ${SOCIAL}; color: var(--card-danger); }
     .rb-chat-thread > .rb-chat-time:first-child { margin-top: 2px; }
     .rb-msg-row.is-run-start { margin-top: 6px; }
     .rb-chat-time + .rb-msg-row { margin-top: 0; }
@@ -8658,7 +9060,7 @@ export default function RecipeBox() {
                     onClick={() => openChat(w.id, w.name)}
                     aria-label={`${w.name} has written to you — open the conversation`}
                   >
-                    {face(w.id, w.name, 24)}
+                    {isGroupId(w.id) ? groupFace(w.id, 24, w.name) : face(w.id, w.name, 24)}
                     <span>{w.name}{w.unread > 1 ? ` (${w.unread})` : ""}</span>
                   </button>
                 ))}
@@ -8680,18 +9082,66 @@ export default function RecipeBox() {
                 </button>
               </div>
               <div className="rb-messenger-body">
-                {inbox === null && !listError && <p className="rb-chat-empty" style={{ marginTop: 10 }}>Looking…</p>}
-                {inbox !== null && (() => {
+                {starting ? (
+                  <PeoplePicker
+                    people={messagePeople}
+                    face={face}
+                    max={GROUP_MAX - 1}
+                    title="Start a conversation"
+                    lead="Pick one person to message them, or several to start a group chat."
+                    busy={startBusy}
+                    error={startError}
+                    allowName
+                    onCancel={() => { setStarting(false); setStartError(""); }}
+                    onDone={startConversation}
+                    doneLabel={(chosen) => (chosen.length > 1 ? `Start a group of ${chosen.length + 1}` : chosen.length ? "Open the chat" : "Pick somebody")}
+                  />
+                ) : (
+                  <button type="button" className="rb-start-chat rb-focus" onClick={() => { setStartError(""); setStarting(true); }}>
+                    <span aria-hidden>✎</span> Start a conversation
+                  </button>
+                )}
+                {!starting && inbox === null && !listError && <p className="rb-chat-empty" style={{ marginTop: 10 }}>Looking…</p>}
+                {!starting && inbox !== null && (() => {
                   /* Everybody in one list, split by whether they are about, and
                      within each half the most recent conversation first. Somebody
                      never written to comes after everybody who has, by name. */
                   const isOpen = (id) => chats.some((c) => c.id === id && !c.minimized);
-                  const threads = new Map((inbox || []).map((t) => [t.with, t]));
+                  const personThreads = (inbox || []).filter((t) => !isGroupId(t.with));
+                  const groupThreads = (inbox || []).filter((t) => isGroupId(t.with))
+                    .sort((a, b) => (b.last?.id || 0) - (a.last?.id || 0) || a.name.localeCompare(b.name));
+                  const threads = new Map(personThreads.map((t) => [t.with, t]));
                   const latest = (id) => threads.get(id)?.last?.id || 0;
                   const everyone = [
-                    ...(inbox || []).map((t) => ({ id: t.with, name: t.name })),
+                    ...personThreads.map((t) => ({ id: t.with, name: t.name })),
                     ...messagePeople.filter((p) => !threads.has(p.id)),
                   ].sort((a, b) => latest(b.id) - latest(a.id) || a.name.localeCompare(b.name));
+                  /* What the last message was, in a few words. */
+                  const lastWords = (last) => (last.deleted ? (last.removed ? "message removed" : "message taken back")
+                    : (isGifMessage(last.text) ? "Sent a GIF" : last.text) || (last.attachment ? (last.attachment.picture ? "Sent a photo" : `Sent ${last.attachment.name}`) : ""));
+                  const groupRow = (t) => {
+                    const by = t.last && (t.last.mine ? "You" : firstOf(t.group?.members.find((mb) => mb.id === t.last.from)?.name));
+                    return (
+                      <li key={t.with}>
+                        <button
+                          type="button"
+                          className={`rb-chat-person rb-focus${isOpen(t.with) ? " is-open" : ""}`}
+                          onClick={() => openChat(t.with, t.name)}
+                        >
+                          {groupFace(t.with, 36, t.name)}
+                          <span className="rb-chat-lines">
+                            <span className="rb-chat-who">
+                              {t.name}
+                              {t.unread ? <span className="rb-chat-unread">{t.unread}</span> : null}
+                            </span>
+                            <span className="rb-chat-last">
+                              {t.last ? `${by}: ${lastWords(t.last)}` : `${t.group?.members.length || ""} people · nothing said yet`}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  };
                   const online = everyone.filter((p) => lightOn(p.id));
                   const offline = everyone.filter((p) => !lightOn(p.id));
                   const row = (p) => {
@@ -8729,6 +9179,12 @@ export default function RecipeBox() {
                   };
                   return (
                     <>
+                      {groupThreads.length > 0 && (
+                        <>
+                          <p className="rb-chat-heading" id="rb-friends-groups" style={{ marginTop: 12 }}>Groups ({groupThreads.length})</p>
+                          <ul className="rb-chat-list" aria-labelledby="rb-friends-groups">{groupThreads.map(groupRow)}</ul>
+                        </>
+                      )}
                       <p className="rb-chat-heading" id="rb-friends-online" style={{ marginTop: 12 }}>Online ({online.length})</p>
                       {online.length > 0 ? (
                         <ul className="rb-chat-list" aria-labelledby="rb-friends-online">{online.map(row)}</ul>
@@ -8761,11 +9217,17 @@ export default function RecipeBox() {
           <ChatWindow
             key={c.id}
             id={c.id}
-            name={c.name || personLabel(c.id)}
+            name={groups[c.id]?.title || c.name || personLabel(c.id)}
             minimized={c.minimized}
             focusAt={c.focusAt}
             unread={waiting.find((w) => w.id === c.id)?.unread || 0}
-            blocked={blockedIds.includes(c.id)}
+            blocked={!isGroupId(c.id) && blockedIds.includes(c.id)}
+            me={profile?.id}
+            group={groups[c.id] || null}
+            groupFace={groupFace}
+            people={messagePeople}
+            onGroup={rememberGroup}
+            onLeft={() => { closeChat(c.id); refreshInbox(); }}
             owner={!!profile?.owner}
             onOpenPhoto={setLightbox}
             quickEmoji={quickEmoji}

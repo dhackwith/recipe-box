@@ -13,6 +13,9 @@ out unless they would notice it.
 
 ## 2026-09-14
 
+- **Group chats.** In Messenger, tap Start a conversation and pick people. Pick one and your chat with them opens; pick two or more and a group chat starts, with up to 12 people. Everything works in a group the way it does between two people — photos, GIFs, reactions, taking a message back — and each person's first name sits over what they said.
+- **A face for every group.** A group shows the faces of the people in it: two side by side, three in a triangle, four or more in quarters. Anyone in the group can choose a picture for it instead, and everyone sees it.
+- **Run a group from its name.** Tap the group's name at the top of its chat to rename it, change its picture, add people, see who's in it, or leave. Whoever started the group can also take people out.
 - **Minimised chats are faces.** Shrinking a chat with _ now leaves the person's picture in a round bubble along the bottom of the screen, or their initials if they haven't chosen one. Tap it to open the chat again. A ring flashes around it and a number shows when something new arrives, and the × on its corner closes it.
 - **A surprised face to react with.** 😮 joins the reactions, between 😂 and 😢.
 - **The message box matches the chat.** It's rounded like the messages and runs the width of the chat window. It starts one line tall and grows a line at a time as you type, up to four lines, then scrolls.

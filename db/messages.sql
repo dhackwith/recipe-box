@@ -118,3 +118,24 @@ CREATE TABLE IF NOT EXISTS calls (
 );
 CREATE INDEX IF NOT EXISTS calls_to ON calls (callee, state);
 CREATE INDEX IF NOT EXISTS calls_from ON calls (caller, state);
+
+-- Group chats (shared/groups.js). A group's messages are ordinary rows in
+-- `messages` under the pair "grp:<id>" with an empty recipient. `picture` is a
+-- small JPEG data URL somebody in the group chose, and picture_v changes with
+-- it. shared/groups.js also creates these.
+CREATE TABLE IF NOT EXISTS groups (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  name      TEXT NOT NULL DEFAULT '',
+  creator   TEXT NOT NULL,
+  picture   TEXT NOT NULL DEFAULT '',
+  picture_v TEXT NOT NULL DEFAULT '',
+  at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id INTEGER NOT NULL,
+  person   TEXT    NOT NULL,
+  added_by TEXT    NOT NULL,
+  at       TEXT    NOT NULL,
+  PRIMARY KEY (group_id, person)
+);
+CREATE INDEX IF NOT EXISTS group_members_by_person ON group_members (person);

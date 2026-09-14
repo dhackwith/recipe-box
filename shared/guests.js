@@ -22,6 +22,7 @@
 import { personFor, isPerson, addressKey, people } from "./access.js";
 import { ensureLoves } from "./loves.js";
 import { haveTables } from "./schema.js";
+import { ensureGroups } from "./groups.js";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS guests (
@@ -56,6 +57,7 @@ const rebuilt = (col) => `(CASE WHEN ${otherIn(col)} < ?2 THEN ${otherIn(col)} |
 export async function rekey(db, from, to) {
   if (!from || !to || from === to) return;
   await ensureLoves(db);
+  await ensureGroups(db);
   /* Every statement mentions ?2, so each can be bound the same two values. */
   const step = (sql) => db.prepare(sql).bind(from, to);
   await db.batch([
@@ -63,7 +65,7 @@ export async function rekey(db, from, to) {
                               recipient = CASE WHEN recipient = ?1 THEN ?2 ELSE recipient END
           WHERE sender = ?1 OR recipient = ?1`),
     step(`UPDATE messages SET pair = CASE WHEN sender < recipient THEN sender || ':' || recipient ELSE recipient || ':' || sender END
-          WHERE sender = ?2 OR recipient = ?2`),
+          WHERE (sender = ?2 OR recipient = ?2) AND pair NOT LIKE 'grp:%'`),
     step("UPDATE OR REPLACE reads SET person = ?2 WHERE person = ?1"),
     step(`UPDATE OR REPLACE reads SET pair = ${rebuilt("pair")} WHERE ${holds("pair")}`),
     step("UPDATE OR IGNORE blocks SET blocker = ?2 WHERE blocker = ?1"),
@@ -73,6 +75,11 @@ export async function rekey(db, from, to) {
     step("DELETE FROM loves WHERE person = ?1 AND ?2 IS NOT NULL"),
     step(`UPDATE loves SET pair = ${rebuilt("pair")} WHERE kind = 'm' AND ${holds("pair")}`),
     step("DELETE FROM presence WHERE person = ?1 AND ?2 IS NOT NULL"),
+    /* groups they're in, and any they made; a group's own conversation keeps
+       its "grp:" name, which the pair rebuild above leaves alone */
+    step("UPDATE OR IGNORE group_members SET person = ?2 WHERE person = ?1"),
+    step("DELETE FROM group_members WHERE person = ?1 AND ?2 IS NOT NULL"),
+    step("UPDATE groups SET creator = ?2 WHERE creator = ?1"),
   ]);
 }
 
