@@ -1,0 +1,25 @@
+# The hub for live notices (shared/live.js, live/src/index.js).
+#
+# A Worker of its own because a Pages project can't define a Durable Object;
+# the site binds to it as LIVE (Pages → Settings → Bindings → Durable Object).
+# This file only configures this folder's Worker — the site itself still has
+# no wrangler.toml, so its dashboard bindings (RECIPES, MESSAGES, AI) stay put.
+#
+# Deploy from this folder:  npx wrangler deploy
+
+name = "recipe-box-live"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# No public address: the only way in is the site's LIVE binding.
+workers_dev = false
+preview_urls = false
+
+[[durable_objects.bindings]]
+name = "LIVE"
+class_name = "Live"
+
+# The free plan runs SQLite-backed Durable Objects only.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Live"]

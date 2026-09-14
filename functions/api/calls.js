@@ -6,6 +6,11 @@
  * the verified Access token and nothing else, a call is only ever shown to its
  * two people, and a block either way means no call.
  *
+ * Every change to a call — ringing, picked up, ended — is also sent as a
+ * notice to both people's open pages (shared/live.js), so they ask about it at
+ * once rather than holding a request open. The waiting forms below remain for
+ * pages without a live connection.
+ *
  * GET  ?ringing[&wait=1&known=<ids>] -> calls ringing for you; with wait, holds
  *                                       until that list is no longer <ids>
  * GET  ?call=<id>[&wait=1&state=<s>] -> one of your calls, and checks you in on
@@ -17,6 +22,7 @@
 
 import { identity, personFor } from "../../shared/access.js";
 import { ensureGuests, arrive, directory } from "../../shared/guests.js";
+import { poke, bothEnds } from "../../shared/live.js";
 import {
   ensureCalls, lapsed, hangupReason, isSdp, shapeCall,
   RINGING, ACTIVE, ENDED, MISSED_TEXT, KEEP_ENDED_MS,
@@ -39,40 +45,46 @@ const nowIso = () => new Date().toISOString();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const readCall = (db, id) => db.prepare("SELECT * FROM calls WHERE id = ?1").bind(id).first();
+const callNotice = (row) => bothEnds(row.caller, row.callee, "call", { id: row.id });
 
 /* Ends a call once, however many ask at the same moment: only the request
-   whose update changed the row goes on to leave a missed call behind. The
-   offer and answer go with it — nothing needs them after, and they hold each
-   end's network addresses. */
-async function endCall(db, row, reason) {
+   whose update changed the row goes on to leave a missed call behind and tell
+   both ends. The offer and answer go with it — nothing needs them after, and
+   they hold each end's network addresses. */
+async function endCall(env, row, reason) {
+  const db = env.MESSAGES;
   const at = nowIso();
   const done = await db
     .prepare("UPDATE calls SET state = ?1, reason = ?2, ended_at = ?3, offer = '', answer = '' WHERE id = ?4 AND state != ?1")
     .bind(ENDED, reason, at, row.id)
     .run();
-  if (done?.meta?.changes && row.state === RINGING && (reason === "missed" || reason === "cancelled")) {
-    await db
-      .prepare("INSERT INTO messages (pair, sender, recipient, text, at) VALUES (?1, ?2, ?3, ?4, ?5)")
-      .bind(row.pair, row.caller, row.callee, MISSED_TEXT, at)
-      .run();
+  if (done?.meta?.changes) {
+    const missed = row.state === RINGING && (reason === "missed" || reason === "cancelled");
+    if (missed) {
+      await db
+        .prepare("INSERT INTO messages (pair, sender, recipient, text, at) VALUES (?1, ?2, ?3, ?4, ?5)")
+        .bind(row.pair, row.caller, row.callee, MISSED_TEXT, at)
+        .run();
+    }
+    await poke(env, [...callNotice(row), ...(missed ? bothEnds(row.caller, row.callee, "message") : [])]);
   }
   return readCall(db, row.id);
 }
 
 /* A call as it stands now, ended first if it has lapsed. */
-async function settle(db, row) {
+async function settle(env, row) {
   const why = lapsed(row);
-  return why ? endCall(db, row, why) : row;
+  return why ? endCall(env, row, why) : row;
 }
 
 /* The call somebody is in, ringing or talking, if any. */
-async function liveCallOf(db, person) {
-  const { results } = await db
+async function liveCallOf(env, person) {
+  const { results } = await env.MESSAGES
     .prepare("SELECT * FROM calls WHERE (caller = ?1 OR callee = ?1) AND state != ?2 ORDER BY id DESC")
     .bind(person, ENDED)
     .all();
   for (const row of results || []) {
-    const now = await settle(db, row);
+    const now = await settle(env, row);
     if (now.state !== ENDED) return now;
   }
   return null;
@@ -116,7 +128,7 @@ export async function onRequest({ request, env }) {
         };
         let rows = [];
         for (const row of await look()) {
-          const now = await settle(db, row);
+          const now = await settle(env, row);
           if (now.state === RINGING) rows.push(now);
         }
         const known = url.searchParams.get("known") ?? "";
@@ -140,7 +152,7 @@ export async function onRequest({ request, env }) {
       if (!Number.isFinite(id)) return json({ error: "which call?" }, 400);
       let row = await readCall(db, id);
       if (!row || (row.caller !== me.id && row.callee !== me.id)) return json({ error: "not found" }, 404);
-      row = await settle(db, row);
+      row = await settle(env, row);
       if (row.state !== ENDED) {
         await db
           .prepare(`UPDATE calls SET ${row.caller === me.id ? "caller_seen" : "callee_seen"} = ?1 WHERE id = ?2`)
@@ -153,7 +165,7 @@ export async function onRequest({ request, env }) {
         while (row.state === wanted && row.state !== ENDED && Date.now() < until) {
           await sleep(TICK_MS);
           row = await readCall(db, id);
-          if (lapsed(row)) row = await endCall(db, row, lapsed(row));
+          if (lapsed(row)) row = await endCall(env, row, lapsed(row));
         }
       }
       return json({ call: shapeCall(row, me.id, (await book()).nameOf) });
@@ -171,7 +183,7 @@ export async function onRequest({ request, env }) {
         if (!row || (row.caller !== me.id && row.callee !== me.id)) return json({ error: "not found" }, 404);
         if (row.callee !== me.id) return json({ error: "You can't answer your own call" }, 400);
         if (!isSdp(body.sdp)) return json({ error: "That answer couldn't be read" }, 400);
-        row = await settle(db, row);
+        row = await settle(env, row);
         if (row.state !== RINGING) {
           return json({ error: row.state === ACTIVE ? "That call has already been answered" : "That call has ended" }, 409);
         }
@@ -181,6 +193,7 @@ export async function onRequest({ request, env }) {
           .bind(ACTIVE, body.sdp, at, id, RINGING)
           .run();
         if (!done?.meta?.changes) return json({ error: "That call has already been answered" }, 409);
+        await poke(env, callNotice(row));
         return json({ call: shapeCall(await readCall(db, id), me.id, (await book()).nameOf) });
       }
 
@@ -188,8 +201,8 @@ export async function onRequest({ request, env }) {
         const id = parseInt(body.hangup, 10);
         let row = Number.isFinite(id) ? await readCall(db, id) : null;
         if (!row || (row.caller !== me.id && row.callee !== me.id)) return json({ error: "not found" }, 404);
-        row = await settle(db, row);
-        if (row.state !== ENDED) row = await endCall(db, row, hangupReason(row, me.id));
+        row = await settle(env, row);
+        if (row.state !== ENDED) row = await endCall(env, row, hangupReason(row, me.id));
         return json({ call: shapeCall(row, me.id, (await book()).nameOf) });
       }
 
@@ -205,8 +218,8 @@ export async function onRequest({ request, env }) {
       if (blockers.includes(me.id)) {
         return json({ error: `You've blocked ${names.nameOf(to)} — unblock them to call` }, 403);
       }
-      if (await liveCallOf(db, me.id)) return json({ error: "You're already on a call" }, 409);
-      if (await liveCallOf(db, to)) return json({ error: `${names.nameOf(to)} is on another call` }, 409);
+      if (await liveCallOf(env, me.id)) return json({ error: "You're already on a call" }, 409);
+      if (await liveCallOf(env, to)) return json({ error: `${names.nameOf(to)} is on another call` }, 409);
 
       /* Calls that ended over a week ago are cleared away first, so the table
          only ever holds recent ones. */
@@ -221,6 +234,7 @@ export async function onRequest({ request, env }) {
         .bind(pairOf(me.id, to), me.id, to, RINGING, body.offer, at)
         .run();
       const row = await readCall(db, made?.meta?.last_row_id);
+      await poke(env, callNotice(row));
       return json({ call: shapeCall(row, me.id, names.nameOf) }, 201);
     }
 

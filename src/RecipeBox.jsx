@@ -32,6 +32,7 @@ import {
   CALLS_API, STUN_SERVERS, callsSupported, callsCall, callStatus, iceGathered, micError, isMicError, playTone,
   RING_MS, CHECK_IN_MS, STALE_MS, trackRings, liveRings, retryDelay,
 } from "./calls.js";
+import { createLive, watcher, liveUrl, RESYNC_MS } from "./live.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -1000,7 +1001,13 @@ async function messagesCall(method, query = "", body) {
   });
   let data = null;
   try { data = await res.json(); } catch { data = null; }
-  if (!res.ok) throw new Error((data && data.error) || `Couldn't reach your messages (${res.status})`);
+  /* Anything the site itself refuses comes with its own words. A bare status
+     is Cloudflare's, and a 5xx from it is almost always a moment's trouble. */
+  if (!res.ok) {
+    const message = (data && data.error)
+      || (res.status >= 500 ? "Can't reach your messages just now — trying again" : `Couldn't reach your messages (${res.status})`);
+    throw Object.assign(new Error(message), { status: res.status });
+  }
   if (data === null) throw new Error("Messages aren't available here — this needs the deployed site");
   return data;
 }
@@ -1254,6 +1261,7 @@ function ChatWindow({
   onMinimize, onRestore, onClose, onBlock, onRead, onSent, onOpenPhoto,
   quickEmoji, onQuickEmoji,
   onCall, callBusy,
+  live,
 }) {
   const [messages, setMessages] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -1382,16 +1390,24 @@ function ChatWindow({
   useEffect(() => {
     if (minimized) return;
     let stop = false;
+    /* With a live connection (src/live.js), ask once, then again only when a
+       notice about this conversation arrives — or every RESYNC_MS, in case one
+       was lost. Without one, hold a waiting request open as before. */
+    const heard = watcher(live, (n) => n.with === id && (n.kind === "message" || n.kind === "love" || n.kind === "block"));
     (async () => {
       let wait = false;
+      let failures = 0;
       while (!stop) {
         try {
-          if (wait && document.hidden) {
-            await new Promise((r) => setTimeout(r, 1500));
+          const pushed = live.connected;
+          if (wait && !pushed && (document.hidden || live.connecting)) {
+            await heard.sleep(1500);
             continue;
           }
-          const got = await messagesCall("GET", `?with=${encodeURIComponent(id)}&since=${since.current}&loves=${loveSince.current}${wait ? "&wait=1" : ""}`);
+          heard.clear();
+          const got = await messagesCall("GET", `?with=${encodeURIComponent(id)}&since=${since.current}&loves=${loveSince.current}${wait && !pushed ? "&wait=1" : ""}`);
           if (stop) return;
+          failures = 0;
           setLoaded(true);
           setError("");
           if (got.messages && got.messages.length) {
@@ -1405,15 +1421,21 @@ function ChatWindow({
             setMessages((all) => all.map((m) => (hearts.has(m.id) ? { ...m, loves: hearts.get(m.id).loves, loved: hearts.get(m.id).loved } : m)));
           }
           wait = true;
+          if (pushed) await heard.sleep(RESYNC_MS);
         } catch (err) {
           if (stop) return;
-          setLoaded(true);
-          setError(String(err.message || err));
-          await new Promise((r) => setTimeout(r, 5000));
+          /* One failed look is usually Cloudflare starting up or the network
+             waking; it is only said once it keeps happening. */
+          failures += 1;
+          if (failures >= 3) {
+            setLoaded(true);
+            setError(String(err.message || err));
+          }
+          await new Promise((r) => setTimeout(r, Math.min(20000, 2000 * 2 ** (failures - 1))));
         }
       }
     })();
-    return () => { stop = true; };
+    return () => { stop = true; heard.close(); };
   }, [id, minimized]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Take back is offered for a minute. The window redraws the moment the
@@ -3478,6 +3500,22 @@ export default function RecipeBox() {
     } catch { /* the count is a nicety, not the message */ }
   };
 
+  /* The live connection (src/live.js): one for the page, shared by the loops
+     below and every chat window. Coming back to the page or back online tries
+     it again straight away. */
+  const [live] = useState(() => createLive({ url: liveUrl() }));
+  useEffect(() => {
+    live.start();
+    const onWake = () => { if (!document.hidden) live.nudge(); };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("online", onWake);
+      live.stop();
+    };
+  }, [live]);
+
   /* Being here, and the badge beside Meal plan and Shopping list. One request
      does both: it records that this person is using the site — anywhere on it,
      not only on the messages page — and brings back the unread count and
@@ -3508,27 +3546,33 @@ export default function RecipeBox() {
   useEffect(() => {
     let stop = false;
     let known = -1;
+    /* With a live connection, asked again only when a notice says something
+       was sent, read or blocked (or every RESYNC_MS). */
+    const heard = watcher(live, (n) => n.kind === "message" || n.kind === "read" || n.kind === "block");
     (async () => {
       while (!stop) {
         try {
-          if (document.hidden) {
-            await new Promise((r) => setTimeout(r, 2000));
+          const pushed = live.connected;
+          if (!pushed && (document.hidden || (known >= 0 && live.connecting))) {
+            await heard.sleep(2000);
             continue;
           }
-          const data = await messagesCall("GET", known >= 0 ? `?waiting&wait=1&unread=${known}` : "?waiting");
+          heard.clear();
+          const data = await messagesCall("GET", !pushed && known >= 0 ? `?waiting&wait=1&unread=${known}` : "?waiting");
           if (stop) return;
           known = data.unread || 0;
           setUnreadMessages(known);
           setWaiting(data.waiting || []);
           if (data.people) setPresence((all) => ({ ...all, ...Object.fromEntries(data.people.map((p) => [p.id, p])) }));
+          if (pushed) await heard.sleep(RESYNC_MS);
         } catch {
           /* not switched on, or offline: wait a while and try again, quietly */
           await new Promise((r) => setTimeout(r, 20000));
         }
       }
     })();
-    return () => { stop = true; };
-  }, []);
+    return () => { stop = true; heard.close(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ═══ AUDIO CALLS ═══
      Browser to browser (shared/calls.js). This page asks for the microphone
@@ -3691,26 +3735,32 @@ export default function RecipeBox() {
     if (!canCall) return;
     let stop = false;
     let known = null;
+    /* With a live connection, asked again only when a notice says a call
+       changed — which also lets a page in the background ring, cheaply. */
+    const heard = watcher(live, (n) => n.kind === "call");
     (async () => {
       while (!stop) {
         try {
-          if (document.hidden) {
+          const pushed = live.connected;
+          if (!pushed && (document.hidden || (known !== null && live.connecting))) {
             known = null;
-            await new Promise((r) => setTimeout(r, 2000));
+            await heard.sleep(2000);
             continue;
           }
-          const data = await callsCall("GET", known === null ? "?ringing" : `?ringing&wait=1&known=${encodeURIComponent(known)}`);
+          heard.clear();
+          const data = await callsCall("GET", pushed || known === null ? "?ringing" : `?ringing&wait=1&known=${encodeURIComponent(known)}`);
           if (stop) return;
           const list = data.ringing || [];
           known = list.map((r) => r.id).join(",");
           setIncoming((prev) => trackRings(prev, list));
+          if (pushed) await heard.sleep(RESYNC_MS);
         } catch (err) {
           known = null;
           await new Promise((r) => setTimeout(r, err?.status === 501 || err?.status === 403 ? 120000 : 20000));
         }
       }
     })();
-    return () => { stop = true; };
+    return () => { stop = true; heard.close(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* The call this page is in, watched until it ends. Not paused when hidden: a
@@ -3731,15 +3781,22 @@ export default function RecipeBox() {
     let state = null;
     let failures = 0;
     let failingSince = 0;
+    const heard = watcher(live, (n) => n.kind === "call" && n.id === watchId);
     (async () => {
       while (!stop) {
         try {
           const talking = callRef.current?.phase === "active";
-          if (talking) {
-            await new Promise((r) => setTimeout(r, CHECK_IN_MS));
+          const pushed = live.connected;
+          if (talking || (state && (pushed || live.connecting))) {
+            /* Talking: check in every CHECK_IN_MS. Ringing or connecting with a
+               live connection: a notice says when the other end picks up or
+               hangs up, and a look every ten seconds checks in and notices a
+               ring that ran out. */
+            await heard.sleep(talking ? CHECK_IN_MS : pushed ? 10000 : 1500);
             if (stop) return;
           }
-          const data = await callsCall("GET", state && !talking ? `?call=${watchId}&wait=1&state=${state}` : `?call=${watchId}`);
+          heard.clear();
+          const data = await callsCall("GET", state && !talking && !live.connected ? `?call=${watchId}&wait=1&state=${state}` : `?call=${watchId}`);
           if (stop) return;
           failures = 0;
           failingSince = 0;
@@ -3764,7 +3821,7 @@ export default function RecipeBox() {
         }
       }
     })();
-    return () => { stop = true; };
+    return () => { stop = true; heard.close(); };
   }, [watchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* The clock while talking; a connection that never joins gives up after
@@ -8525,6 +8582,7 @@ export default function RecipeBox() {
             onSent={refreshInbox}
             onCall={canCall ? () => placeCall(c.id, c.name || personLabel(c.id)) : null}
             callBusy={!!call && call.phase !== "ended"}
+            live={live}
           />
         ))}
       </div>
