@@ -15,7 +15,7 @@
  *                                       until that list is no longer <ids>
  * GET  ?call=<id>[&wait=1&state=<s>] -> one of your calls, and checks you in on
  *                                       it; with wait, holds until it isn't <s>
- * POST { to, offer }                 -> ring somebody
+ * POST { to, offer[, video: true] }  -> ring somebody (video: with your camera)
  * POST { answer: <id>, sdp }         -> pick up
  * POST { hangup: <id> }              -> turn it down, give up, or end it
  */
@@ -25,7 +25,7 @@ import { ensureGuests, arrive, directory } from "../../shared/guests.js";
 import { poke, bothEnds } from "../../shared/live.js";
 import {
   ensureCalls, lapsed, hangupReason, isSdp, shapeCall,
-  RINGING, ACTIVE, ENDED, MISSED_TEXT, KEEP_ENDED_MS,
+  RINGING, ACTIVE, ENDED, missedText, KEEP_ENDED_MS,
 } from "../../shared/calls.js";
 
 const json = (data, status = 200) =>
@@ -63,7 +63,7 @@ async function endCall(env, row, reason) {
     if (missed) {
       await db
         .prepare("INSERT INTO messages (pair, sender, recipient, text, at) VALUES (?1, ?2, ?3, ?4, ?5)")
-        .bind(row.pair, row.caller, row.callee, MISSED_TEXT, at)
+        .bind(row.pair, row.caller, row.callee, missedText(row), at)
         .run();
     }
     await poke(env, [...callNotice(row), ...(missed ? bothEnds(row.caller, row.callee, "message") : [])]);
@@ -142,7 +142,7 @@ export async function onRequest({ request, env }) {
         }
         const names = await book();
         return json({
-          ringing: rows.map((r) => ({ id: r.id, from: r.caller, name: names.nameOf(r.caller), at: r.at })),
+          ringing: rows.map((r) => ({ id: r.id, from: r.caller, name: names.nameOf(r.caller), at: r.at, video: !!r.video })),
         });
       }
 
@@ -229,9 +229,9 @@ export async function onRequest({ request, env }) {
         .run();
       const at = nowIso();
       const made = await db
-        .prepare(`INSERT INTO calls (pair, caller, callee, state, offer, at, caller_seen)
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)`)
-        .bind(pairOf(me.id, to), me.id, to, RINGING, body.offer, at)
+        .prepare(`INSERT INTO calls (pair, caller, callee, state, offer, at, caller_seen, video)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)`)
+        .bind(pairOf(me.id, to), me.id, to, RINGING, body.offer, at, body.video === true ? 1 : 0)
         .run();
       const row = await readCall(db, made?.meta?.last_row_id);
       await poke(env, callNotice(row));

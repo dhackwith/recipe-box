@@ -17,9 +17,9 @@ const known = new WeakMap();
 export function tablesIn(db) {
   if (!known.has(db)) {
     const asked = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table'")
       .all()
-      .then(({ results }) => new Set((results || []).map((r) => r.name)));
+      .then(({ results }) => new Map((results || []).map((r) => [r.name, r.sql || ""])));
     asked.catch(() => known.delete(db));
     known.set(db, asked);
   }
@@ -30,4 +30,11 @@ export function tablesIn(db) {
 export async function haveTables(db, names) {
   const tables = await tablesIn(db);
   return names.every((n) => tables.has(n));
+}
+
+/** The statement a table was made with, or "" if it isn't there — from the
+    same one query. SQLite rewrites the statement when a column is added, so a
+    module can tell from this whether a table made before a new column has it. */
+export async function tableSql(db, name) {
+  return (await tablesIn(db)).get(name) || "";
 }

@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-14
 
+- **Video calls.** In a chat with one person, the camera button beside the phone starts a video call. When someone video calls you, answer with Video, or with Voice to keep your camera off. During any call you can start or stop your video, flip to the back camera on a phone, and shrink the call to a small window so you can keep using the site. Video goes straight between the two of you, so it costs nothing, and it works best when you're both on Wi-Fi.
 - **Messenger is now Friends.** The tab in the corner says Friends, with a little group of people instead of an envelope, and it's smaller, so it takes up less of the screen.
 - **Choose how your picture is cropped.** When you pick a new profile picture or group picture, you can now drag the photo and zoom in to choose exactly what shows in the circle, before it's saved.
 - **Less empty space in chats.** Only a chat's picture and name open its menu now, not the empty bar beside them. The + is a little smaller, and the quick emoji has less room around it.

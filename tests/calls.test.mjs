@@ -61,7 +61,7 @@ MESSAGES.batch = async (statements) => {
 const env = { MESSAGES };
 
 const { onRequest } = await import("../functions/api/calls.js");
-const { lapsed, hangupReason, isSdp, shapeCall, RING_MS, STALE_MS, CHECK_IN_MS, KEEP_ENDED_MS, MISSED_TEXT } = await import("../shared/calls.js");
+const { lapsed, hangupReason, isSdp, shapeCall, ensureCalls, RING_MS, STALE_MS, CHECK_IN_MS, KEEP_ENDED_MS, MISSED_TEXT, MISSED_VIDEO_TEXT } = await import("../shared/calls.js");
 const { talkClock, endedLabel, callStatus, micError, callsSupported, trackRings, liveRings, retryDelay } = await import("../src/calls.js");
 
 const call = async (method, query, token, body) => {
@@ -189,6 +189,65 @@ const kept = sqlite.prepare("SELECT id FROM calls").all().map((r) => r.id);
 is("ringing somebody clears away calls that ended over a week ago", kept.includes(oldestEnded), false);
 is("...but keeps recent ones", kept.includes(newestEnded), true);
 await call("POST", "", michael, { hangup: clearing });
+
+/* ── video ── */
+const voiceOnly = (await call("POST", "", devon, { to: "nicholas", offer: OFFER })).data.call;
+is("a call rings as a voice call unless it says otherwise", voiceOnly.video, false);
+is("...and is rung that way", (await call("GET", "?ringing", nick)).data.ringing.map((r) => r.video), [false]);
+await call("POST", "", devon, { hangup: voiceOnly.id });
+const withVideo = (await call("POST", "", devon, { to: "nicholas", offer: OFFER, video: true })).data.call;
+is("a video call says so to the caller", withVideo.video, true);
+is("...and to the person rung", (await call("GET", "?ringing", nick)).data.ringing.map((r) => r.video), [true]);
+is("...and when they look at it", (await call("GET", `?call=${withVideo.id}`, nick)).data.call.video, true);
+const missedVideo = () => sqlite.prepare("SELECT COUNT(*) AS n FROM messages WHERE text = ?").get(MISSED_VIDEO_TEXT).n;
+await call("POST", "", devon, { hangup: withVideo.id });
+is("a video call given up on leaves a missed video call", missedVideo(), 1);
+const odd = (await call("POST", "", devon, { to: "nicholas", offer: OFFER, video: "yes" })).data.call;
+is("only true makes it video", odd.video, false);
+await call("POST", "", devon, { hangup: odd.id });
+
+{
+  /* A database made before video calls: the column is added, once. */
+  const old = new DatabaseSync(":memory:");
+  old.exec(`CREATE TABLE calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, pair TEXT NOT NULL, caller TEXT NOT NULL, callee TEXT NOT NULL,
+    state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', offer TEXT NOT NULL, answer TEXT NOT NULL DEFAULT '',
+    at TEXT NOT NULL, answered_at TEXT NOT NULL DEFAULT '', ended_at TEXT NOT NULL DEFAULT '',
+    caller_seen TEXT NOT NULL, callee_seen TEXT NOT NULL DEFAULT '')`);
+  old.exec("INSERT INTO calls (pair, caller, callee, state, offer, at, caller_seen) VALUES ('a:b', 'a', 'b', 'ended', '', 't', 't')");
+  const sent = [];
+  const wrap = (db) => ({
+    prepare(sql) {
+      sent.push(sql);
+      const stmt = db.prepare(sql);
+      let args = [];
+      const api = {
+        bind: (...a) => { args = a; return api; },
+        all: async () => ({ results: stmt.all(...args) }),
+        run: async () => { stmt.run(...args); return { meta: {} }; },
+      };
+      return api;
+    },
+  });
+  const db = wrap(old);
+  await ensureCalls(db);
+  const columns = old.prepare("PRAGMA table_info(calls)").all().map((c) => c.name);
+  is("a calls table from before video gets the column", columns.includes("video"), true);
+  is("...and old calls count as voice calls", old.prepare("SELECT video FROM calls").get().video, 0);
+  is("...added, not made again", [sent.filter((s) => /^\s*ALTER/i.test(s)).length, sent.filter((s) => /^\s*CREATE/i.test(s)).length], [1, 0]);
+  const again = wrap(old);
+  await ensureCalls(again);
+  is("a second server copy on it sends no ALTER", sent.filter((s) => /^\s*ALTER/i.test(s)).length, 1);
+  const racing = new DatabaseSync(":memory:");
+  racing.exec("CREATE TABLE calls (id INTEGER PRIMARY KEY, caller_seen TEXT)");
+  const late = wrap(racing);
+  racing.exec("ALTER TABLE calls ADD COLUMN video INTEGER NOT NULL DEFAULT 0");
+  /* This copy listed the tables before another added the column. */
+  const stale = { prepare: (sql) => (/sqlite_master/.test(sql)
+    ? { all: async () => ({ results: [{ name: "calls", sql: "CREATE TABLE calls (id INTEGER PRIMARY KEY, caller_seen TEXT)" }] }) }
+    : late.prepare(sql)) };
+  is("two copies adding it at once is harmless", await ensureCalls(stale).then(() => "fine", (err) => err.message), "fine");
+}
 
 /* ── blocks ── */
 sqlite.prepare("INSERT INTO blocks (blocker, blocked, at) VALUES ('nicholas', 'devon', ?)").run(new Date().toISOString());

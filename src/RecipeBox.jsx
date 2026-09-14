@@ -34,6 +34,9 @@ import {
   CALLS_API, STUN_SERVERS, callsSupported, callsCall, callStatus, iceGathered, micError, isMicError, playTone,
   RING_MS, CHECK_IN_MS, STALE_MS, trackRings, liveRings, retryDelay,
 } from "./calls.js";
+import {
+  cameraConstraints, cameraError, nextFacing, STATE_CHANNEL, stateMessage, readState, videoTransceiver, onScreen, gridFor,
+} from "./video.js";
 import { createLive, watcher, liveUrl, RESYNC_MS, RECONNECTING_MS } from "./live.js";
 import { VOICE_API, VOICE_HERE_MS, voiceCall, connectedWithin, createSpeakingMeter } from "./voice.js";
 import { AWAY_MS } from "../shared/presence.js";
@@ -1319,6 +1322,15 @@ function Phone({ size = 18 }) {
   );
 }
 
+function Video({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M23 7l-7 5 7 5V7z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function Headphones({ size = 18 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -1548,12 +1560,67 @@ function PeoplePicker({ people, face, max, title, lead, busy, error, allowName =
   );
 }
 
+/* ══ The video screen of a call ══
+   Everybody else's pictures in a grid (gridFor: one for a 1:1 call, a group's
+   later), your own small in the corner, and the call's buttons along the
+   bottom. It shrinks to a small window at the top right, so the site stays
+   usable while you talk. A picture is muted: the voice plays through the
+   call's own audio element. */
+function VideoTile({ id, name, stream, mirrored, face, faceSize, className = "" }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.srcObject = stream || null;
+    if (stream) el.play?.().catch(() => {});
+  }, [stream]);
+  return (
+    <div className={`rb-vtile ${className}`}>
+      {stream ? (
+        <video ref={ref} className={`rb-vtile-video${mirrored ? " is-mirrored" : ""}`} autoPlay playsInline muted />
+      ) : (
+        <span className="rb-vtile-face">{face(id, name, faceSize)}</span>
+      )}
+      <span className="rb-vtile-name">{name}</span>
+    </div>
+  );
+}
+
+function CallStage({ label, title, status, tiles, self, small, onToggleSize, face, children }) {
+  const wide = gridFor(tiles.length);
+  const narrow = gridFor(tiles.length, true);
+  return (
+    <section className={`rb-stage rb-noprint${small ? " is-small" : ""}`} aria-label={label}>
+      <div className="rb-stage-view">
+        <div className="rb-stage-grid" style={{ "--cols": wide.cols, "--cols-narrow": narrow.cols }}>
+          {tiles.map((t) => (
+            <VideoTile key={t.id} id={t.id} name={t.name} stream={t.stream} face={face} faceSize={small ? 48 : 112} />
+          ))}
+        </div>
+        {self && (
+          <VideoTile className="rb-stage-self" id={self.id} name={self.name} stream={self.stream} mirrored={self.mirrored} face={face} faceSize={32} />
+        )}
+        <div className="rb-stage-top">
+          <p className="rb-stage-title">{title}</p>
+          <p className="rb-stage-status" role="status">{status}</p>
+        </div>
+      </div>
+      <div className="rb-stage-btns">
+        <button type="button" className="rb-call-btn is-mute rb-focus" onClick={onToggleSize}>
+          {small ? "Enlarge" : "Shrink"}
+        </button>
+        {children}
+      </div>
+    </section>
+  );
+}
+
 function ChatWindow({
   id, name, minimized, focusAt, unread, blocked, owner,
   face, faceWithLight, statusFor,
   onMinimize, onRestore, onClose, onBlock, onRead, onSent, onOpenPhoto,
   quickEmoji, onQuickEmoji,
-  onCall, callBusy,
+  onCall, onVideoCall, callBusy,
   live,
   me, group, groupFace, people, onGroup, onLeft,
   voiceRoom, inVoice, speaking, onJoinVoice, onLeaveVoice, onMuteVoice, onVoiceRoom,
@@ -2172,6 +2239,18 @@ function ChatWindow({
             title={blocked ? `You can't call ${first}` : callBusy ? "You're already on a call" : `Call ${first}`}
           >
             <Phone size={16} />
+          </button>
+        )}
+        {onVideoCall && !isGroup && (
+          <button
+            type="button"
+            className="rb-chatwin-ctl rb-focus"
+            onClick={onVideoCall}
+            disabled={blocked || callBusy}
+            aria-label={`Video call ${name}`}
+            title={blocked ? `You can't call ${first}` : callBusy ? "You're already on a call" : `Video call ${first}`}
+          >
+            <Video size={16} />
           </button>
         )}
         <button type="button" className="rb-chatwin-ctl is-minimise rb-focus" onClick={onMinimize} aria-label={`Minimise your chat with ${name}`} title="Minimise">
@@ -4345,19 +4424,28 @@ export default function RecipeBox() {
   const callRef = useRef(null);
   const rtc = useRef({ pc: null, stream: null });
   const remoteAudio = useRef(null);
+  /* Video (src/video.js): the pictures on the call screen — theirs as it
+     arrives, yours from the camera — and whether this device has a second
+     camera to flip to. */
+  const [theirVideo, setTheirVideo] = useState(null);
+  const [myVideo, setMyVideo] = useState(null);
+  const [canFlip, setCanFlip] = useState(false);
   const putCall = (next) => {
     const value = typeof next === "function" ? next(callRef.current) : next;
     callRef.current = value;
     setCall(value);
   };
 
-  /* The microphone off and the connection closed — never left listening. When
-     this end is the one leaving, it first says "bye" down the connection
+  /* The microphone and camera off and the connection closed — never left on.
+     When this end is the one leaving, it first says "bye" down the connection
      itself, and keeps the connection a moment longer so the word gets there. */
   const dropMedia = (sayBye = false) => {
-    const { pc, stream, bye } = rtc.current;
+    const { pc, stream, cam, bye } = rtc.current;
     rtc.current = { pc: null, stream: null, bye: null };
     stream?.getTracks().forEach((t) => t.stop());
+    cam?.stop();
+    setMyVideo(null);
+    setTheirVideo(null);
     if (remoteAudio.current) remoteAudio.current.srcObject = null;
     let linger = 0;
     if (sayBye && bye?.readyState === "open") {
@@ -4379,30 +4467,55 @@ export default function RecipeBox() {
     if (c.id) callsCall("POST", "", { hangup: c.id }).catch(() => {});
   };
 
-  /* The microphone and a connection for it. `still` says whether the call this
-     is for is still wanted: a hang-up while the browser was asking for the
-     microphone must not leave it on. */
-  const openPeer = async (still) => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: false,
-    });
+  /* The microphone — and the camera, for a video call — and a connection for
+     them. `still` says whether the call this is for is still wanted: a hang-up
+     while the browser was asking must not leave either on. Without a camera a
+     video call carries on as a voice call, and says why; without a microphone
+     there is no call. Returns the connection and the camera's track, if any.
+
+     Every call has room for video each way, even a voice call (src/video.js):
+     the caller makes that room in placeCall, and the person answering finds it
+     in the offer. */
+  const openPeer = async (still, camera = false) => {
+    const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    let got = null;
+    let cameraFailed = null;
+    if (camera) {
+      try {
+        got = await navigator.mediaDevices.getUserMedia({ audio, video: cameraConstraints("user") });
+      } catch (err) {
+        cameraFailed = err;
+      }
+    }
+    if (!got) got = await navigator.mediaDevices.getUserMedia({ audio, video: false });
     if (!still()) {
-      stream.getTracks().forEach((t) => t.stop());
+      got.getTracks().forEach((t) => t.stop());
       throw Object.assign(new Error("gone"), { name: "Gone" });
     }
+    if (cameraFailed) flash(cameraError(cameraFailed), 6000);
+    const [cam = null] = got.getVideoTracks();
+    const stream = new MediaStream(got.getAudioTracks());
     const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
     /* A channel for the two ends to say "bye" on, so a hang-up reaches the
        other end at once without either of them asking the site. Both sides
        make it the same way (negotiated, id 0), so it needs no setting up. */
     const bye = pc.createDataChannel("bye", { negotiated: true, id: 0 });
     bye.onmessage = () => { if (rtc.current.pc === pc) endHere("ended"); };
-    rtc.current = { pc, stream, bye };
+    /* And one, made the same way, to say whether each camera is on. */
+    const state = pc.createDataChannel(STATE_CHANNEL.label, { negotiated: true, id: STATE_CHANNEL.id });
+    state.onopen = () => { if (rtc.current.pc === pc) tellCamera(); };
+    state.onmessage = (e) => {
+      const said = readState(e.data);
+      if (said && rtc.current.pc === pc) putCall((c) => (c && c.phase !== "ended" ? { ...c, theirCamera: said.camera } : c));
+    };
+    rtc.current = { pc, stream, bye, state, cam: null, video: null, facing: "user" };
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
     pc.ontrack = (e) => {
+      if (rtc.current.pc !== pc) return;
+      if (e.track.kind === "video") { setTheirVideo(new MediaStream([e.track])); return; }
       const el = remoteAudio.current;
       if (!el) return;
-      el.srcObject = e.streams[0] || new MediaStream([e.track]);
+      el.srcObject = new MediaStream([e.track]);
       el.play?.().catch(() => {});
     };
     let lost = null;
@@ -4420,21 +4533,28 @@ export default function RecipeBox() {
         lost = setTimeout(() => { if (rtc.current.pc === pc && pc.connectionState !== "connected") failCall("dropped"); }, 8000);
       }
     };
-    return pc;
+    return { pc, cam };
   };
 
-  const placeCall = async (id, name) => {
+  const placeCall = async (id, name, video = false) => {
     if (!canCall || (callRef.current && callRef.current.phase !== "ended")) return;
     if (voiceRef.current) { flash("Leave the voice channel before calling", 5000); return; }
     const key = Math.random();
     const still = () => callRef.current?.key === key && callRef.current.phase !== "ended";
-    putCall({ key, id: null, with: id, name, outgoing: true, phase: "calling", reason: "", error: "", muted: false });
+    putCall({
+      key, id: null, with: id, name, outgoing: true, video, phase: "calling", reason: "", error: "", muted: false,
+      camera: false, theirCamera: false, canVideo: false, small: false,
+    });
     try {
-      const pc = await openPeer(still);
+      const { pc, cam } = await openPeer(still, video);
+      rtc.current.video = pc.addTransceiver("video", { direction: "sendrecv", streams: [rtc.current.stream] });
+      /* Rung as a video call only if the camera really started. */
+      putCall((c) => (c ? { ...c, canVideo: true, video: !!cam } : c));
+      if (cam) await showCamera(cam);
       await pc.setLocalDescription(await pc.createOffer());
       await iceGathered(pc);
       if (!still()) return;
-      const { call: made } = await callsCall("POST", "", { to: id, offer: pc.localDescription.sdp });
+      const { call: made } = await callsCall("POST", "", { to: id, offer: pc.localDescription.sdp, ...(cam ? { video: true } : {}) });
       if (!still()) { callsCall("POST", "", { hangup: made.id }).catch(() => {}); return; }
       putCall((c) => ({ ...c, id: made.id }));
     } catch (err) {
@@ -4443,22 +4563,35 @@ export default function RecipeBox() {
     }
   };
 
-  const acceptCall = async (ring) => {
+  const acceptCall = async (ring, withVideo = false) => {
     if (callRef.current && callRef.current.phase !== "ended") return;
     /* one microphone: answering a call leaves the voice channel */
     if (voiceRef.current) await leaveVoice();
     const key = Math.random();
     const still = () => callRef.current?.key === key && callRef.current.phase !== "ended";
     setIncoming((all) => all.filter((r) => r.id !== ring.id));
-    putCall({ key, id: ring.id, with: ring.from, name: ring.name, outgoing: false, phase: "connecting", reason: "", error: "", muted: false });
+    putCall({
+      key, id: ring.id, with: ring.from, name: ring.name, outgoing: false, video: !!ring.video, phase: "connecting", reason: "", error: "", muted: false,
+      camera: false, theirCamera: false, canVideo: false, small: false,
+    });
     try {
       const { call: now } = await callsCall("GET", `?call=${ring.id}`);
       if (now.state !== "ringing" || !now.offer) {
         endHere(now.state === "active" ? "error" : now.reason || "ended", now.state === "active" ? "You answered this call somewhere else" : "");
         return;
       }
-      const pc = await openPeer(still);
+      const { pc, cam } = await openPeer(still, withVideo);
       await pc.setRemoteDescription({ type: "offer", sdp: now.offer });
+      /* The caller's room for video, taken up both ways. A page from before
+         video offers none, and the call stays voice only. */
+      const slot = videoTransceiver(pc);
+      if (slot) {
+        slot.direction = "sendrecv";
+        rtc.current.video = slot;
+        putCall((c) => (c ? { ...c, canVideo: true } : c));
+      }
+      if (cam && slot) await showCamera(cam);
+      else if (cam) { cam.stop(); flash("This call can't carry video — the other page needs a refresh", 6000); }
       await pc.setLocalDescription(await pc.createAnswer());
       await iceGathered(pc);
       if (!still()) return;
@@ -4470,6 +4603,69 @@ export default function RecipeBox() {
     }
   };
 
+  /* Tells the other end whether this end's camera is on. */
+  const tellCamera = () => {
+    const { state, cam } = rtc.current;
+    if (state?.readyState !== "open") return;
+    try { state.send(stateMessage({ camera: !!cam })); } catch { /* closing */ }
+  };
+
+  /* Puts a camera track, or none, on the call: into the room for video, onto
+     your own picture, and said to the other end. The track it replaces is
+     stopped, so the camera light goes off with it. */
+  const showCamera = async (track) => {
+    const r = rtc.current;
+    if (!r.video) { track?.stop(); return; }
+    const old = r.cam;
+    r.cam = track;
+    try { await r.video.sender.replaceTrack(track); } catch { /* the call is closing */ }
+    if (old && old !== track) old.stop();
+    if (rtc.current !== r) { track?.stop(); return; }
+    setMyVideo(track ? new MediaStream([track]) : null);
+    putCall((c) => (c ? { ...c, camera: !!track, facing: r.facing } : c));
+    tellCamera();
+    if (!track) return;
+    /* A phone can take the camera back — another app, or the screen locking. */
+    track.onended = () => { if (rtc.current.cam === track) showCamera(null); };
+    navigator.mediaDevices.enumerateDevices?.()
+      .then((all) => setCanFlip(all.filter((d) => d.kind === "videoinput").length > 1))
+      .catch(() => {});
+  };
+
+  const toggleCamera = async () => {
+    const r = rtc.current;
+    const c = callRef.current;
+    if (!c || c.phase === "ended" || !r.video) return;
+    if (r.cam) { await showCamera(null); return; }
+    try {
+      const got = await navigator.mediaDevices.getUserMedia({ video: cameraConstraints(r.facing) });
+      const [track] = got.getVideoTracks();
+      if (rtc.current !== r || r.cam) { track.stop(); return; }
+      await showCamera(track);
+    } catch (err) {
+      if (rtc.current === r) flash(cameraError(err), 6000);
+    }
+  };
+
+  /* Front camera to back and back again. The old one is let go of first:
+     many phones can't have both open at once. */
+  const flipCamera = async () => {
+    const r = rtc.current;
+    if (!r.cam) return;
+    const facing = nextFacing(r.facing);
+    r.cam.stop();
+    try {
+      const got = await navigator.mediaDevices.getUserMedia({ video: cameraConstraints(facing) });
+      const [track] = got.getVideoTracks();
+      if (rtc.current !== r) { track.stop(); return; }
+      r.facing = facing;
+      await showCamera(track);
+    } catch (err) {
+      if (rtc.current !== r) return;
+      flash(cameraError(err), 6000);
+      await showCamera(null);
+    }
+  };
   const declineCall = (ring) => {
     setIncoming((all) => all.filter((r) => r.id !== ring.id));
     callsCall("POST", "", { hangup: ring.id }).catch(() => {});
@@ -6987,7 +7183,7 @@ export default function RecipeBox() {
     /* A call: one card at the top of the screen, over everything — cooking
        mode and the timers included, because somebody may well ring while you
        cook. Words on the buttons, not just icons: it's a phone call. */
-    .rb-call { position: fixed; top: 12px; left: 50%; z-index: 75; transform: translateX(-50%); width: min(380px, calc(100vw - 32px)); box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 12px; border: 1px solid var(--card-edge); border-radius: 14px; background: var(--card-bg); color: var(--card-text); box-shadow: 0 14px 40px -18px rgba(0, 0, 0, .7); }
+    .rb-call { position: fixed; top: 12px; left: 50%; z-index: 75; transform: translateX(-50%); width: min(440px, calc(100vw - 32px)); box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 12px; border: 1px solid var(--card-edge); border-radius: 14px; background: var(--card-bg); color: var(--card-text); box-shadow: 0 14px 40px -18px rgba(0, 0, 0, .7); }
     .rb-call.is-ringing { border-color: #3FA45B; box-shadow: 0 0 0 3px color-mix(in srgb, #3FA45B 40%, transparent), 0 14px 40px -18px rgba(0, 0, 0, .7); }
     .rb-call-lines { flex: 1; min-width: 0; }
     .rb-call-name { margin: 0; font: 700 15px/1.25 ${SOCIAL}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -6999,6 +7195,31 @@ export default function RecipeBox() {
     .rb-call-btn.is-end { background: #B83A2A; }
     .rb-call-btn.is-mute { background: var(--card-lift); border-color: var(--card-edge); color: var(--card-text); }
     .rb-call-btn.is-mute[aria-pressed="true"] { background: var(--card-text); border-color: var(--card-text); color: var(--card-bg); }
+    /* A video call: a screen over everything, as the call card is, with its
+       pictures on black whatever the theme. Shrunk, it's a small window at the
+       top right, so the site stays usable while you talk. */
+    .rb-stage { position: fixed; z-index: 75; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(960px, calc(100vw - 32px)); height: min(640px, calc(100vh - 32px)); box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: #111; color: #fff; box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .8); }
+    .rb-stage.is-small { top: 12px; right: 12px; left: auto; transform: none; width: min(300px, calc(100vw - 24px)); height: 260px; border-radius: 12px; }
+    .rb-stage-view { position: relative; flex: 1; min-height: 0; display: flex; }
+    .rb-stage-grid { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); gap: 4px; padding: 4px; }
+    .rb-vtile { position: relative; min-width: 0; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: #222; }
+    .rb-vtile-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+    .rb-vtile-video.is-mirrored { transform: scaleX(-1); }
+    .rb-vtile-face { display: inline-flex; }
+    .rb-vtile-name { position: absolute; left: 8px; bottom: 8px; max-width: calc(100% - 16px); box-sizing: border-box; padding: 2px 8px; border-radius: 999px; background: rgba(0, 0, 0, .55); font: 600 12px/1.5 ${SOCIAL}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rb-stage-self { position: absolute; right: 12px; bottom: 12px; width: 22%; min-width: 96px; max-width: 200px; aspect-ratio: 4 / 3; box-shadow: 0 8px 24px -6px rgba(0, 0, 0, .9); }
+    .rb-stage-self .rb-vtile-video { object-fit: cover; }
+    .rb-stage-self .rb-vtile-name { display: none; }
+    .rb-stage-top { position: absolute; top: 0; left: 0; right: 0; padding: 12px 16px 28px; background: linear-gradient(rgba(0, 0, 0, .6), transparent); pointer-events: none; }
+    .rb-stage-title { margin: 0; font: 700 15px/1.25 ${SOCIAL}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rb-stage-status { margin: 2px 0 0; font: 400 12.5px/1.4 ${SOCIAL}; opacity: .85; font-variant-numeric: tabular-nums; }
+    .rb-stage-btns { flex: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 10px 12px max(10px, env(safe-area-inset-bottom)); }
+    .rb-stage .rb-call-btn.is-mute { background: rgba(255, 255, 255, .14); border-color: transparent; color: #fff; }
+    .rb-stage .rb-call-btn.is-mute[aria-pressed="true"] { background: #fff; color: #111; }
+    .rb-stage.is-small .rb-stage-btns { gap: 4px; padding: 6px; }
+    .rb-stage.is-small .rb-call-btn { padding: 5px 9px; font-size: 12px; }
+    .rb-stage.is-small .rb-stage-self { right: 6px; bottom: 6px; min-width: 64px; width: 30%; }
+    .rb-stage.is-small .rb-stage-top { padding: 8px 10px 18px; }
     .rb-packs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 18px; }
     .rb-packs-where { display: inline-flex; align-items: center; gap: 8px; font: 500 13px/1.3 ${UI}; color: var(--card-muted); }
     .rb-packs-note { flex-basis: 100%; margin: 0; font: 400 12.5px/1.5 ${UI}; color: var(--card-muted); }
@@ -7023,6 +7244,9 @@ export default function RecipeBox() {
       .rb-messenger-panel { width: min(92vw, 340px); }
       .rb-chatwin { position: fixed; left: 8px; right: 8px; bottom: 50px; width: auto; height: min(70vh, 460px); border-bottom: 1px solid var(--card-edge); border-radius: 8px; }
       .rb-chathead { margin-bottom: 6px; }
+      /* A video call fills a phone's screen, pictures stacked. */
+      .rb-stage:not(.is-small) { inset: 0; transform: none; width: auto; height: auto; border-radius: 0; }
+      .rb-stage-grid { grid-template-columns: repeat(var(--cols-narrow, 1), minmax(0, 1fr)); }
     }
     /* The light: lit for somebody who has used the site in the last five
        minutes, and unlit rather than red for somebody who has not — they are
@@ -7284,13 +7508,13 @@ export default function RecipeBox() {
        Pages cross-fade through the browser's view transitions (setView). Each is written as .rb .name, so the class is
        still defined in one place only (tests/styles.test.mjs). */
     @keyframes rb-appear { from { opacity: 0; } to { opacity: 1; } }
-    .rb .rb-appear, .rb .rb-person-menu, .rb .rb-msg-menu, .rb .rb-emoji-menu, .rb .rb-plus-menu, .rb .rb-messenger-panel, .rb .rb-chatwin, .rb .rb-chathead, .rb .rb-picker, .rb .rb-gif-panel, .rb .rb-lightbox, .rb .rb-call, .rb .rb-timers { animation: rb-appear 180ms ease-out both; }
+    .rb .rb-appear, .rb .rb-person-menu, .rb .rb-msg-menu, .rb .rb-emoji-menu, .rb .rb-plus-menu, .rb .rb-messenger-panel, .rb .rb-chatwin, .rb .rb-chathead, .rb .rb-picker, .rb .rb-gif-panel, .rb .rb-lightbox, .rb .rb-call, .rb .rb-stage, .rb .rb-timers { animation: rb-appear 180ms ease-out both; }
     ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 220ms; }
     /* Hover and pressed colours ease rather than snap. :where() gives this no
        weight, so anything with a transition of its own keeps it. */
     :where(button, a, input, select, textarea, [role="button"]) { transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, opacity 150ms ease; }
     @media (prefers-reduced-motion: reduce) {
-      .rb .rb-appear, .rb .rb-person-menu, .rb .rb-msg-menu, .rb .rb-emoji-menu, .rb .rb-plus-menu, .rb .rb-messenger-panel, .rb .rb-chatwin, .rb .rb-chathead, .rb .rb-picker, .rb .rb-gif-panel, .rb .rb-lightbox, .rb .rb-call, .rb .rb-timers { animation: none; }
+      .rb .rb-appear, .rb .rb-person-menu, .rb .rb-msg-menu, .rb .rb-emoji-menu, .rb .rb-plus-menu, .rb .rb-messenger-panel, .rb .rb-chatwin, .rb .rb-chathead, .rb .rb-picker, .rb .rb-gif-panel, .rb .rb-lightbox, .rb .rb-call, .rb .rb-stage, .rb .rb-timers { animation: none; }
       :where(button, a, input, select, textarea, [role="button"]) { transition: none; }
       ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
     }
@@ -9920,6 +10144,7 @@ export default function RecipeBox() {
             onRead={markRead}
             onSent={refreshInbox}
             onCall={canCall ? () => placeCall(c.id, c.name || personLabel(c.id)) : null}
+            onVideoCall={canCall ? () => placeCall(c.id, c.name || personLabel(c.id), true) : null}
             callBusy={!!call && call.phase !== "ended"}
             live={live}
           />
@@ -9951,26 +10176,35 @@ export default function RecipeBox() {
         );
       })()}
 
-      {/* ═══════ A CALL ═══════ */}
-      {(ringingNow || call) && (() => {
+      {/* ═══════ A CALL ═══════
+          A card while it rings or while it's only voices; the video screen
+          once somebody's camera is on. */}
+      {(ringingNow || (call && !onScreen(call))) && (() => {
         const who = ringingNow ? { id: ringingNow.from, name: ringingNow.name } : { id: call.with, name: call.name };
         return (
           <section
             className={`rb-call rb-noprint${ringingNow ? " is-ringing" : ""}`}
-            aria-label={ringingNow ? `${who.name} is calling` : `Call with ${who.name}`}
+            aria-label={ringingNow ? `${who.name} is ${ringingNow.video ? "video " : ""}calling` : `Call with ${who.name}`}
           >
             {face(who.id, who.name, 40)}
             <div className="rb-call-lines">
               <p className="rb-call-name">{who.name}</p>
               <p className="rb-call-status" role="status">
-                {ringingNow ? "Calling you" : callStatus({ ...call, now: callNow })}
+                {ringingNow ? (ringingNow.video ? "Video calling you" : "Calling you") : callStatus({ ...call, now: callNow })}
               </p>
             </div>
             <div className="rb-call-btns">
               {ringingNow ? (
                 <>
                   <button type="button" className="rb-call-btn is-end rb-focus" onClick={() => declineCall(ringingNow)}>Decline</button>
-                  <button type="button" className="rb-call-btn is-answer rb-focus" onClick={() => acceptCall(ringingNow)}>Answer</button>
+                  {ringingNow.video ? (
+                    <>
+                      <button type="button" className="rb-call-btn is-answer rb-focus" onClick={() => acceptCall(ringingNow, false)} aria-label="Answer with voice only">Voice</button>
+                      <button type="button" className="rb-call-btn is-answer rb-focus" onClick={() => acceptCall(ringingNow, true)} aria-label="Answer with video">Video</button>
+                    </>
+                  ) : (
+                    <button type="button" className="rb-call-btn is-answer rb-focus" onClick={() => acceptCall(ringingNow)}>Answer</button>
+                  )}
                 </>
               ) : call.phase === "ended" ? (
                 <button type="button" className="rb-chatwin-ctl rb-focus" onClick={() => putCall(null)} aria-label="Close">
@@ -9981,6 +10215,11 @@ export default function RecipeBox() {
                   <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleMute} aria-pressed={!!call.muted}>
                     {call.muted ? "Unmute" : "Mute"}
                   </button>
+                  {call.canVideo && (
+                    <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleCamera} aria-label="Turn your camera on">
+                      Video
+                    </button>
+                  )}
                   <button type="button" className="rb-call-btn is-end rb-focus" onClick={hangUp}>
                     {call.phase === "calling" ? "Cancel" : "Hang up"}
                   </button>
@@ -9990,6 +10229,31 @@ export default function RecipeBox() {
           </section>
         );
       })()}
+      {call && onScreen(call) && (
+        <CallStage
+          label={`Video call with ${call.name}`}
+          title={call.name}
+          status={callStatus({ ...call, now: callNow })}
+          tiles={[{ id: call.with, name: call.name, stream: call.theirCamera ? theirVideo : null }]}
+          self={call.camera && myVideo ? { id: "me", name: "You", stream: myVideo, mirrored: call.facing !== "environment" } : null}
+          small={!!call.small}
+          onToggleSize={() => putCall((c) => (c ? { ...c, small: !c.small } : c))}
+          face={face}
+        >
+          <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleMute} aria-pressed={!!call.muted}>
+            {call.muted ? "Unmute" : "Mute"}
+          </button>
+          <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleCamera}>
+            {call.camera ? "Stop video" : "Start video"}
+          </button>
+          {call.camera && canFlip && (
+            <button type="button" className="rb-call-btn is-mute rb-focus" onClick={flipCamera}>Flip</button>
+          )}
+          <button type="button" className="rb-call-btn is-end rb-focus" onClick={hangUp}>
+            {call.phase === "calling" ? "Cancel" : "Hang up"}
+          </button>
+        </CallStage>
+      )}
       <audio ref={remoteAudio} autoPlay playsInline hidden />
 
       {/* ═══════ A PHOTO, FULL SIZE ═══════ */}

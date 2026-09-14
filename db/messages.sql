@@ -100,7 +100,9 @@ CREATE TABLE IF NOT EXISTS attachment_pieces (
 -- offer and the answer, each a browser's description of how to reach it. The
 -- call itself goes straight between the two browsers and never comes here.
 -- state is ringing, active or ended; a call nobody ends is ended with a reason
--- the next time anybody asks about it. shared/calls.js also creates this.
+-- the next time anybody asks about it. video is 1 when the caller rang with
+-- their camera. shared/calls.js also creates this, and adds video to a table
+-- made before it.
 CREATE TABLE IF NOT EXISTS calls (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   pair        TEXT NOT NULL,
@@ -114,7 +116,8 @@ CREATE TABLE IF NOT EXISTS calls (
   answered_at TEXT NOT NULL DEFAULT '',
   ended_at    TEXT NOT NULL DEFAULT '',
   caller_seen TEXT NOT NULL,
-  callee_seen TEXT NOT NULL DEFAULT ''
+  callee_seen TEXT NOT NULL DEFAULT '',
+  video       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS calls_to ON calls (callee, state);
 CREATE INDEX IF NOT EXISTS calls_from ON calls (caller, state);
