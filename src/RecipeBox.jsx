@@ -36,6 +36,7 @@ import {
 } from "./calls.js";
 import {
   cameraConstraints, cameraError, nextFacing, STATE_CHANNEL, stateMessage, readState, videoTransceiver, onScreen, gridFor,
+  MIC_CONSTRAINTS, deviceChoices, withDevice, DEVICES_KEY, asDevicePrefs,
 } from "./video.js";
 import { createLive, watcher, liveUrl, RESYNC_MS, RECONNECTING_MS } from "./live.js";
 import { VOICE_API, VOICE_HERE_MS, voiceCall, connectedWithin, createSpeakingMeter } from "./voice.js";
@@ -1560,6 +1561,42 @@ function PeoplePicker({ people, face, max, title, lead, busy, error, allowName =
   );
 }
 
+/* Device settings in a call: which camera and which microphone it uses, out
+   of the ones this device has. A choice takes effect at once and is
+   remembered on this device for the next call (src/video.js). */
+function DeviceSettings({ cameras, mics, camera, mic, onCamera, onMic, onClose }) {
+  const pick = (label, list, value, onChange, none) => (
+    <label className="rb-devices-row">
+      <span className="rb-devices-label">{label}</span>
+      <select
+        className="rb-devices-pick rb-focus"
+        value={list.some((d) => d.id === value) ? value : list[0]?.id || ""}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={!list.length}
+      >
+        {list.length ? list.map((d) => <option key={d.id} value={d.id}>{d.label}</option>) : <option value="">{none}</option>}
+      </select>
+    </label>
+  );
+  return (
+    <div
+      className="rb-devices"
+      role="group"
+      aria-label="Device settings"
+      onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } }}
+    >
+      <div className="rb-devices-head">
+        <p className="rb-devices-title">Device settings</p>
+        <button type="button" className="rb-chatwin-ctl rb-focus" onClick={onClose} aria-label="Close device settings">
+          <span aria-hidden>×</span>
+        </button>
+      </div>
+      {pick("Camera", cameras, camera, onCamera, "No camera found")}
+      {pick("Microphone", mics, mic, onMic, "No microphone found")}
+    </div>
+  );
+}
+
 /* ══ The video screen of a call ══
    Everybody else's pictures in a grid (gridFor: one for a 1:1 call, a group's
    later), your own small in the corner, and the call's buttons along the
@@ -1586,7 +1623,7 @@ function VideoTile({ id, name, stream, mirrored, face, faceSize, className = "" 
   );
 }
 
-function CallStage({ label, title, status, tiles, self, small, onToggleSize, face, children }) {
+function CallStage({ label, title, status, tiles, self, small, onToggleSize, face, panel, children }) {
   const wide = gridFor(tiles.length);
   const narrow = gridFor(tiles.length, true);
   return (
@@ -1604,6 +1641,7 @@ function CallStage({ label, title, status, tiles, self, small, onToggleSize, fac
           <p className="rb-stage-title">{title}</p>
           <p className="rb-stage-status" role="status">{status}</p>
         </div>
+        {panel}
       </div>
       <div className="rb-stage-btns">
         <button type="button" className="rb-call-btn is-mute rb-focus" onClick={onToggleSize}>
@@ -4429,7 +4467,26 @@ export default function RecipeBox() {
      camera to flip to. */
   const [theirVideo, setTheirVideo] = useState(null);
   const [myVideo, setMyVideo] = useState(null);
-  const [canFlip, setCanFlip] = useState(false);
+  /* Device settings: the cameras and microphones this device has, as last
+     listed, and which of them it was last set to use, kept on the device. */
+  const [devices, setDevices] = useState({ cameras: [], mics: [] });
+  const devicePrefs = useRef(null);
+  if (devicePrefs.current === null) {
+    try {
+      devicePrefs.current = asDevicePrefs(JSON.parse(localStorage.getItem(DEVICES_KEY) || "{}"));
+    } catch {
+      devicePrefs.current = asDevicePrefs({});
+    }
+  }
+  const rememberDevice = (kind, id) => {
+    devicePrefs.current = { ...devicePrefs.current, [kind]: id };
+    try { localStorage.setItem(DEVICES_KEY, JSON.stringify(devicePrefs.current)); } catch { /* used now, just not remembered */ }
+  };
+  const refreshDevices = () => {
+    navigator.mediaDevices?.enumerateDevices?.()
+      .then((all) => setDevices({ cameras: deviceChoices(all, "videoinput"), mics: deviceChoices(all, "audioinput") }))
+      .catch(() => {});
+  };
   const putCall = (next) => {
     const value = typeof next === "function" ? next(callRef.current) : next;
     callRef.current = value;
@@ -4477,12 +4534,13 @@ export default function RecipeBox() {
      the caller makes that room in placeCall, and the person answering finds it
      in the offer. */
   const openPeer = async (still, camera = false) => {
-    const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    const prefs = devicePrefs.current;
+    const audio = withDevice(MIC_CONSTRAINTS, prefs.microphone, false);
     let got = null;
     let cameraFailed = null;
     if (camera) {
       try {
-        got = await navigator.mediaDevices.getUserMedia({ audio, video: cameraConstraints("user") });
+        got = await navigator.mediaDevices.getUserMedia({ audio, video: withDevice(cameraConstraints("user"), prefs.camera, false) });
       } catch (err) {
         cameraFailed = err;
       }
@@ -4509,7 +4567,11 @@ export default function RecipeBox() {
       if (said && rtc.current.pc === pc) putCall((c) => (c && c.phase !== "ended" ? { ...c, theirCamera: said.camera } : c));
     };
     rtc.current = { pc, stream, bye, state, cam: null, video: null, facing: "user" };
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    const [micTrack] = stream.getAudioTracks();
+    rtc.current.mic = pc.addTrack(micTrack, stream);
+    watchMic(micTrack);
+    putCall((c) => (c ? { ...c, micId: micTrack.getSettings?.().deviceId || "" } : c));
+    refreshDevices();
     pc.ontrack = (e) => {
       if (rtc.current.pc !== pc) return;
       if (e.track.kind === "video") { setTheirVideo(new MediaStream([e.track])); return; }
@@ -4622,14 +4684,13 @@ export default function RecipeBox() {
     if (old && old !== track) old.stop();
     if (rtc.current !== r) { track?.stop(); return; }
     setMyVideo(track ? new MediaStream([track]) : null);
-    putCall((c) => (c ? { ...c, camera: !!track, facing: r.facing } : c));
+    const camId = track?.getSettings?.().deviceId;
+    putCall((c) => (c ? { ...c, camera: !!track, facing: r.facing, ...(camId ? { camId } : {}) } : c));
     tellCamera();
     if (!track) return;
     /* A phone can take the camera back — another app, or the screen locking. */
     track.onended = () => { if (rtc.current.cam === track) showCamera(null); };
-    navigator.mediaDevices.enumerateDevices?.()
-      .then((all) => setCanFlip(all.filter((d) => d.kind === "videoinput").length > 1))
-      .catch(() => {});
+    refreshDevices();
   };
 
   const toggleCamera = async () => {
@@ -4638,7 +4699,7 @@ export default function RecipeBox() {
     if (!c || c.phase === "ended" || !r.video) return;
     if (r.cam) { await showCamera(null); return; }
     try {
-      const got = await navigator.mediaDevices.getUserMedia({ video: cameraConstraints(r.facing) });
+      const got = await navigator.mediaDevices.getUserMedia({ video: withDevice(cameraConstraints(r.facing), devicePrefs.current.camera, false) });
       const [track] = got.getVideoTracks();
       if (rtc.current !== r || r.cam) { track.stop(); return; }
       await showCamera(track);
@@ -4659,6 +4720,7 @@ export default function RecipeBox() {
       const [track] = got.getVideoTracks();
       if (rtc.current !== r) { track.stop(); return; }
       r.facing = facing;
+      rememberDevice("camera", track.getSettings?.().deviceId || "");
       await showCamera(track);
     } catch (err) {
       if (rtc.current !== r) return;
@@ -4666,6 +4728,81 @@ export default function RecipeBox() {
       await showCamera(null);
     }
   };
+  /* ── Device settings ── */
+  const chooseCamera = async (id) => {
+    rememberDevice("camera", id);
+    putCall((c) => (c ? { ...c, camId: id } : c));
+    const r = rtc.current;
+    /* With the camera off, this is the one it starts with next. */
+    if (!r.cam || r.cam.getSettings?.().deviceId === id) return;
+    r.cam.stop();
+    try {
+      const got = await navigator.mediaDevices.getUserMedia({ video: withDevice(cameraConstraints(r.facing), id) });
+      const [track] = got.getVideoTracks();
+      if (rtc.current !== r) { track.stop(); return; }
+      await showCamera(track);
+    } catch (err) {
+      if (rtc.current !== r) return;
+      flash(cameraError(err), 6000);
+      await showCamera(null);
+    }
+  };
+
+  /* The new microphone starts before the old one is let go of, so the call
+     isn't left silent if it can't; being muted carries over. */
+  const chooseMic = async (id, remember = true) => {
+    if (remember) rememberDevice("microphone", id);
+    const r = rtc.current;
+    const old = r.stream?.getAudioTracks()[0];
+    if (!r.mic || (id && old?.readyState === "live" && old.getSettings?.().deviceId === id)) {
+      putCall((c) => (c ? { ...c, micId: id } : c));
+      return;
+    }
+    try {
+      const got = await navigator.mediaDevices.getUserMedia({ audio: withDevice(MIC_CONSTRAINTS, id), video: false });
+      const [track] = got.getAudioTracks();
+      if (rtc.current !== r) { track.stop(); return; }
+      track.enabled = !callRef.current?.muted;
+      await r.mic.replaceTrack(track);
+      old?.stop();
+      r.stream = new MediaStream([track]);
+      watchMic(track);
+      putCall((c) => (c ? { ...c, micId: track.getSettings?.().deviceId || id } : c));
+    } catch (err) {
+      if (rtc.current === r) flash(micError(err), 6000);
+    }
+  };
+  /* A microphone unplugged mid-call hands over to the device's default one. */
+  const watchMic = (track) => {
+    if (!track) return;
+    track.onended = () => { if (rtc.current.stream?.getAudioTracks()[0] === track) chooseMic("", false); };
+  };
+
+  const toggleDevices = () => {
+    if (!callRef.current?.devices) refreshDevices();
+    putCall((c) => (c ? { ...c, devices: !c.devices } : c));
+  };
+  const devicePanel = () => (
+    <DeviceSettings
+      cameras={devices.cameras}
+      mics={devices.mics}
+      camera={call?.camId || devicePrefs.current.camera}
+      mic={call?.micId || devicePrefs.current.microphone}
+      onCamera={chooseCamera}
+      onMic={(id) => chooseMic(id)}
+      onClose={() => putCall((c) => (c ? { ...c, devices: false } : c))}
+    />
+  );
+
+  /* A headset or webcam plugged in mid-call shows up in the lists. */
+  const inCall = !!call && call.phase !== "ended";
+  useEffect(() => {
+    const md = navigator.mediaDevices;
+    if (!inCall || !md?.addEventListener) return;
+    md.addEventListener("devicechange", refreshDevices);
+    return () => md.removeEventListener("devicechange", refreshDevices);
+  }, [inCall]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const declineCall = (ring) => {
     setIncoming((all) => all.filter((r) => r.id !== ring.id));
     callsCall("POST", "", { hangup: ring.id }).catch(() => {});
@@ -7220,6 +7357,16 @@ export default function RecipeBox() {
     .rb-stage.is-small .rb-call-btn { padding: 5px 9px; font-size: 12px; }
     .rb-stage.is-small .rb-stage-self { right: 6px; bottom: 6px; min-width: 64px; width: 30%; }
     .rb-stage.is-small .rb-stage-top { padding: 8px 10px 18px; }
+    /* Device settings: two dropdowns in a small panel — a row of its own in
+       the call card, or floating over the pictures on the video screen. */
+    .rb-devices { box-sizing: border-box; display: grid; gap: 8px; padding: 10px 12px 12px; border: 1px solid var(--card-edge); border-radius: 12px; background: var(--card-bg); color: var(--card-text); }
+    .rb-call .rb-devices { flex-basis: 100%; }
+    .rb-stage .rb-devices { position: absolute; left: 50%; bottom: 12px; z-index: 1; transform: translateX(-50%); width: min(360px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow-y: auto; box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .8); }
+    .rb-devices-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .rb-devices-title { margin: 0; font: 700 14px/1.3 ${SOCIAL}; }
+    .rb-devices-row { display: grid; gap: 4px; }
+    .rb-devices-label { font: 600 12px/1.3 ${SOCIAL}; color: var(--card-muted); }
+    .rb-devices-pick { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--card-edge); border-radius: 8px; background: var(--card-lift); color: var(--card-text); font: 500 13px/1.3 ${SOCIAL}; }
     .rb-packs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 18px; }
     .rb-packs-where { display: inline-flex; align-items: center; gap: 8px; font: 500 13px/1.3 ${UI}; color: var(--card-muted); }
     .rb-packs-note { flex-basis: 100%; margin: 0; font: 400 12.5px/1.5 ${UI}; color: var(--card-muted); }
@@ -10220,12 +10367,16 @@ export default function RecipeBox() {
                       Video
                     </button>
                   )}
+                  <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleDevices} aria-expanded={!!call.devices}>
+                    Device settings
+                  </button>
                   <button type="button" className="rb-call-btn is-end rb-focus" onClick={hangUp}>
                     {call.phase === "calling" ? "Cancel" : "Hang up"}
                   </button>
                 </>
               )}
             </div>
+            {!ringingNow && call && call.phase !== "ended" && call.devices && devicePanel()}
           </section>
         );
       })()}
@@ -10239,6 +10390,7 @@ export default function RecipeBox() {
           small={!!call.small}
           onToggleSize={() => putCall((c) => (c ? { ...c, small: !c.small } : c))}
           face={face}
+          panel={call.devices ? devicePanel() : null}
         >
           <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleMute} aria-pressed={!!call.muted}>
             {call.muted ? "Unmute" : "Mute"}
@@ -10246,9 +10398,14 @@ export default function RecipeBox() {
           <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleCamera}>
             {call.camera ? "Stop video" : "Start video"}
           </button>
-          {call.camera && canFlip && (
+          {/* Front and back, on a phone or tablet. A computer picks its camera
+              in Device settings instead. */}
+          {call.camera && devices.cameras.length > 1 && window.matchMedia?.("(pointer: coarse)").matches && (
             <button type="button" className="rb-call-btn is-mute rb-focus" onClick={flipCamera}>Flip</button>
           )}
+          <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleDevices} aria-expanded={!!call.devices}>
+            Device settings
+          </button>
           <button type="button" className="rb-call-btn is-end rb-focus" onClick={hangUp}>
             {call.phase === "calling" ? "Cancel" : "Hang up"}
           </button>

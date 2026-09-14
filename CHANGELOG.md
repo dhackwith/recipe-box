@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-14
 
+- **Choose your camera and microphone.** During a call, tap Device settings to see the cameras and microphones your device has. Pick one and the call switches to it straight away, and it's remembered for your next call. A headset or webcam plugged in during the call shows up in the list, and if you unplug the microphone you're using, the call carries on with your device's usual one.
 - **Just the time for today.** Chats, notes and the photo viewer now show only the time for anything from today, like "1:35 AM", instead of "Today at 1:35 AM". Yesterday still says "Yesterday at", and older things still show the date.
 - **Video calls.** In a chat with one person, the camera button beside the phone starts a video call. When someone video calls you, answer with Video, or with Voice to keep your camera off. During any call you can start or stop your video, flip to the back camera on a phone, and shrink the call to a small window so you can keep using the site. Video goes straight between the two of you, so it costs nothing, and it works best when you're both on Wi-Fi.
 - **Messenger is now Friends.** The tab in the corner says Friends, with a little group of people instead of an envelope, and it's smaller, so it takes up less of the screen.

@@ -7,6 +7,7 @@
 const {
   cameraConstraints, nextFacing, STATE_CHANNEL, stateMessage, readState,
   videoTransceiver, onScreen, gridFor, cameraError,
+  MIC_CONSTRAINTS, deviceChoices, withDevice, asDevicePrefs,
 } = await import("../src/video.js");
 
 let pass = 0, fail = 0;
@@ -53,6 +54,28 @@ is("five go three across", gridFor(5), { cols: 3, rows: 2 });
 is("a full group of twelve", gridFor(12), { cols: 4, rows: 3 });
 is("...is two across on a phone", gridFor(12, true), { cols: 2, rows: 6 });
 is("nonsense counts as one", gridFor(0), { cols: 1, rows: 1 });
+
+console.log("\n— device settings —");
+const listed = [
+  { kind: "audioinput", deviceId: "default", label: "Default - Headset" },
+  { kind: "audioinput", deviceId: "mic-a", label: "Headset" },
+  { kind: "videoinput", deviceId: "cam-a", label: "FaceTime HD Camera" },
+  { kind: "videoinput", deviceId: "cam-b", label: "" },
+  { kind: "videoinput", deviceId: "cam-a", label: "FaceTime HD Camera" },
+  { kind: "audiooutput", deviceId: "spk", label: "Speakers" },
+  { kind: "videoinput", deviceId: "", label: "" },
+];
+is("cameras are listed by name", deviceChoices(listed, "videoinput"), [{ id: "cam-a", label: "FaceTime HD Camera" }, { id: "cam-b", label: "Camera 2" }]);
+is("...microphones too, the browser's default among them", deviceChoices(listed, "audioinput").map((d) => d.id), ["default", "mic-a"]);
+is("speakers aren't a microphone", deviceChoices(listed, "audioinput").some((d) => d.id === "spk"), false);
+is("before permission a browser gives no ids, and nothing is listed", deviceChoices([{ kind: "videoinput", deviceId: "", label: "" }], "videoinput"), []);
+is("nothing given, nothing listed", deviceChoices(undefined, "audioinput"), []);
+is("a picked camera is asked for exactly, and front/back is dropped", withDevice(cameraConstraints("user"), "cam-b"), { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 }, deviceId: { exact: "cam-b" } });
+is("a remembered one is only preferred", withDevice(MIC_CONSTRAINTS, "mic-a", false).deviceId, { ideal: "mic-a" });
+is("...and the microphone keeps its echo cancelling", withDevice(MIC_CONSTRAINTS, "mic-a").echoCancellation, true);
+is("no choice leaves the settings alone", withDevice(cameraConstraints("environment"), "").facingMode, "environment");
+is("saved choices are read back", asDevicePrefs({ camera: "cam-b", microphone: "mic-a" }), { camera: "cam-b", microphone: "mic-a" });
+is("...and anything odd is ignored", [asDevicePrefs(null), asDevicePrefs({ camera: 7, microphone: "x".repeat(600) })], [{ camera: "", microphone: "" }, { camera: "", microphone: "" }]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

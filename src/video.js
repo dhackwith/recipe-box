@@ -60,6 +60,42 @@ export function gridFor(n, narrow = false) {
   return { cols, rows: Math.ceil(count / cols) };
 }
 
+/* The microphone settings every call asks for. */
+export const MIC_CONSTRAINTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+
+/* Device settings: the cameras or microphones a device has, as a call lists
+   them. A browser hides their names until the page may use that kind of
+   device, so an unnamed one is called by its number. */
+export function deviceChoices(devices, kind) {
+  const noun = kind === "videoinput" ? "Camera" : "Microphone";
+  const seen = new Set();
+  const out = [];
+  for (const d of devices || []) {
+    if (!d || d.kind !== kind || !d.deviceId || seen.has(d.deviceId)) continue;
+    seen.add(d.deviceId);
+    out.push({ id: d.deviceId, label: String(d.label || "").trim() || `${noun} ${out.length + 1}` });
+  }
+  return out;
+}
+
+/* Constraints for one chosen device. Strict when somebody has just picked
+   it, so a camera that can't be had says so rather than quietly giving
+   another; only a preference when it's remembered from before, so one that
+   has since been unplugged doesn't stop a call starting. A chosen device
+   says which way it faces, so front or back is dropped. */
+export function withDevice(constraints, id, strict = true) {
+  if (!id) return constraints;
+  const { facingMode, ...rest } = constraints; // eslint-disable-line no-unused-vars
+  return { ...rest, deviceId: strict ? { exact: id } : { ideal: id } };
+}
+
+/* Which camera and microphone this device was last set to use, kept on it. */
+export const DEVICES_KEY = "rb-call-devices";
+export function asDevicePrefs(value) {
+  const ok = (v) => (typeof v === "string" && v.length > 0 && v.length <= 512 ? v : "");
+  return { camera: ok(value?.camera), microphone: ok(value?.microphone) };
+}
+
 /* What went wrong with the camera, in words somebody can act on. */
 export function cameraError(err) {
   switch (err && err.name) {
