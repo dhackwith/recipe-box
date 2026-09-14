@@ -2264,7 +2264,7 @@ function ChatWindow({
               aria-label="Add a photo, a file or a GIF"
               title="Add a photo, a file or a GIF"
             >
-              <Plus />
+              <Plus size={16} />
             </button>
             <input
               ref={photoRef}
@@ -6618,6 +6618,10 @@ export default function RecipeBox() {
     .rb-chatwin-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
     .rb-chatwin-lines .rb-chat-seen { margin-top: 0; font-size: 11px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .rb-person-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
+    /* In a chat the name button is only as wide as the face and the words, so
+       the empty bar beside them isn't a button. (The friends list's title
+       stays the whole bar: clicking anywhere on it folds the list away.) */
+    .rb-person-wrap > .rb-chatwin-title { flex: 0 1 auto; max-width: 100%; }
     .rb-chatwin-nameline { min-width: 0; display: flex; align-items: center; gap: 5px; }
     .rb-chatwin-caret { flex: none; font-size: 10px; opacity: .7; }
     .rb-person-menu { position: absolute; left: 2px; top: calc(100% + 4px); z-index: 3; min-width: 170px; padding: 4px; border: 1px solid var(--card-edge); border-radius: 8px; background: var(--card-bg); box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); }
@@ -6778,9 +6782,9 @@ export default function RecipeBox() {
        message box with a return key at its right end (Enter sends; there is
        no Send button), and the quick emoji on the right. */
     .rb-chatwin-row { display: flex; align-items: flex-end; gap: 6px; }
-    .rb-chatwin-row > .rb-emoji-wrap { margin: 0 0 2px auto; }
-    .rb-plus-wrap { position: relative; flex: none; display: inline-flex; margin-bottom: 2px; }
-    .rb-plus-btn { width: 34px; height: 34px; opacity: 1; color: var(--card-accent); background: color-mix(in srgb, var(--card-accent) 14%, transparent); }
+    .rb-chatwin-row > .rb-emoji-wrap { margin: 0 0 5px auto; }
+    .rb-plus-wrap { position: relative; flex: none; display: inline-flex; margin-bottom: 5px; }
+    .rb-plus-btn { width: 28px; height: 28px; opacity: 1; color: var(--card-accent); background: color-mix(in srgb, var(--card-accent) 14%, transparent); }
     .rb-plus-btn svg { transition: transform 150ms ease; }
     .rb-plus-btn[aria-expanded="true"] svg { transform: rotate(45deg); }
     .rb-plus-menu { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 2; min-width: 150px; display: flex; flex-direction: column; gap: 1px; padding: 5px; border: 1px solid var(--card-edge); border-radius: 12px; background: var(--card-bg); box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); }
@@ -6811,7 +6815,7 @@ export default function RecipeBox() {
        opens above it. The button can't be selected or called up as a
        phone's own long-press menu, or holding it would do that instead. */
     .rb-emoji-wrap { position: relative; display: inline-flex; }
-    .rb-emoji-btn { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; font-size: 21px; line-height: 1; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; transition: transform 120ms ease; }
+    .rb-emoji-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; font-size: 21px; line-height: 1; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; transition: transform 120ms ease; }
     .rb-emoji-btn:hover:not(:disabled) { transform: scale(1.12); background: color-mix(in srgb, var(--card-text) 8%, transparent); }
     .rb-emoji-btn:active:not(:disabled) { transform: scale(.92); }
     .rb-emoji-btn:disabled { cursor: default; opacity: .4; }
