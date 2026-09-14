@@ -1148,6 +1148,11 @@ const MAX_CHATS = 5;
 const GROUP_MAX = 12;
 const isGroupId = (id) => /^grp:\d+$/.test(String(id || ""));
 const firstOf = (name) => String(name || "").trim().split(/\s+/)[0] || "Someone";
+/* The social parts that scroll — the friends list, chats, the message box,
+   pickers, a group's wide menu, the GIF grid. Their scrollbars are bubbles
+   that show only while scrolling. */
+const SOCIAL_SCROLL = ".rb-messenger-body, .rb-chatwin-body, .rb-picker-list, .rb-person-menu.is-wide, .rb-gif-grid, .rb-chatwin-compose textarea";
+const SCROLLBAR_LINGER_MS = 1000;
 /* How long Take back is offered after sending. The server holds the same line
    by its own clock (functions/api/messages.js). */
 const TAKE_BACK_MS = 60 * 1000;
@@ -3993,6 +3998,23 @@ export default function RecipeBox() {
   const refreshInboxRef = useRef(null);
   useEffect(() => live.onNotice((n) => { if (n.kind === "group") refreshInboxRef.current?.(); }), [live]);
 
+  /* The social parts' scrollbars show only while scrolling: an area that
+     scrolls is marked .is-scrolling, and unmarked a second after its last
+     scroll. Scroll events don't bubble, so one listener catches them all on
+     the way down. */
+  useEffect(() => {
+    const timers = new WeakMap();
+    const onScroll = (e) => {
+      const el = e.target;
+      if (!(el instanceof Element) || !el.matches(SOCIAL_SCROLL)) return;
+      el.classList.add("is-scrolling");
+      clearTimeout(timers.get(el));
+      timers.set(el, setTimeout(() => el.classList.remove("is-scrolling"), SCROLLBAR_LINGER_MS));
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", onScroll, { capture: true });
+  }, []);
+
   /* Being here, and the badge beside Meal plan and Shopping list. One request
      does both: it records that this person is using the site — anywhere on it,
      not only on the messages page — and brings back the unread count and
@@ -6461,6 +6483,22 @@ export default function RecipeBox() {
     .rb-messenger-head { display: flex; align-items: center; gap: 2px; padding: 5px 5px 5px 4px; border-bottom: 1px solid var(--card-edge); background: var(--card-lift); color: var(--card-text); }
     .rb-messenger-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font: 600 13.5px/1.3 ${SOCIAL}; color: inherit; }
     .rb-messenger-body { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 12px 10px; }
+    /* The social parts' scrollbars are bubbles: a round accent pill with a
+       lighter middle, in a soft round track. Hidden until the area scrolls,
+       and gone again a second after it stops (the page adds .is-scrolling).
+       The space stays reserved, so nothing shifts when it appears. Firefox
+       only takes colours, so there it's a thin bar in the same colours,
+       hidden the same way. */
+    :is(${SOCIAL_SCROLL})::-webkit-scrollbar { width: 12px; height: 12px; }
+    :is(${SOCIAL_SCROLL})::-webkit-scrollbar-track { margin: 4px 0; border-radius: 999px; background: transparent; }
+    :is(${SOCIAL_SCROLL})::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }
+    :is(${SOCIAL_SCROLL})::-webkit-scrollbar-corner { background: transparent; }
+    :is(${SOCIAL_SCROLL}).is-scrolling::-webkit-scrollbar-track { background: color-mix(in srgb, var(--card-text) 9%, transparent); }
+    :is(${SOCIAL_SCROLL}).is-scrolling::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--card-accent) 70%, #FFFFFF); box-shadow: inset 0 0 0 3px var(--card-accent); }
+    @supports not selector(::-webkit-scrollbar) {
+      :is(${SOCIAL_SCROLL}) { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+      :is(${SOCIAL_SCROLL}).is-scrolling { scrollbar-color: var(--card-accent) color-mix(in srgb, var(--card-text) 9%, transparent); }
+    }
     .rb-messenger-error { margin: 10px 0 0; font: 400 12.5px/1.5 ${SOCIAL}; color: var(--card-danger); }
 
     /* One chat window. Its title bar minimises it, as the _ beside it does. */
