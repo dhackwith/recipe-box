@@ -26,7 +26,15 @@ export const liveUrl = (loc = globalThis.location) =>
    hub is asked whether it has one yet). */
 export const reconnectDelay = (failures) => Math.min(5 * 60 * 1000, 2000 * 2 ** Math.max(0, failures - 1));
 
-export function createLive({ url, WebSocketImpl = globalThis.WebSocket } = {}) {
+/* A connection that drops — a laptop waking, a phone changing networks — is
+   usually back within a few seconds. Only after this many tries in a row fail
+   do the loops go back to holding requests open, because a held request is
+   the expensive kind that ran past the free plan's limit. Until then they ask
+   quickly every RECONNECTING_MS. */
+export const DEGRADED_AFTER = 3;
+export const RECONNECTING_MS = 10 * 1000;
+
+export function createLive({ url, WebSocketImpl = globalThis.WebSocket, retryDelay = reconnectDelay } = {}) {
   const notices = new Set();
   const states = new Set();
   let ws = null;
@@ -46,7 +54,7 @@ export function createLive({ url, WebSocketImpl = globalThis.WebSocket } = {}) {
     if (stopped) return;
     failures += 1;
     clearTimeout(retry);
-    retry = setTimeout(open, reconnectDelay(failures));
+    retry = setTimeout(open, retryDelay(failures));
   };
 
   function open() {
@@ -105,6 +113,9 @@ export function createLive({ url, WebSocketImpl = globalThis.WebSocket } = {}) {
     get connected() { return connected; },
     /* A connection is being made but hasn't opened or failed yet. */
     get connecting() { return !!ws && !connected; },
+    /* Live updates have really failed — several tries in a row, or a browser
+       without WebSockets — rather than dropped for a moment. */
+    get degraded() { return !connected && (!WebSocketImpl || failures >= DEGRADED_AFTER); },
     onNotice(f) { notices.add(f); return () => notices.delete(f); },
     onState(f) { states.add(f); return () => states.delete(f); },
   };

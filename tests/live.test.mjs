@@ -176,6 +176,23 @@ is("a ring that runs out tells both ends, and that a missed call was left", sinc
   ["devon", "call"], ["nicholas", "call"], ["devon", "message"], ["nicholas", "message"],
 ]);
 
+/* ── a fresh server copy on a database that's already set up ── */
+{
+  const warm = d1();
+  const statements = [];
+  const prepare = warm.prepare.bind(warm);
+  warm.prepare = (sql) => { statements.push(sql); return prepare(sql); };
+  const coldEnv = { MESSAGES: warm };
+  const ask = async (handler, api, query) => handler({
+    env: coldEnv,
+    request: new Request(`https://thehackwithtable.com/api/${api}${query}`, { headers: { "Cf-Access-Jwt-Assertion": devon } }),
+  });
+  is("messages answer a first request on a set-up database", (await ask(messages, "messages", "?inbox")).status, 200);
+  is("calls do too", (await ask(calls, "calls", "?ringing")).status, 200);
+  is("...without sending a single CREATE, because the tables are already there", statements.filter((s) => /^\s*CREATE/i.test(s)).length, 0);
+  is("...having asked which tables exist just once", statements.filter((s) => /sqlite_master/.test(s)).length, 1);
+}
+
 /* ── the hub ── */
 const { deliver, okPerson } = await import("../live/src/hub.js");
 const socket = (log, broken = false) => ({ send: (t) => { if (broken) throw new Error("closing"); log.push(t); } });
@@ -240,6 +257,28 @@ live.stop();
 await sleep(10);
 is("stopping closes it and doesn't reconnect", [FakeSocket.all[1].closed, live.connected, FakeSocket.all.length], [true, false, 2]);
 heard.close();
+
+/* A dropped connection isn't a failed one: loops only go back to holding
+   requests open after several tries in a row fail. */
+const { DEGRADED_AFTER } = await import("../src/live.js");
+FakeSocket.all.length = 0;
+const flaky = createLive({ url: "wss://thehackwithtable.com/api/live", WebSocketImpl: FakeSocket, retryDelay: () => 0 });
+flaky.start();
+FakeSocket.all.at(-1).onopen();
+FakeSocket.all.at(-1).onclose({});
+is("a connection that just dropped isn't treated as failed", flaky.degraded, false);
+await sleep(5);
+FakeSocket.all.at(-1).onopen();
+is("...and once it's back, it's back", [flaky.connected, flaky.degraded], [true, false]);
+for (let i = 0; i < DEGRADED_AFTER; i++) {
+  FakeSocket.all.at(-1).onclose({});
+  await sleep(5);
+}
+is(`${DEGRADED_AFTER} failed tries in a row count as failed`, flaky.degraded, true);
+FakeSocket.all.at(-1).onopen();
+is("...until a connection opens again", flaky.degraded, false);
+flaky.stop();
+is("a browser without WebSockets counts as failed from the start", createLive({ url: "x", WebSocketImpl: null }).degraded, true);
 
 is("the address follows the page", [
   liveUrl({ protocol: "https:", host: "thehackwithtable.com" }),

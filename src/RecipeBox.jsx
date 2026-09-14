@@ -32,7 +32,7 @@ import {
   CALLS_API, STUN_SERVERS, callsSupported, callsCall, callStatus, iceGathered, micError, isMicError, playTone,
   RING_MS, CHECK_IN_MS, STALE_MS, trackRings, liveRings, retryDelay,
 } from "./calls.js";
-import { createLive, watcher, liveUrl, RESYNC_MS } from "./live.js";
+import { createLive, watcher, liveUrl, RESYNC_MS, RECONNECTING_MS } from "./live.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -1400,12 +1400,15 @@ function ChatWindow({
       while (!stop) {
         try {
           const pushed = live.connected;
-          if (wait && !pushed && (document.hidden || live.connecting)) {
-            await heard.sleep(1500);
+          /* Held requests only once live updates have really failed; while a
+             dropped connection comes back, a quick look every RECONNECTING_MS. */
+          const holding = !pushed && live.degraded;
+          if (wait && !pushed && document.hidden) {
+            await heard.sleep(holding ? 1500 : RECONNECTING_MS);
             continue;
           }
           heard.clear();
-          const got = await messagesCall("GET", `?with=${encodeURIComponent(id)}&since=${since.current}&loves=${loveSince.current}${wait && !pushed ? "&wait=1" : ""}`);
+          const got = await messagesCall("GET", `?with=${encodeURIComponent(id)}&since=${since.current}&loves=${loveSince.current}${wait && holding ? "&wait=1" : ""}`);
           if (stop) return;
           failures = 0;
           setLoaded(true);
@@ -1421,7 +1424,7 @@ function ChatWindow({
             setMessages((all) => all.map((m) => (hearts.has(m.id) ? { ...m, loves: hearts.get(m.id).loves, loved: hearts.get(m.id).loved } : m)));
           }
           wait = true;
-          if (pushed) await heard.sleep(RESYNC_MS);
+          if (!holding) await heard.sleep(pushed ? RESYNC_MS : RECONNECTING_MS);
         } catch (err) {
           if (stop) return;
           /* One failed look is usually Cloudflare starting up or the network
@@ -3553,18 +3556,19 @@ export default function RecipeBox() {
       while (!stop) {
         try {
           const pushed = live.connected;
-          if (!pushed && (document.hidden || (known >= 0 && live.connecting))) {
+          const holding = !pushed && live.degraded;
+          if (!pushed && document.hidden) {
             await heard.sleep(2000);
             continue;
           }
           heard.clear();
-          const data = await messagesCall("GET", !pushed && known >= 0 ? `?waiting&wait=1&unread=${known}` : "?waiting");
+          const data = await messagesCall("GET", holding && known >= 0 ? `?waiting&wait=1&unread=${known}` : "?waiting");
           if (stop) return;
           known = data.unread || 0;
           setUnreadMessages(known);
           setWaiting(data.waiting || []);
           if (data.people) setPresence((all) => ({ ...all, ...Object.fromEntries(data.people.map((p) => [p.id, p])) }));
-          if (pushed) await heard.sleep(RESYNC_MS);
+          if (!holding) await heard.sleep(pushed ? RESYNC_MS : RECONNECTING_MS);
         } catch {
           /* not switched on, or offline: wait a while and try again, quietly */
           await new Promise((r) => setTimeout(r, 20000));
@@ -3742,18 +3746,19 @@ export default function RecipeBox() {
       while (!stop) {
         try {
           const pushed = live.connected;
-          if (!pushed && (document.hidden || (known !== null && live.connecting))) {
+          const holding = !pushed && live.degraded;
+          if (!pushed && document.hidden) {
             known = null;
             await heard.sleep(2000);
             continue;
           }
           heard.clear();
-          const data = await callsCall("GET", pushed || known === null ? "?ringing" : `?ringing&wait=1&known=${encodeURIComponent(known)}`);
+          const data = await callsCall("GET", !holding || known === null ? "?ringing" : `?ringing&wait=1&known=${encodeURIComponent(known)}`);
           if (stop) return;
           const list = data.ringing || [];
           known = list.map((r) => r.id).join(",");
           setIncoming((prev) => trackRings(prev, list));
-          if (pushed) await heard.sleep(RESYNC_MS);
+          if (!holding) await heard.sleep(pushed ? RESYNC_MS : RECONNECTING_MS);
         } catch (err) {
           known = null;
           await new Promise((r) => setTimeout(r, err?.status === 501 || err?.status === 403 ? 120000 : 20000));
@@ -3786,17 +3791,17 @@ export default function RecipeBox() {
       while (!stop) {
         try {
           const talking = callRef.current?.phase === "active";
-          const pushed = live.connected;
-          if (talking || (state && (pushed || live.connecting))) {
-            /* Talking: check in every CHECK_IN_MS. Ringing or connecting with a
-               live connection: a notice says when the other end picks up or
-               hangs up, and a look every ten seconds checks in and notices a
-               ring that ran out. */
-            await heard.sleep(talking ? CHECK_IN_MS : pushed ? 10000 : 1500);
+          const holding = !live.connected && live.degraded;
+          if (talking || (state && !holding)) {
+            /* Talking: check in every CHECK_IN_MS. Ringing or connecting: a
+               notice says when the other end picks up or hangs up, and a quick
+               look every few seconds checks in and notices a ring that ran out
+               — more often while the live connection is coming back. */
+            await heard.sleep(talking ? CHECK_IN_MS : live.connected ? 10000 : 3000);
             if (stop) return;
           }
           heard.clear();
-          const data = await callsCall("GET", state && !talking && !live.connected ? `?call=${watchId}&wait=1&state=${state}` : `?call=${watchId}`);
+          const data = await callsCall("GET", state && !talking && holding ? `?call=${watchId}&wait=1&state=${state}` : `?call=${watchId}`);
           if (stop) return;
           failures = 0;
           failingSince = 0;

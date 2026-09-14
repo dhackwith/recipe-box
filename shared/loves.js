@@ -18,6 +18,8 @@
  * "n" for a note (target is its KV key, pair is empty).
  */
 
+import { haveTables } from "./schema.js";
+
 export const MESSAGE = "m";
 export const NOTE = "n";
 
@@ -36,6 +38,7 @@ const ready = new WeakMap();
 export function ensureLoves(db) {
   if (!ready.has(db)) {
     ready.set(db, (async () => {
+      if (await haveTables(db, ["loves"])) return;
       for (const sql of SCHEMA) await db.prepare(sql).run();
     })().catch((err) => { ready.delete(db); throw err; }));
   }

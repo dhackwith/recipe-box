@@ -21,6 +21,7 @@
 
 import { personFor, isPerson, addressKey, people } from "./access.js";
 import { ensureLoves } from "./loves.js";
+import { haveTables } from "./schema.js";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS guests (
@@ -32,6 +33,7 @@ const ready = new WeakMap();
 export function ensureGuests(db) {
   if (!ready.has(db)) {
     ready.set(db, (async () => {
+      if (await haveTables(db, ["guests"])) return;
       for (const sql of SCHEMA) await db.prepare(sql).run();
     })().catch((err) => { ready.delete(db); throw err; }));
   }
