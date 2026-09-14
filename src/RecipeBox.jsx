@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
-import { flushSync } from "react-dom";
+import { flushSync, createPortal } from "react-dom";
 /* ?raw inlines the file at build time — the button hands out exactly the
    template that is committed alongside this component. */
 import TEMPLATE_MD from "../claude-recipe-template.md?raw";
@@ -24,6 +24,7 @@ import {
 } from "./stepphotos.js";
 /* Note times in the reader's own zone and clock style. */
 import { whenAt, whenFull, seenAt } from "./when.js";
+import { ZOOM_MAX, cropStart, cropMove, cropZoom, cropRect, cropView } from "./crop.js";
 /* The one thing the box will not keep — see shared/hate.js. */
 import { hasHate, newHate, HATE_MESSAGE } from "../shared/hate.js";
 import { asFavorites, emptyFavorites, isFavorite, setFavorite, mergeFavorites } from "./favorites.js";
@@ -1100,19 +1101,144 @@ async function profileCall(method, query = "", body) {
   return data;
 }
 
-/* A profile picture is the middle square of whatever was chosen, at 256px:
+/* A profile or group picture is a square of whatever was chosen, at 256px:
    twice the largest size it is ever shown, so it stays sharp on a retina
-   screen and small enough to send in one go. */
+   screen and small enough to send in one go. The square is the one chosen in
+   CropDialog (src/crop.js), or the middle of the photo without one. */
 const FACE_SIZE = 256;
-async function prepFace(file) {
+async function prepFace(file, crop) {
   const source = await loadBitmap(file);
-  const side = Math.min(source.width, source.height);
+  const { sx, sy, side } = cropRect(source.width, source.height, crop || cropStart(source.width, source.height));
   const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = Math.max(1, Math.min(FACE_SIZE, side));
+  canvas.width = canvas.height = Math.max(1, Math.min(FACE_SIZE, Math.round(side)));
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(source, (source.width - side) / 2, (source.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/jpeg", 0.8);
+}
+
+/* Choosing the part of a photo that becomes a round picture, before it is
+   saved (src/crop.js). Drag the photo to move it; the slider or the mouse
+   wheel zooms. From the keyboard, the arrow keys move it, + and − zoom, and
+   Enter uses it. Drawn into the page's root rather than where it is used, so
+   a chat window's clipped edges and the dock's layer can't cut it off, while
+   the theme's colours on the root still reach it. */
+function CropDialog({ file, title, busy, onCancel, onDone }) {
+  const [url, setUrl] = useState("");
+  const [size, setSize] = useState(null);
+  const [crop, setCrop] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const frameRef = useRef(null);
+  const drag = useRef(null);
+  const cancel = useRef(onCancel);
+  cancel.current = onCancel;
+
+  useEffect(() => {
+    const address = URL.createObjectURL(file);
+    setUrl(address);
+    setSize(null);
+    setCrop(null);
+    setFailed(false);
+    return () => URL.revokeObjectURL(address);
+  }, [file]);
+  /* Escape is caught on the way down, so it closes this and not a menu behind it. */
+  useEffect(() => {
+    frameRef.current?.focus();
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel.current(); } };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+  /* Listened for directly: React's wheel handler can't stop the page behind
+     from scrolling as well. */
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el || !size) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      setCrop((c) => cropZoom(size.w, size.h, c, c.zoom * Math.exp(-e.deltaY * 0.0015)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [size]);
+
+  const frameWidth = () => frameRef.current?.clientWidth || 1;
+  const move = (dx, dy) => { if (size) setCrop((c) => cropMove(size.w, size.h, c, dx, dy, frameWidth())); };
+  const zoomTo = (zoom) => { if (size) setCrop((c) => cropZoom(size.w, size.h, c, zoom)); };
+  /* From the latest crop rather than the one on screen, so quick presses all count. */
+  const zoomBy = (factor) => { if (size) setCrop((c) => cropZoom(size.w, size.h, c, c.zoom * factor)); };
+  const view = size && crop ? cropView(size.w, size.h, crop, 100) : null;
+
+  return createPortal(
+    <div className="rb-crop-back rb-appear" onPointerDown={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
+      <div className="rb-crop" role="dialog" aria-modal="true" aria-label={title}>
+        <p className="rb-crop-title" aria-hidden>{title}</p>
+        <div
+          ref={frameRef}
+          className="rb-crop-frame rb-focus"
+          tabIndex={0}
+          aria-label="The photo. Drag it, or use the arrow keys, to choose what shows in the circle; plus and minus zoom."
+          onPointerDown={(e) => {
+            if (!size) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            drag.current = { x: e.clientX, y: e.clientY };
+          }}
+          onPointerMove={(e) => {
+            const from = drag.current;
+            if (!from) return;
+            move(e.clientX - from.x, e.clientY - from.y);
+            drag.current = { x: e.clientX, y: e.clientY };
+          }}
+          onPointerUp={() => { drag.current = null; }}
+          onPointerCancel={() => { drag.current = null; }}
+          onKeyDown={(e) => {
+            const step = { ArrowLeft: [8, 0], ArrowRight: [-8, 0], ArrowUp: [0, 8], ArrowDown: [0, -8] }[e.key];
+            if (step) { e.preventDefault(); move(step[0], step[1]); }
+            else if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.15); }
+            else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.15); }
+            else if (e.key === "Enter" && crop && !busy) { e.preventDefault(); onDone(crop); }
+          }}
+        >
+          {url && !failed && (
+            <img
+              src={url}
+              alt=""
+              draggable={false}
+              onLoad={(e) => {
+                const w = e.currentTarget.naturalWidth;
+                const h = e.currentTarget.naturalHeight;
+                setSize({ w, h });
+                setCrop(cropStart(w, h));
+              }}
+              onError={() => setFailed(true)}
+              style={view ? { left: view.left + "%", top: view.top + "%", width: view.width + "%", height: view.height + "%" } : { opacity: 0 }}
+            />
+          )}
+        </div>
+        <p className="rb-crop-note">
+          {failed ? <>That file didn&apos;t look like a photo.</> : <>Drag the photo to choose what shows in the circle.</>}
+        </p>
+        <label className="rb-crop-zoom">
+          Zoom
+          <input
+            type="range"
+            min={1}
+            max={ZOOM_MAX}
+            step={0.01}
+            value={crop ? crop.zoom : 1}
+            disabled={!crop}
+            onChange={(e) => zoomTo(Number(e.target.value))}
+          />
+        </label>
+        <div className="rb-crop-actions">
+          <button type="button" className="rb-picker-cancel rb-focus" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button type="button" className="rb-picker-go rb-focus" onClick={() => onDone(crop)} disabled={busy || !crop}>
+            {busy ? "Saving…" : "Use this picture"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.querySelector(".rb") || document.body,
+  );
 }
 
 /* "Tracey Hackwith" -> "TH", for somebody who hasn't chosen a picture. */
@@ -1205,6 +1331,17 @@ function Headphones({ size = 18 }) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+/* Two people, on the Friends tab. */
+function People({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="9" cy="8" r="3.3" fill="none" stroke="currentColor" strokeWidth="1.9" />
+      <path d="M2.8 19.5c0-3.4 2.8-5.7 6.2-5.7s6.2 2.3 6.2 5.7" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M15.6 4.8a3.3 3.3 0 0 1 0 6.4M17.6 14.2c2.2.8 3.6 2.7 3.6 5.3" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
     </svg>
   );
 }
@@ -1542,6 +1679,8 @@ function ChatWindow({
   const [renameTo, setRenameTo] = useState("");
   const [groupBusy, setGroupBusy] = useState(false);
   const pictureRef = useRef(null);
+  /* a photo chosen for the group's picture, waiting in the crop dialog */
+  const [pictureCrop, setPictureCrop] = useState(null);
   useEffect(() => { if (!personMenu) setMenuMode("menu"); }, [personMenu]);
   const groupAct = async (body) => {
     setGroupBusy(true);
@@ -1980,9 +2119,21 @@ function ChatWindow({
                 e.target.value = "";
                 if (!file || !group) return;
                 setPersonMenu(false);
+                setPictureCrop(file);
+              }}
+            />
+          )}
+          {pictureCrop && group && (
+            <CropDialog
+              file={pictureCrop}
+              title="Crop the group picture"
+              busy={groupBusy}
+              onCancel={() => setPictureCrop(null)}
+              onDone={async (crop) => {
                 let image;
-                try { image = await prepFace(file); } catch { setError("That file didn't look like a photo"); return; }
+                try { image = await prepFace(pictureCrop, crop); } catch { setError("That file didn't look like a photo"); setPictureCrop(null); return; }
                 await groupAct({ picture: group.id, image });
+                setPictureCrop(null);
               }}
             />
           )}
@@ -3944,6 +4095,8 @@ export default function RecipeBox() {
   const [profile, setProfile] = useState(null);
   const [faceBusy, setFaceBusy] = useState(false);
   const [faceError, setFaceError] = useState("");
+  /* a photo chosen for the profile picture, waiting in the crop dialog */
+  const [faceCrop, setFaceCrop] = useState(null);
   useEffect(() => {
     let cancelled = false;
     profileCall("GET", "?faces")
@@ -4881,13 +5034,20 @@ export default function RecipeBox() {
     );
   };
 
-  const chooseFace = async (file) => {
+  /* A chosen photo goes to the crop dialog first; saveFace sends the square
+     picked there. */
+  const chooseFace = (file) => {
+    if (!file || !profile) return;
+    setFaceError("");
+    setFaceCrop(file);
+  };
+  const saveFace = async (file, crop) => {
     if (!file || !profile) return;
     setFaceBusy(true);
     setFaceError("");
     try {
       let picture;
-      try { picture = await prepFace(file); } catch { throw new Error("That file didn't look like a photo"); }
+      try { picture = await prepFace(file, crop); } catch { throw new Error("That file didn't look like a photo"); }
       const { face: v } = await profileCall("PUT", "", { face: picture });
       setFaces((all) => ({ ...all, [profile.id]: v }));
       setProfile((p) => ({ ...p, face: v }));
@@ -4895,6 +5055,7 @@ export default function RecipeBox() {
       setFaceError(String(err.message || err));
     } finally {
       setFaceBusy(false);
+      setFaceCrop(null);
     }
   };
 
@@ -6549,7 +6710,7 @@ export default function RecipeBox() {
     .rb-messenger { position: fixed; right: 16px; bottom: 0; z-index: 55; display: flex; flex-direction: row-reverse; align-items: flex-end; gap: 10px; max-width: calc(100vw - 16px); pointer-events: none; }
     .rb-messenger > * { pointer-events: auto; }
     .rb-dock-list { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-    .rb-messenger-open { display: inline-flex; align-items: center; gap: 8px; width: 240px; box-sizing: border-box; border: 1px solid var(--card-edge); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--card-bg); color: var(--card-text); padding: 12px 14px; font: 600 13.5px/1 ${SOCIAL}; cursor: pointer; box-shadow: 0 -6px 22px -14px rgba(0, 0, 0, .55); }
+    .rb-messenger-open { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; border: 1px solid var(--card-edge); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--card-bg); color: var(--card-text); padding: 7px 12px 7px 10px; font: 600 13px/1 ${SOCIAL}; cursor: pointer; box-shadow: 0 -6px 22px -14px rgba(0, 0, 0, .55); }
     .rb-messenger-open:hover { background: var(--card-lift); }
     .rb-messenger-count { margin-left: auto; min-width: 18px; padding: 1px 6px; border-radius: 999px; background: var(--card-accent); color: var(--on-accent); font: 600 11px/1.5 ${SOCIAL}; text-align: center; }
     /* A name waiting to be read, flashing on and off every two seconds — a
@@ -6859,7 +7020,6 @@ export default function RecipeBox() {
        minimised ones stay as faces in the dock. */
     @media (max-width: 699px) {
       .rb-messenger { right: 8px; gap: 6px; }
-      .rb-messenger-open { width: auto; }
       .rb-messenger-panel { width: min(92vw, 340px); }
       .rb-chatwin { position: fixed; left: 8px; right: 8px; bottom: 50px; width: auto; height: min(70vh, 460px); border-bottom: 1px solid var(--card-edge); border-radius: 8px; }
       .rb-chathead { margin-bottom: 6px; }
@@ -7103,19 +7263,34 @@ export default function RecipeBox() {
     .rb-step { animation: rbfade 260ms ease both; }
     @keyframes rbfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
     @media (prefers-reduced-motion: reduce) { .rb-step { animation: none; } }
+    /* Cropping a new profile or group picture: the photo in a square frame
+       with a round window cut out of a dark veil, a zoom slider, and Cancel
+       and Use. Over the messenger and the photo viewer, under a call card. */
+    .rb-crop-back { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .55); pointer-events: auto; }
+    .rb-crop { width: min(300px, 100%); box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--card-edge); border-radius: 14px; background: var(--card-bg); color: var(--card-text); box-shadow: 0 22px 50px -20px rgba(0, 0, 0, .7); }
+    .rb-crop-title { margin: 0; font: 700 15px/1.3 ${SOCIAL}; }
+    .rb-crop-frame { position: relative; width: 100%; max-width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 8px; background: var(--card-lift); cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+    .rb-crop-frame:active { cursor: grabbing; }
+    .rb-crop-frame img { position: absolute; max-width: none; pointer-events: none; }
+    .rb-crop-frame::after { content: ""; position: absolute; inset: 0; border-radius: 50%; box-shadow: 0 0 0 999px rgba(0, 0, 0, .45); pointer-events: none; }
+    .rb-crop-note { margin: 0; font: 400 12px/1.45 ${SOCIAL}; color: var(--card-muted); }
+    .rb-crop-zoom { display: flex; align-items: center; gap: 10px; font: 600 12px/1 ${SOCIAL}; color: var(--card-muted); }
+    .rb-crop-zoom input { flex: 1; min-width: 0; accent-color: var(--card-accent); }
+    .rb-crop-actions { display: flex; justify-content: flex-end; gap: 8px; }
     /* Nothing blinks on. Menus, popovers, chat windows and faces, pickers, the
        photo viewer, cooking mode, the call card, timers and the status line
        fade in. Opacity only, so each keeps its own transform (the call card is
        centred with one). The reaction bar has its own fade and isn't listed.
-       Pages cross-fade through the browser's view transitions (setView). */
+       Pages cross-fade through the browser's view transitions (setView). Each is written as .rb .name, so the class is
+       still defined in one place only (tests/styles.test.mjs). */
     @keyframes rb-appear { from { opacity: 0; } to { opacity: 1; } }
-    .rb-appear, .rb-person-menu, .rb-msg-menu, .rb-emoji-menu, .rb-plus-menu, .rb-messenger-panel, .rb-chatwin, .rb-chathead, .rb-picker, .rb-gif-panel, .rb-lightbox, .rb-call, .rb-timers { animation: rb-appear 180ms ease-out both; }
+    .rb .rb-appear, .rb .rb-person-menu, .rb .rb-msg-menu, .rb .rb-emoji-menu, .rb .rb-plus-menu, .rb .rb-messenger-panel, .rb .rb-chatwin, .rb .rb-chathead, .rb .rb-picker, .rb .rb-gif-panel, .rb .rb-lightbox, .rb .rb-call, .rb .rb-timers { animation: rb-appear 180ms ease-out both; }
     ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 220ms; }
     /* Hover and pressed colours ease rather than snap. :where() gives this no
        weight, so anything with a transition of its own keeps it. */
     :where(button, a, input, select, textarea, [role="button"]) { transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, opacity 150ms ease; }
     @media (prefers-reduced-motion: reduce) {
-      .rb-appear, .rb-person-menu, .rb-msg-menu, .rb-emoji-menu, .rb-plus-menu, .rb-messenger-panel, .rb-chatwin, .rb-chathead, .rb-picker, .rb-gif-panel, .rb-lightbox, .rb-call, .rb-timers { animation: none; }
+      .rb .rb-appear, .rb .rb-person-menu, .rb .rb-msg-menu, .rb .rb-emoji-menu, .rb .rb-plus-menu, .rb .rb-messenger-panel, .rb .rb-chatwin, .rb .rb-chathead, .rb .rb-picker, .rb .rb-gif-panel, .rb .rb-lightbox, .rb .rb-call, .rb .rb-timers { animation: none; }
       :where(button, a, input, select, textarea, [role="button"]) { transition: none; }
       ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
     }
@@ -7194,6 +7369,16 @@ export default function RecipeBox() {
         <div className="rb-appear" style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(var(--deep-rgb), .88)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
           <p style={{ font: `400 30px/1.3 ${DISPLAY}`, color: "var(--page-accent)", textAlign: "center", padding: 24 }}>Drop .json or .md files to add them</p>
         </div>
+      )}
+
+      {faceCrop && (
+        <CropDialog
+          file={faceCrop}
+          title="Crop your picture"
+          busy={faceBusy}
+          onCancel={() => setFaceCrop(null)}
+          onDone={(crop) => saveFace(faceCrop, crop)}
+        />
       )}
 
       {cooking && openRecipe && (
@@ -9691,8 +9876,8 @@ export default function RecipeBox() {
             </section>
           ) : (
             <button type="button" className="rb-messenger-open rb-focus" onClick={toggleList} aria-expanded={false}>
-              <span aria-hidden>✉</span>
-              Messenger
+              <People size={17} />
+              Friends
               {unreadMessages ? <span className="rb-messenger-count">{unreadMessages}</span> : null}
             </button>
           )}

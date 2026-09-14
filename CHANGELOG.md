@@ -13,6 +13,8 @@ out unless they would notice it.
 
 ## 2026-09-14
 
+- **Messenger is now Friends.** The tab in the corner says Friends, with a little group of people instead of an envelope, and it's smaller, so it takes up less of the screen.
+- **Choose how your picture is cropped.** When you pick a new profile picture or group picture, you can now drag the photo and zoom in to choose exactly what shows in the circle, before it's saved.
 - **Less empty space in chats.** Only a chat's picture and name open its menu now, not the empty bar beside them. The + is a little smaller, and the quick emoji has less room around it.
 - **A tidier message box.** Photos, files and GIFs now live behind a + to the left of the message box. The Send button is gone: press Enter to send (Shift and Enter for a new line), or tap the return key at the end of the box.
 - **Smoother everywhere.** Moving between pages fades one into the next instead of snapping. Menus, pop-ups, chat windows, the photo viewer, cooking mode, timers and the call card fade in as they open, and buttons ease into their hover colours. If your device is set to reduce motion, all of this is switched off.
