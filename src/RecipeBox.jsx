@@ -28,6 +28,9 @@ import { hasHate, newHate, HATE_MESSAGE } from "../shared/hate.js";
 import { asFavorites, emptyFavorites, isFavorite, setFavorite, mergeFavorites } from "./favorites.js";
 import { QUICK_EMOJI, DEFAULT_QUICK_EMOJI, asQuickEmoji, emojiOnly } from "./emoji.js";
 import { gifUrl, isGifMessage } from "../shared/gif.js";
+import {
+  CALLS_API, STUN_SERVERS, callsSupported, callsCall, callStatus, iceGathered, micError, isMicError, playTone,
+} from "./calls.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -1129,6 +1132,21 @@ const roomForChats = () => {
    draft, and flashes when the friends list's own loop says something unread
    has arrived. Opened again, it catches up from the last message it had. */
 /* A paperclip, for attaching a file and for showing one. */
+function Phone({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2.1z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function Clip({ size = 18 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -1234,6 +1252,7 @@ function ChatWindow({
   face, faceWithLight, statusFor,
   onMinimize, onRestore, onClose, onBlock, onRead, onSent, onOpenPhoto,
   quickEmoji, onQuickEmoji,
+  onCall, callBusy,
 }) {
   const [messages, setMessages] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -1551,6 +1570,18 @@ function ChatWindow({
             </div>
           )}
         </span>
+        {onCall && (
+          <button
+            type="button"
+            className="rb-chatwin-ctl rb-focus"
+            onClick={onCall}
+            disabled={blocked || callBusy}
+            aria-label={`Call ${name}`}
+            title={blocked ? `You can't call ${first}` : callBusy ? "You're already on a call" : `Call ${first}`}
+          >
+            <Phone size={16} />
+          </button>
+        )}
         <button type="button" className="rb-chatwin-ctl is-minimise rb-focus" onClick={onMinimize} aria-label={`Minimise your chat with ${name}`} title="Minimise">
           <span aria-hidden>_</span>
         </button>
@@ -3498,6 +3529,248 @@ export default function RecipeBox() {
     return () => { stop = true; };
   }, []);
 
+  /* ═══ AUDIO CALLS ═══
+     Browser to browser (shared/calls.js). This page asks for the microphone
+     and writes an offer with every route it could find; the site passes it to
+     the other end, which answers the same way, and from then on the voice goes
+     directly between the two. `call` is the one call this page is in, kept in
+     callRef too so the waiting loops and the browser's own events read it
+     current; `incoming` is who is ringing. */
+  const canCall = callsSupported();
+  const [call, setCall] = useState(null);
+  const [incoming, setIncoming] = useState([]);
+  const [callNow, setCallNow] = useState(() => Date.now());
+  const callRef = useRef(null);
+  const rtc = useRef({ pc: null, stream: null });
+  const remoteAudio = useRef(null);
+  const putCall = (next) => {
+    const value = typeof next === "function" ? next(callRef.current) : next;
+    callRef.current = value;
+    setCall(value);
+  };
+
+  /* The microphone off and the connection closed — never left listening. */
+  const dropMedia = () => {
+    const { pc, stream } = rtc.current;
+    rtc.current = { pc: null, stream: null };
+    try { pc?.close(); } catch { /* already closed */ }
+    stream?.getTracks().forEach((t) => t.stop());
+    if (remoteAudio.current) remoteAudio.current.srcObject = null;
+  };
+  const endHere = (reason, error = "") => {
+    dropMedia();
+    putCall((c) => (c && c.phase !== "ended" ? { ...c, phase: "ended", reason, error } : c));
+  };
+  /* The connection gave up. Before it ever joined, that is almost always a
+     network that won't allow a direct call, which the card says. */
+  const failCall = (reason) => {
+    const c = callRef.current;
+    if (!c || c.phase === "ended") return;
+    endHere(reason || (c.phase === "active" ? "dropped" : "failed"));
+    if (c.id) callsCall("POST", "", { hangup: c.id }).catch(() => {});
+  };
+
+  /* The microphone and a connection for it. `still` says whether the call this
+     is for is still wanted: a hang-up while the browser was asking for the
+     microphone must not leave it on. */
+  const openPeer = async (still) => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
+    if (!still()) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw Object.assign(new Error("gone"), { name: "Gone" });
+    }
+    const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
+    rtc.current = { pc, stream };
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    pc.ontrack = (e) => {
+      const el = remoteAudio.current;
+      if (!el) return;
+      el.srcObject = e.streams[0] || new MediaStream([e.track]);
+      el.play?.().catch(() => {});
+    };
+    let lost = null;
+    pc.onconnectionstatechange = () => {
+      if (rtc.current.pc !== pc) return;
+      const s = pc.connectionState;
+      if (s === "connected") {
+        clearTimeout(lost);
+        putCall((c) => (c && (c.phase === "calling" || c.phase === "connecting") ? { ...c, phase: "active", since: Date.now() } : c));
+      } else if (s === "failed") {
+        failCall();
+      } else if (s === "disconnected") {
+        /* Often a blip that mends itself; eight seconds of it is a dropped call. */
+        clearTimeout(lost);
+        lost = setTimeout(() => { if (rtc.current.pc === pc && pc.connectionState !== "connected") failCall("dropped"); }, 8000);
+      }
+    };
+    return pc;
+  };
+
+  const placeCall = async (id, name) => {
+    if (!canCall || (callRef.current && callRef.current.phase !== "ended")) return;
+    const key = Math.random();
+    const still = () => callRef.current?.key === key && callRef.current.phase !== "ended";
+    putCall({ key, id: null, with: id, name, outgoing: true, phase: "calling", reason: "", error: "", muted: false });
+    try {
+      const pc = await openPeer(still);
+      await pc.setLocalDescription(await pc.createOffer());
+      await iceGathered(pc);
+      if (!still()) return;
+      const { call: made } = await callsCall("POST", "", { to: id, offer: pc.localDescription.sdp });
+      if (!still()) { callsCall("POST", "", { hangup: made.id }).catch(() => {}); return; }
+      putCall((c) => ({ ...c, id: made.id }));
+    } catch (err) {
+      if (!still()) return;
+      endHere("error", isMicError(err) ? micError(err) : String(err.message || err));
+    }
+  };
+
+  const acceptCall = async (ring) => {
+    if (callRef.current && callRef.current.phase !== "ended") return;
+    const key = Math.random();
+    const still = () => callRef.current?.key === key && callRef.current.phase !== "ended";
+    setIncoming((all) => all.filter((r) => r.id !== ring.id));
+    putCall({ key, id: ring.id, with: ring.from, name: ring.name, outgoing: false, phase: "connecting", reason: "", error: "", muted: false });
+    try {
+      const { call: now } = await callsCall("GET", `?call=${ring.id}`);
+      if (now.state !== "ringing" || !now.offer) {
+        endHere(now.state === "active" ? "error" : now.reason || "ended", now.state === "active" ? "You answered this call somewhere else" : "");
+        return;
+      }
+      const pc = await openPeer(still);
+      await pc.setRemoteDescription({ type: "offer", sdp: now.offer });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await iceGathered(pc);
+      if (!still()) return;
+      await callsCall("POST", "", { answer: ring.id, sdp: pc.localDescription.sdp });
+    } catch (err) {
+      if (!still()) return;
+      endHere("error", isMicError(err) ? micError(err) : String(err.message || err));
+      callsCall("POST", "", { hangup: ring.id }).catch(() => {});
+    }
+  };
+
+  const declineCall = (ring) => {
+    setIncoming((all) => all.filter((r) => r.id !== ring.id));
+    callsCall("POST", "", { hangup: ring.id }).catch(() => {});
+  };
+
+  const hangUp = () => {
+    const c = callRef.current;
+    if (!c || c.phase === "ended") { putCall(null); return; }
+    endHere(c.outgoing && c.phase === "calling" ? "cancelled" : "ended");
+    if (c.id) callsCall("POST", "", { hangup: c.id }).catch(() => {});
+  };
+
+  const toggleMute = () => {
+    const muted = !callRef.current?.muted;
+    rtc.current.stream?.getAudioTracks().forEach((t) => { t.enabled = !muted; });
+    putCall((c) => (c ? { ...c, muted } : c));
+  };
+
+  /* Who is ringing this page, held open the way the unread count is. Paused
+     while the page is hidden, like the rest; anybody who misses a ring that
+     way finds a missed call in the conversation. */
+  useEffect(() => {
+    if (!canCall) return;
+    let stop = false;
+    let known = null;
+    (async () => {
+      while (!stop) {
+        try {
+          if (document.hidden) {
+            known = null;
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          const data = await callsCall("GET", known === null ? "?ringing" : `?ringing&wait=1&known=${encodeURIComponent(known)}`);
+          if (stop) return;
+          const list = data.ringing || [];
+          known = list.map((r) => r.id).join(",");
+          setIncoming(list);
+        } catch (err) {
+          known = null;
+          await new Promise((r) => setTimeout(r, err?.status === 501 || err?.status === 403 ? 120000 : 20000));
+        }
+      }
+    })();
+    return () => { stop = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* The call this page is in, watched until it ends. Not paused when hidden: a
+     phone in a pocket is still on the call, and asking is how this end says so. */
+  const watchId = call && call.phase !== "ended" ? call.id : null;
+  useEffect(() => {
+    if (!watchId) return;
+    let stop = false;
+    let state = null;
+    (async () => {
+      while (!stop) {
+        try {
+          const data = await callsCall("GET", state ? `?call=${watchId}&wait=1&state=${state}` : `?call=${watchId}`);
+          if (stop) return;
+          const c = data.call;
+          state = c.state;
+          if (c.state === "ended") {
+            if (callRef.current?.id === watchId) endHere(c.reason || "ended");
+            return;
+          }
+          const { pc } = rtc.current;
+          if (c.outgoing && c.state === "active" && c.answer && pc && pc.signalingState === "have-local-offer") {
+            await pc.setRemoteDescription({ type: "answer", sdp: c.answer });
+            putCall((x) => (x && x.id === watchId && x.phase === "calling" ? { ...x, phase: "connecting" } : x));
+          }
+        } catch (err) {
+          if (stop) return;
+          if (err?.status === 404) { endHere("ended"); return; }
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    })();
+    return () => { stop = true; };
+  }, [watchId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* The clock while talking; a connection that never joins gives up after
+     half a minute; an ended card goes after five seconds. */
+  useEffect(() => {
+    if (call?.phase !== "active") return;
+    const t = setInterval(() => setCallNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [call?.phase]);
+  useEffect(() => {
+    if (call?.phase !== "connecting") return;
+    const t = setTimeout(() => failCall(), 30000);
+    return () => clearTimeout(t);
+  }, [call?.phase, call?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (call?.phase !== "ended") return;
+    const t = setTimeout(() => putCall((c) => (c?.phase === "ended" ? null : c)), 5000);
+    return () => clearTimeout(t);
+  }, [call?.phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Closing the tab hangs up, so the other end isn't left talking to nobody
+     for a minute and a half. */
+  useEffect(() => {
+    const bye = () => {
+      const c = callRef.current;
+      if (c?.id && c.phase !== "ended") {
+        navigator.sendBeacon?.(CALLS_API, new Blob([JSON.stringify({ hangup: c.id })], { type: "application/json" }));
+      }
+      dropMedia();
+    };
+    window.addEventListener("pagehide", bye);
+    return () => window.removeEventListener("pagehide", bye);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* A ring for whoever is calling this page, and a quieter one while this
+     page waits for somebody to pick up. */
+  const ringingNow = !call || call.phase === "ended" ? incoming.find((r) => r.id !== call?.id) || null : null;
+  const tone = ringingNow ? "incoming" : call?.phase === "calling" && call.id ? "outgoing" : null;
+  useEffect(() => (tone ? playTone(tone) : undefined), [tone]);
+
   /* Who there is to talk to, and what has been said: when the friends list
      opens, and on page load too if chats were left in the dock, so a chat
      brought back knows whether its person is blocked. */
@@ -5391,6 +5664,21 @@ export default function RecipeBox() {
     .rb-chatwin .rb-msg { touch-action: manipulation; }
     .rb-msg.has-love { position: relative; margin-bottom: 10px; }
     .rb-love-badge { position: absolute; right: -5px; bottom: -11px; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid var(--card-edge); border-radius: 50%; background: var(--card-bg); font-size: 11.5px; line-height: 1; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .5); }
+    /* A call: one card at the top of the screen, over everything — cooking
+       mode and the timers included, because somebody may well ring while you
+       cook. Words on the buttons, not just icons: it's a phone call. */
+    .rb-call { position: fixed; top: 12px; left: 50%; z-index: 75; transform: translateX(-50%); width: min(380px, calc(100vw - 32px)); box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 12px; border: 1px solid var(--card-edge); border-radius: 14px; background: var(--card-bg); color: var(--card-text); box-shadow: 0 14px 40px -18px rgba(0, 0, 0, .7); }
+    .rb-call.is-ringing { border-color: #3FA45B; box-shadow: 0 0 0 3px color-mix(in srgb, #3FA45B 40%, transparent), 0 14px 40px -18px rgba(0, 0, 0, .7); }
+    .rb-call-lines { flex: 1; min-width: 0; }
+    .rb-call-name { margin: 0; font: 700 15px/1.25 ${SOCIAL}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rb-call-status { margin: 2px 0 0; font: 400 12.5px/1.4 ${SOCIAL}; color: var(--card-muted); font-variant-numeric: tabular-nums; }
+    .rb-call-btns { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+    .rb-call-btn { padding: 8px 14px; border: 1px solid transparent; border-radius: 999px; cursor: pointer; color: #fff; font: 700 13px/1.2 ${SOCIAL}; }
+    .rb-call-btn:hover { filter: brightness(1.1); }
+    .rb-call-btn.is-answer { background: #2E7D46; }
+    .rb-call-btn.is-end { background: #B83A2A; }
+    .rb-call-btn.is-mute { background: var(--card-lift); border-color: var(--card-edge); color: var(--card-text); }
+    .rb-call-btn.is-mute[aria-pressed="true"] { background: var(--card-text); border-color: var(--card-text); color: var(--card-bg); }
     .rb-packs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 18px; }
     .rb-packs-where { display: inline-flex; align-items: center; gap: 8px; font: 500 13px/1.3 ${UI}; color: var(--card-muted); }
     .rb-packs-note { flex-basis: 100%; margin: 0; font: 400 12.5px/1.5 ${UI}; color: var(--card-muted); }
@@ -8194,9 +8482,52 @@ export default function RecipeBox() {
             onBlock={(b) => blockPerson(c.id, b)}
             onRead={markRead}
             onSent={refreshInbox}
+            onCall={canCall ? () => placeCall(c.id, c.name || personLabel(c.id)) : null}
+            callBusy={!!call && call.phase !== "ended"}
           />
         ))}
       </div>
+
+      {/* ═══════ A CALL ═══════ */}
+      {(ringingNow || call) && (() => {
+        const who = ringingNow ? { id: ringingNow.from, name: ringingNow.name } : { id: call.with, name: call.name };
+        return (
+          <section
+            className={`rb-call rb-noprint${ringingNow ? " is-ringing" : ""}`}
+            aria-label={ringingNow ? `${who.name} is calling` : `Call with ${who.name}`}
+          >
+            {face(who.id, who.name, 40)}
+            <div className="rb-call-lines">
+              <p className="rb-call-name">{who.name}</p>
+              <p className="rb-call-status" role="status">
+                {ringingNow ? "Calling you" : callStatus({ ...call, now: callNow })}
+              </p>
+            </div>
+            <div className="rb-call-btns">
+              {ringingNow ? (
+                <>
+                  <button type="button" className="rb-call-btn is-end rb-focus" onClick={() => declineCall(ringingNow)}>Decline</button>
+                  <button type="button" className="rb-call-btn is-answer rb-focus" onClick={() => acceptCall(ringingNow)}>Answer</button>
+                </>
+              ) : call.phase === "ended" ? (
+                <button type="button" className="rb-chatwin-ctl rb-focus" onClick={() => putCall(null)} aria-label="Close">
+                  <span aria-hidden>×</span>
+                </button>
+              ) : (
+                <>
+                  <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleMute} aria-pressed={!!call.muted}>
+                    {call.muted ? "Unmute" : "Mute"}
+                  </button>
+                  <button type="button" className="rb-call-btn is-end rb-focus" onClick={hangUp}>
+                    {call.phase === "calling" ? "Cancel" : "Hang up"}
+                  </button>
+                </>
+              )}
+            </div>
+          </section>
+        );
+      })()}
+      <audio ref={remoteAudio} autoPlay playsInline hidden />
 
       {/* ═══════ A PHOTO, FULL SIZE ═══════ */}
       {lightbox && (

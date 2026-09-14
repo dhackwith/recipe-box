@@ -95,3 +95,26 @@ CREATE TABLE IF NOT EXISTS attachment_pieces (
   data       BLOB    NOT NULL,
   PRIMARY KEY (attachment, n)
 );
+
+-- Audio calls (shared/calls.js). Only the setting up is kept: the caller's
+-- offer and the answer, each a browser's description of how to reach it. The
+-- call itself goes straight between the two browsers and never comes here.
+-- state is ringing, active or ended; a call nobody ends is ended with a reason
+-- the next time anybody asks about it. shared/calls.js also creates this.
+CREATE TABLE IF NOT EXISTS calls (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  pair        TEXT NOT NULL,
+  caller      TEXT NOT NULL,
+  callee      TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  reason      TEXT NOT NULL DEFAULT '',
+  offer       TEXT NOT NULL,
+  answer      TEXT NOT NULL DEFAULT '',
+  at          TEXT NOT NULL,
+  answered_at TEXT NOT NULL DEFAULT '',
+  ended_at    TEXT NOT NULL DEFAULT '',
+  caller_seen TEXT NOT NULL,
+  callee_seen TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS calls_to ON calls (callee, state);
+CREATE INDEX IF NOT EXISTS calls_from ON calls (caller, state);
