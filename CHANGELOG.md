@@ -13,7 +13,8 @@ out unless they would notice it.
 
 ## 2026-09-14
 
-- **Bubbly scrollbars in Messenger.** The friends list, chats, the message box, the people picker and GIF search have a new scrollbar: a round, colourful pill in a soft rounded track. It stays out of sight until you scroll, and slips away again a second after you stop.
+- **Slimmer chat title bar.** The bar at the top of a chat takes less room, and "Last seen" is shorter so it fits on one line: just the time if it was today, "yesterday", or the date if it was longer ago. A group's message box now says the group's whole name, like "Message Da Boiz".
+- **Bubbly scrollbars in Messenger.** The friends list, chats, the message box, the people picker and GIF search have a new scrollbar: a round, colourful pill in a soft track tinted to match. It fades in when you scroll, and fades away again a second after you stop.
 - **See who's away.** The little bubble on someone's picture now says more than on or off. Green means they're using the site. A yellow zzz means they have it open but haven't done anything for five minutes, and their name says Away. A gray × means they've closed it, with when they were last active.
 - **Softer faces.** Pictures and the bubbles on them no longer have a pale ring around them. A soft shadow sets them off instead.
 - **Talk in a group's voice channel.** Every group chat has a headphones button beside its name. Tap it to drop into the group's voice channel, and anyone else in the group can join or leave whenever they like. Under the group's name you can see who's in, with a green ring around whoever is talking. While you're in, a card at the top of the screen has Mute and Leave, even if you close the chat. The voice goes through Cloudflare, so a whole group fits and it works on networks where calls can't connect directly.

@@ -3,7 +3,7 @@
  * people in Pacific Time and one in New Zealand, reading the same note.
  */
 
-import { whenAt, whenFull } from "../src/when.js";
+import { whenAt, whenFull, seenAt } from "../src/when.js";
 
 let pass = 0, fail = 0;
 /* Clocks put a narrow no-break space before AM and PM in some locales, which
@@ -53,6 +53,16 @@ is("the full time names the Pacific zone", /PDT/.test(whenFull(note, LA)), true)
 is("...and the New Zealand one", /NZST/.test(whenFull(note, NZ)), true);
 is("the full time carries the reader's own day of the week",
   [/Saturday/.test(whenFull(note, LA)), /Sunday/.test(whenFull(note, NZ))], [true, true]);
+
+/* ── "Last seen …": the time today, then just yesterday, then the date ── */
+is("seen today is just the time", seenAt(note, { ...LA, now: soon }), "2:42 PM");
+is("seen yesterday is lower case and has no time", seenAt(dayBefore, { ...NZ, now: soon }), "yesterday");
+is("seen longer ago is the date alone", seenAt(note, { ...NZ, now: later }), "on 13 September");
+is("seen in another year says so", seenAt("2025-12-24T18:00:00.000Z", { ...LA, now: later }), "on 24 December 2025");
+is("the reader's zone decides today from yesterday",
+  [seenAt("2026-09-13T06:30:00.000Z", { ...LA, now: lateNight }), seenAt("2026-09-13T06:30:00.000Z", { ...NZ, now: lateNight })],
+  ["yesterday", "6:30 pm"]);
+is("seen with a broken time is blank", [seenAt(undefined), seenAt("not a date")], ["", ""]);
 
 /* ── the device's own zone, and nonsense ── */
 is("with no zone given, the device's is used without complaint", typeof whenAt(note), "string");

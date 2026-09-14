@@ -50,6 +50,24 @@ export function whenAt(iso, { now = new Date(), timeZone, locale, inSentence = f
   return `${label} at ${time}`;
 }
 
+/**
+ * The short form that follows "Last seen": "8:39 PM" today, "yesterday", and
+ * "on 13 September" (with the year once it isn't this one) before that. Short
+ * so it fits on one line under a name in a chat's title bar.
+ */
+export function seenAt(iso, { now = new Date(), timeZone, locale } = {}) {
+  const date = new Date(iso);
+  if (!iso || Number.isNaN(date.getTime())) return "";
+
+  const day = dayIn(date, timeZone);
+  const today = dayIn(now, timeZone);
+  const yesterday = dayIn(new Date(now.getTime() - 24 * 60 * 60 * 1000), timeZone);
+
+  if (sameDay(day, today)) return new Intl.DateTimeFormat(locale, { timeZone, hour: "numeric", minute: "2-digit" }).format(date);
+  if (sameDay(day, yesterday)) return "yesterday";
+  return `on ${day.d} ${MONTH_NAMES[day.m - 1]}${day.y === today.y ? "" : ` ${day.y}`}`;
+}
+
 /** The whole thing, zone included, for anyone who wants to be sure. */
 export function whenFull(iso, { timeZone, locale } = {}) {
   const date = new Date(iso);

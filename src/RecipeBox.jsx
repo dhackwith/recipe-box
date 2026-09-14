@@ -22,7 +22,7 @@ import {
   stepImageKey, stepImageUrl, newStepPhotoId, stepLines, stepPhotoIds, carryStepPhotos,
 } from "./stepphotos.js";
 /* Note times in the reader's own zone and clock style. */
-import { whenAt, whenFull } from "./when.js";
+import { whenAt, whenFull, seenAt } from "./when.js";
 /* The one thing the box will not keep — see shared/hate.js. */
 import { hasHate, newHate, HATE_MESSAGE } from "../shared/hate.js";
 import { asFavorites, emptyFavorites, isFavorite, setFavorite, mergeFavorites } from "./favorites.js";
@@ -1794,7 +1794,7 @@ function ChatWindow({
             aria-expanded={personMenu}
             title={`Options for ${name}`}
           >
-            {isGroup ? groupFace(id, 30, name) : faceWithLight(id, name, 30)}
+            {isGroup ? groupFace(id, 28, name) : faceWithLight(id, name, 28)}
             <span className="rb-chatwin-lines">
               <span className="rb-chatwin-nameline">
                 <span className="rb-chatwin-name">{name}</span>
@@ -2206,7 +2206,7 @@ function ChatWindow({
           rows={1}
           maxLength={4000}
           disabled={blocked}
-          placeholder={blocked ? `You've blocked ${first}` : `Message ${first}`}
+          placeholder={blocked ? `You've blocked ${first}` : `Message ${isGroup ? name : first}`}
           aria-label={`Message ${name}`}
           /* Rounded like the messages, the width of the window, one line to
              start (see the effect that grows it). */
@@ -4721,7 +4721,7 @@ export default function RecipeBox() {
     if (state === "active") return <>Online now</>;
     if (state === "away") return <>Away</>;
     const seen = lastSeenOf(id);
-    return seen ? <>Last seen <When iso={seen} /></> : null;
+    return seen ? <>Last seen <time dateTime={seen} title={whenFull(seen)}>{seenAt(seen)}</time></> : null;
   };
 
   /* A person's picture, or their initials when they haven't chosen one. It
@@ -6483,27 +6483,30 @@ export default function RecipeBox() {
     .rb-messenger-head { display: flex; align-items: center; gap: 2px; padding: 5px 5px 5px 4px; border-bottom: 1px solid var(--card-edge); background: var(--card-lift); color: var(--card-text); }
     .rb-messenger-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font: 600 13.5px/1.3 ${SOCIAL}; color: inherit; }
     .rb-messenger-body { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 12px 10px; }
-    /* The social parts' scrollbars are bubbles: a round accent pill with a
-       lighter middle, in a soft round track. Hidden until the area scrolls,
-       and gone again a second after it stops (the page adds .is-scrolling).
-       The space stays reserved, so nothing shifts when it appears. Firefox
-       only takes colours, so there it's a thin bar in the same colours,
-       hidden the same way. */
+    /* The social parts' scrollbars are bubbles: a solid round accent pill in
+       a soft track tinted with the accent. Hidden until the area scrolls, and
+       gone again a second after it stops (the page adds .is-scrolling).
+       Scrollbar parts can't take transitions themselves, so the area fades
+       two registered colours and the parts read them — that's what lets the
+       bar phase in and out rather than blink. The space stays reserved, so
+       nothing shifts when it appears. Firefox only takes colours, so there
+       it's a thin bar in the same colours, faded the same way. */
+    @property --rb-sb-thumb { syntax: "<color>"; inherits: true; initial-value: transparent; }
+    @property --rb-sb-track { syntax: "<color>"; inherits: true; initial-value: transparent; }
+    :is(${SOCIAL_SCROLL}) { --rb-sb-thumb: transparent; --rb-sb-track: transparent; transition: --rb-sb-thumb .45s ease, --rb-sb-track .45s ease; }
+    :is(${SOCIAL_SCROLL}).is-scrolling { --rb-sb-thumb: var(--card-accent); --rb-sb-track: color-mix(in srgb, var(--card-accent) 18%, transparent); transition-duration: .2s; }
     :is(${SOCIAL_SCROLL})::-webkit-scrollbar { width: 12px; height: 12px; }
-    :is(${SOCIAL_SCROLL})::-webkit-scrollbar-track { margin: 4px 0; border-radius: 999px; background: transparent; }
-    :is(${SOCIAL_SCROLL})::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }
+    :is(${SOCIAL_SCROLL})::-webkit-scrollbar-track { margin: 4px 0; border-radius: 999px; background: var(--rb-sb-track); }
+    :is(${SOCIAL_SCROLL})::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background-color: var(--rb-sb-thumb); background-clip: padding-box; }
     :is(${SOCIAL_SCROLL})::-webkit-scrollbar-corner { background: transparent; }
-    :is(${SOCIAL_SCROLL}).is-scrolling::-webkit-scrollbar-track { background: color-mix(in srgb, var(--card-text) 9%, transparent); }
-    :is(${SOCIAL_SCROLL}).is-scrolling::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--card-accent) 70%, #FFFFFF); box-shadow: inset 0 0 0 3px var(--card-accent); }
     @supports not selector(::-webkit-scrollbar) {
-      :is(${SOCIAL_SCROLL}) { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-      :is(${SOCIAL_SCROLL}).is-scrolling { scrollbar-color: var(--card-accent) color-mix(in srgb, var(--card-text) 9%, transparent); }
+      :is(${SOCIAL_SCROLL}) { scrollbar-width: thin; scrollbar-color: var(--rb-sb-thumb) var(--rb-sb-track); }
     }
     .rb-messenger-error { margin: 10px 0 0; font: 400 12.5px/1.5 ${SOCIAL}; color: var(--card-danger); }
 
     /* One chat window. Its title bar minimises it, as the _ beside it does. */
     .rb-chatwin { flex: none; width: 310px; height: min(72vh, 440px); display: flex; flex-direction: column; box-sizing: border-box; border: 1px solid var(--card-edge); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--card-bg); box-shadow: 0 -8px 30px -16px rgba(0, 0, 0, .6); overflow: hidden; }
-    .rb-chatwin-head { display: flex; align-items: center; gap: 2px; padding: 5px 5px 5px 4px; background: var(--card-lift); border-bottom: 1px solid var(--card-edge); color: var(--card-text); }
+    .rb-chatwin-head { display: flex; align-items: center; gap: 2px; padding: 3px 4px 3px 3px; background: var(--card-lift); border-bottom: 1px solid var(--card-edge); color: var(--card-text); }
     /* A minimised chat: the person's face in a round bubble sitting in the
        dock, like Facebook's chat heads. A ring flashes on and off — a step, as
        the waiting names do — while something in it is unread. */
@@ -6522,11 +6525,11 @@ export default function RecipeBox() {
     .rb-chathead-close { position: absolute; top: -5px; left: -5px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--card-edge); border-radius: 50%; background: var(--card-bg); color: var(--card-text); font: 700 13px/1 ${SOCIAL}; cursor: pointer; opacity: 0; transition: opacity 120ms ease; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .45); }
     .rb-chathead:hover .rb-chathead-close, .rb-chathead:focus-within .rb-chathead-close { opacity: 1; }
     @media (hover: none) { .rb-chathead-close { opacity: .9; } }
-    .rb-chatwin-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; background: none; border: 0; border-radius: 6px; padding: 4px 6px; cursor: pointer; text-align: left; color: inherit; font: 600 13.5px/1.25 ${SOCIAL}; }
+    .rb-chatwin-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; background: none; border: 0; border-radius: 6px; padding: 3px 6px; cursor: pointer; text-align: left; color: inherit; font: 600 13.5px/1.25 ${SOCIAL}; }
     .rb-chatwin-title:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
     .rb-chatwin-lines { min-width: 0; display: flex; flex-direction: column; }
     .rb-chatwin-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
-    .rb-chatwin-lines .rb-chat-seen { margin-top: 1px; font-size: 11px; }
+    .rb-chatwin-lines .rb-chat-seen { margin-top: 0; font-size: 11px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .rb-person-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
     .rb-chatwin-nameline { min-width: 0; display: flex; align-items: center; gap: 5px; }
     .rb-chatwin-caret { flex: none; font-size: 10px; opacity: .7; }
