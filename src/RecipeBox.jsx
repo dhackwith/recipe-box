@@ -1114,6 +1114,9 @@ const MAX_CHATS = 5;
 /* How long Take back is offered after sending. The server holds the same line
    by its own clock (functions/api/messages.js). */
 const TAKE_BACK_MS = 60 * 1000;
+/* Two taps on a message this close in time and place are a double tap. */
+const DOUBLE_TAP_MS = 320;
+const DOUBLE_TAP_SLOP = 24;
 const roomForChats = () => {
   const w = typeof window === "undefined" ? 1280 : window.innerWidth;
   return w < 700 ? 1 : Math.max(1, Math.min(3, Math.floor((w - 320) / 330)));
@@ -1455,6 +1458,25 @@ function ChatWindow({
     }
   };
 
+  /* Two quick taps on one of their messages love it, or take the love back,
+     as the Love link beside the time does — mostly for phones, where that
+     link is a small target. Touch and pen only: a mouse double-click is
+     how people select a word to copy. Taps on the message's own buttons and
+     links don't count, and a finger that scrolls never gets a pointerup. */
+  const lastTap = useRef({ id: 0, at: 0, x: 0, y: 0 });
+  const tapToLove = (e, m) => {
+    if (e.pointerType === "mouse" || m.mine || m.deleted || blocked) return;
+    if (e.target.closest("button, a")) return;
+    const last = lastTap.current;
+    const near = Math.hypot(e.clientX - last.x, e.clientY - last.y) < DOUBLE_TAP_SLOP;
+    if (last.id === m.id && e.timeStamp - last.at < DOUBLE_TAP_MS && near) {
+      lastTap.current = { id: 0, at: 0, x: 0, y: 0 };
+      toggleLove(m);
+    } else {
+      lastTap.current = { id: m.id, at: e.timeStamp, x: e.clientX, y: e.clientY };
+    }
+  };
+
   /* Taking back your own, or — for the owner — removing anybody's. Removing
      is for good and reaches the other person's copy too, so it asks first. */
   const takeBack = async (messageId, asOwner = false) => {
@@ -1549,7 +1571,7 @@ function ChatWindow({
               return (
                 <li key={m.id} className={`rb-msg-row${m.mine ? " is-mine" : ""}`}>
                   {!m.mine && (endsRun ? face(id, name, 24) : <span className="rb-face-gap" aria-hidden />)}
-                  <div className={`rb-msg${m.mine ? " is-mine" : ""}${(m.attachment?.picture && !m.deleted) || gif ? " has-photo" : ""}${!m.deleted && !m.attachment && emojiOnly(m.text) ? " is-emoji" : ""}${!m.deleted && m.loves?.length ? " has-love" : ""}`}>
+                  <div className={`rb-msg${m.mine ? " is-mine" : ""}${(m.attachment?.picture && !m.deleted) || gif ? " has-photo" : ""}${!m.deleted && !m.attachment && emojiOnly(m.text) ? " is-emoji" : ""}${!m.deleted && m.loves?.length ? " has-love" : ""}`} onPointerUp={(e) => tapToLove(e, m)}>
                     {gif && (
                       <button
                         type="button"
@@ -5320,8 +5342,11 @@ export default function RecipeBox() {
     .rb-chatwin-ctl:hover { opacity: 1; background: color-mix(in srgb, currentColor 10%, transparent); }
     /* an underscore sits on the baseline; lifted, it reads as a minimise bar */
     .rb-chatwin-ctl.is-minimise > span { transform: translateY(-5px); }
-    .rb-chatwin-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; }
-    .rb-chatwin-body .rb-chat-thread { max-height: none; padding-top: 0; gap: 8px; }
+    /* Only the body scrolls, and only up and down. The thread inside must not
+       be a scroll box of its own, or a love badge hanging off a bubble's
+       corner gives it a sideways scroll bar. */
+    .rb-chatwin-body { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 10px 12px; }
+    .rb-chatwin-body .rb-chat-thread { max-height: none; overflow: visible; padding-top: 0; gap: 8px; }
     .rb-chatwin .rb-msg { padding: 7px 10px; }
     .rb-chatwin .rb-msg-text { font-size: 14px; line-height: 1.5; }
     .rb-chatwin-compose { display: flex; flex-direction: column; gap: 7px; padding: 8px 10px 10px; border-top: 1px solid var(--card-edge); }
@@ -5362,6 +5387,8 @@ export default function RecipeBox() {
     .rb-emoji-menu button { width: 38px; height: 38px; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; font-size: 22px; line-height: 1; }
     .rb-emoji-menu button:hover, .rb-emoji-menu button:focus-visible { background: var(--card-lift); outline: none; }
     .rb-emoji-menu button[aria-checked="true"] { background: color-mix(in srgb, var(--card-accent) 24%, transparent); }
+    /* a double tap loves a message, so it mustn't also zoom the page */
+    .rb-chatwin .rb-msg { touch-action: manipulation; }
     .rb-msg.has-love { position: relative; margin-bottom: 10px; }
     .rb-love-badge { position: absolute; right: -5px; bottom: -11px; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid var(--card-edge); border-radius: 50%; background: var(--card-bg); font-size: 11.5px; line-height: 1; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .5); }
     .rb-packs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 18px; }

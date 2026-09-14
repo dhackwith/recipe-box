@@ -13,6 +13,8 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **Double tap a message to love it.** On a phone or tablet, tap somebody's message twice quickly and a ❤️ appears on it, the same as tapping Love. Double tap again to take it back. Double tapping a message no longer zooms the page.
+- **Chats no longer scroll sideways.** A loved message could give a chat window a scroll bar along the bottom, because the heart hangs off the corner of the message. It doesn't any more.
 - **Everyone who uses the site is in the friends list.** Somebody let in who isn't set up with a name yet now shows in Messenger under a name taken from their email, and can message anyone and be messaged back. Before, they could write to you but you couldn't answer. Once they're given a proper name, their conversations carry over.
 - **Faces sit clear of the bar in the friends list.** The coloured bar beside an open chat no longer runs under the person's picture.
 - **See what to buy at the shop.** On the shopping list, tap Suggest what to buy and each item gets a line saying how a supermarket sells it, like "Buy 2 × carton (64 fl oz)" for 10½ cups of almond milk. Choose United States or New Zealand under Shopping in, or leave it to go by where you are. The package sizes come from AI, so treat them as typical rather than exact. Where a size had to be guessed from cups or scoops, the line says "estimated".
