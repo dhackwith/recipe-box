@@ -33,6 +33,7 @@ import {
   RING_MS, CHECK_IN_MS, STALE_MS, trackRings, liveRings, retryDelay,
 } from "./calls.js";
 import { createLive, watcher, liveUrl, RESYNC_MS, RECONNECTING_MS } from "./live.js";
+import { VOICE_API, VOICE_HERE_MS, voiceCall, connectedWithin, createSpeakingMeter } from "./voice.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -1185,6 +1186,22 @@ function Phone({ size = 18 }) {
   );
 }
 
+function Headphones({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3 18v-6a9 9 0 0 1 18 0v6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function Dots({ size = 14 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -1366,8 +1383,13 @@ function ChatWindow({
   onCall, callBusy,
   live,
   me, group, groupFace, people, onGroup, onLeft,
+  voiceRoom, inVoice, speaking, onJoinVoice, onLeaveVoice, onMuteVoice, onVoiceRoom,
 }) {
   const isGroup = isGroupId(id);
+  /* An open group window asks who's in its voice channel. */
+  useEffect(() => {
+    if (isGroup && !minimized) onVoiceRoom?.(id);
+  }, [id, minimized]); // eslint-disable-line react-hooks/exhaustive-deps
   const memberName = (pid) => group?.members.find((mb) => mb.id === pid)?.name || "Someone";
   const [messages, setMessages] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -1919,6 +1941,18 @@ function ChatWindow({
             </div>
           )}
         </span>
+        {isGroup && onJoinVoice && (
+          <button
+            type="button"
+            className={`rb-chatwin-ctl rb-focus${inVoice ? " is-live" : ""}`}
+            onClick={() => (inVoice ? onLeaveVoice() : onJoinVoice())}
+            aria-pressed={!!inVoice}
+            aria-label={inVoice ? "Leave the voice channel" : `Join ${name}'s voice channel`}
+            title={inVoice ? "Leave voice" : "Join voice"}
+          >
+            <Headphones size={16} />
+          </button>
+        )}
         {onCall && !isGroup && (
           <button
             type="button"
@@ -1936,6 +1970,40 @@ function ChatWindow({
         </button>
         {closeButton}
       </div>
+
+      {/* A group's voice channel: who's in it, a ring around whoever is
+          talking, and join, mute and leave. */}
+      {isGroup && (inVoice || (voiceRoom && voiceRoom.length > 0)) && (
+        <div className={`rb-voice-strip${inVoice ? " is-in" : ""}`} role="group" aria-label="Voice channel">
+          <span className="rb-voice-faces">
+            {(voiceRoom || []).map((p) => (
+              <span
+                key={p.id}
+                className={`rb-voice-face${speaking?.[p.id === me ? "me" : p.id] ? " is-speaking" : ""}`}
+                title={`${p.id === me ? "You" : p.name}${p.muted ? " (muted)" : ""}`}
+              >
+                {face(p.id, p.name, 26)}
+                {p.muted ? <span className="rb-voice-muted" aria-hidden>🔇</span> : null}
+              </span>
+            ))}
+          </span>
+          <span className="rb-voice-label" role="status">
+            {inVoice
+              ? (inVoice.phase === "joining" ? "Joining voice…" : "You're in voice")
+              : `${voiceRoom.length} in voice`}
+          </span>
+          {inVoice ? (
+            <>
+              <button type="button" className="rb-voice-btn rb-focus" aria-pressed={!!inVoice.muted} onClick={onMuteVoice} disabled={inVoice.phase !== "live"}>
+                {inVoice.muted ? "Unmute" : "Mute"}
+              </button>
+              <button type="button" className="rb-voice-btn is-leave rb-focus" onClick={onLeaveVoice}>Leave</button>
+            </>
+          ) : onJoinVoice ? (
+            <button type="button" className="rb-voice-btn is-join rb-focus" onClick={onJoinVoice}>Join</button>
+          ) : null}
+        </div>
+      )}
 
       <div className="rb-chatwin-body" ref={threadRef}>
         {!loaded ? (
@@ -4077,6 +4145,7 @@ export default function RecipeBox() {
 
   const placeCall = async (id, name) => {
     if (!canCall || (callRef.current && callRef.current.phase !== "ended")) return;
+    if (voiceRef.current) { flash("Leave the voice channel before calling", 5000); return; }
     const key = Math.random();
     const still = () => callRef.current?.key === key && callRef.current.phase !== "ended";
     putCall({ key, id: null, with: id, name, outgoing: true, phase: "calling", reason: "", error: "", muted: false });
@@ -4096,6 +4165,8 @@ export default function RecipeBox() {
 
   const acceptCall = async (ring) => {
     if (callRef.current && callRef.current.phase !== "ended") return;
+    /* one microphone: answering a call leaves the voice channel */
+    if (voiceRef.current) await leaveVoice();
     const key = Math.random();
     const still = () => callRef.current?.key === key && callRef.current.phase !== "ended";
     setIncoming((all) => all.filter((r) => r.id !== ring.id));
@@ -4278,6 +4349,186 @@ export default function RecipeBox() {
   const ringingNow = !call || call.phase === "ended" ? incoming.find((r) => r.id !== call?.id) || null : null;
   const tone = ringingNow ? "incoming" : call?.phase === "calling" && call.id ? "outgoing" : null;
   useEffect(() => (tone ? playTone(tone) : undefined), [tone]);
+
+  /* ═══ GROUP VOICE ═══
+     A channel for each group, through Cloudflare's relay (shared/voice.js).
+     This page is in one channel at most: `voice` says which and how it's
+     going, kept in voiceRef too for the async steps. The connection, the
+     microphone and the people being heard live in voiceRtc, so a chat window
+     can close without the channel dropping. `voiceRooms` is who is in each
+     group's channel as far as this page knows; `speaking` who's talking. */
+  const [voice, setVoice] = useState(null);
+  const voiceRef = useRef(null);
+  const putVoice = (next) => {
+    const value = typeof next === "function" ? next(voiceRef.current) : next;
+    voiceRef.current = value;
+    setVoice(value);
+  };
+  const freshVoiceRtc = () => ({ pc: null, stream: null, heard: new Map(), mids: new Map(), meter: null, queue: Promise.resolve() });
+  const voiceRtc = useRef(freshVoiceRtc());
+  const [voiceRooms, setVoiceRooms] = useState({});
+  const [speaking, setSpeaking] = useState({});
+
+  const dropVoiceMedia = () => {
+    const r = voiceRtc.current;
+    r.stream?.getTracks().forEach((t) => t.stop());
+    for (const h of r.heard.values()) { try { h.el.pause(); h.el.srcObject = null; } catch { /* gone */ } }
+    try { r.pc?.close(); } catch { /* already closed */ }
+    r.meter?.stop();
+    voiceRtc.current = freshVoiceRtc();
+    setSpeaking({});
+  };
+
+  /* Hear whoever is in the channel and isn't heard yet; stop hearing whoever
+     has gone. One step at a time, because a connection renegotiates one offer
+     at a time. */
+  const syncVoice = (gid, room) => {
+    const r = voiceRtc.current;
+    r.queue = r.queue.then(async () => {
+      const v = voiceRef.current;
+      if (!v || v.gid !== gid || v.phase !== "live" || voiceRtc.current !== r || !r.pc) return;
+      const present = new Set(room.map((p) => p.id));
+      for (const [person, h] of [...r.heard]) {
+        if (present.has(person)) continue;
+        try { h.el.pause(); h.el.srcObject = null; } catch { /* gone */ }
+        r.meter?.remove(person);
+        r.heard.delete(person);
+        for (const [mid, who] of [...r.mids]) if (who === person) r.mids.delete(mid);
+      }
+      const expected = new Set(r.mids.values());
+      const missing = room.map((p) => p.id).filter((pid) => pid !== profile?.id && !r.heard.has(pid) && !expected.has(pid));
+      if (!missing.length) return;
+      const res = await voiceCall("POST", "", { pull: gid, people: missing });
+      for (const t of res.tracks || []) r.mids.set(t.mid, t.id);
+      if (res.offer && voiceRtc.current === r) {
+        await r.pc.setRemoteDescription({ type: "offer", sdp: res.offer });
+        await r.pc.setLocalDescription(await r.pc.createAnswer());
+        await voiceCall("POST", "", { answer: gid, sdp: r.pc.localDescription.sdp });
+      }
+    }).catch(() => { /* tried again the next time the channel changes */ });
+  };
+
+  const leaveVoice = async (why) => {
+    const v = voiceRef.current;
+    if (!v) return;
+    dropVoiceMedia();
+    putVoice(null);
+    if (why) flash(why, 6000);
+    try {
+      const res = await voiceCall("POST", "", { leave: v.gid });
+      setVoiceRooms((all) => ({ ...all, [v.chat]: res.room || [] }));
+    } catch { /* the channel clears people who stop checking in */ }
+  };
+
+  const joinVoice = async (chat) => {
+    const gid = Number(String(chat).slice(4));
+    if (!canCall) { flash("This browser can't join voice channels", 5000); return; }
+    if (callRef.current && callRef.current.phase !== "ended") { flash("Hang up your call before joining a voice channel", 5000); return; }
+    if (voiceRef.current?.gid === gid) return;
+    if (voiceRef.current) await leaveVoice();
+    putVoice({ chat, gid, phase: "joining", muted: false });
+    const still = () => voiceRef.current?.gid === gid;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
+      if (!still()) { stream.getTracks().forEach((t) => t.stop()); return; }
+      const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS, bundlePolicy: "max-bundle" });
+      const meter = createSpeakingMeter((state) => setSpeaking(state));
+      const r = { ...freshVoiceRtc(), pc, stream, meter };
+      voiceRtc.current = r;
+      meter.add("me", stream);
+      pc.ontrack = (e) => {
+        const person = r.mids.get(e.transceiver?.mid);
+        if (!person) return;
+        const heardStream = e.streams[0] || new MediaStream([e.track]);
+        r.heard.get(person)?.el.pause();
+        const el = new Audio();
+        el.autoplay = true;
+        el.srcObject = heardStream;
+        el.play?.().catch(() => {});
+        r.heard.set(person, { el });
+        meter.add(person, heardStream);
+      };
+      pc.onconnectionstatechange = () => {
+        if (voiceRtc.current === r && pc.connectionState === "failed") leaveVoice("The voice channel lost its connection");
+      };
+      const sender = pc.addTransceiver(stream.getAudioTracks()[0], { direction: "sendonly" });
+      await pc.setLocalDescription(await pc.createOffer());
+      const joined = await voiceCall("POST", "", { join: gid, sdp: pc.localDescription.sdp, mid: sender.mid });
+      if (!still()) return;
+      await pc.setRemoteDescription({ type: "answer", sdp: joined.answer });
+      if (!(await connectedWithin(pc, 15000))) throw new Error("Couldn't connect to the voice channel — try again");
+      if (!still()) return;
+      const ready = await voiceCall("POST", "", { ready: gid });
+      putVoice((v) => (v && v.gid === gid ? { ...v, phase: "live" } : v));
+      setVoiceRooms((all) => ({ ...all, [chat]: ready.room || [] }));
+      syncVoice(gid, ready.room || []);
+    } catch (err) {
+      if (!still()) return;
+      dropVoiceMedia();
+      putVoice(null);
+      voiceCall("POST", "", { leave: gid }).catch(() => {});
+      flash(isMicError(err) ? micError(err) : String(err.message || err), 6000);
+    }
+  };
+
+  const toggleVoiceMute = () => {
+    const v = voiceRef.current;
+    if (!v || v.phase !== "live") return;
+    const muted = !v.muted;
+    voiceRtc.current.stream?.getAudioTracks().forEach((t) => { t.enabled = !muted; });
+    putVoice({ ...v, muted });
+    voiceCall("POST", "", { mute: v.gid, muted })
+      .then((res) => setVoiceRooms((all) => ({ ...all, [v.chat]: res.room || [] })))
+      .catch(() => {});
+  };
+
+  /* Who's in a group's channel — and, for the channel this page is in, hear
+     anybody new and let go of anybody gone. */
+  const loadVoiceRoom = async (chat) => {
+    if (!isGroupId(chat)) return;
+    try {
+      const res = await voiceCall("GET", `?room=${chat.slice(4)}`);
+      setVoiceRooms((all) => ({ ...all, [chat]: res.room || [] }));
+      const v = voiceRef.current;
+      if (v && v.chat === chat && v.phase === "live") {
+        if (!res.you) {
+          dropVoiceMedia();
+          putVoice(null);
+          flash("You're no longer in the voice channel", 5000);
+          return;
+        }
+        syncVoice(v.gid, res.room || []);
+      }
+    } catch { /* without the Realtime keys, or offline: nobody shows */ }
+  };
+  const loadVoiceRoomRef = useRef(loadVoiceRoom);
+  loadVoiceRoomRef.current = loadVoiceRoom;
+  useEffect(() => live.onNotice((n) => { if (n.kind === "voice") loadVoiceRoomRef.current(n.with); }), [live]);
+
+  /* In a channel: check in, and look again, every VOICE_HERE_MS — not paused
+     when hidden, since a page in the background is still in the channel. */
+  useEffect(() => {
+    if (voice?.phase !== "live") return;
+    const { gid, chat } = voice;
+    const t = setInterval(() => {
+      voiceCall("POST", "", { here: gid }).catch(() => {});
+      loadVoiceRoomRef.current(chat);
+    }, VOICE_HERE_MS);
+    return () => clearInterval(t);
+  }, [voice?.phase, voice?.gid]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Closing the tab leaves the channel. */
+  useEffect(() => {
+    const bye = () => {
+      const v = voiceRef.current;
+      if (v) navigator.sendBeacon?.(VOICE_API, new Blob([JSON.stringify({ leave: v.gid })], { type: "application/json" }));
+    };
+    window.addEventListener("pagehide", bye);
+    return () => window.removeEventListener("pagehide", bye);
+  }, []);
 
   /* Who there is to talk to, and what has been said: when the friends list
      opens, and on page load too if chats were left in the dock, so a chat
@@ -6219,6 +6470,24 @@ export default function RecipeBox() {
        only where 5 minutes or more have passed, rounded bubbles that hold just
        the message, and a run of messages from one person tucked together. */
     .rb-chat-time { align-self: center; margin: 12px 0 4px; font: 600 11.5px/1.3 ${SOCIAL}; color: var(--card-muted); }
+    /* A group's voice channel: who's in it under the title bar, a green ring
+       around whoever is talking, and join, mute and leave. */
+    .rb-chatwin-ctl.is-live { opacity: 1; color: #2E7D46; background: color-mix(in srgb, #3FA45B 20%, transparent); }
+    .rb-voice-strip { display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 12px; border-bottom: 1px solid var(--card-edge); background: color-mix(in srgb, #3FA45B 8%, var(--card-bg)); }
+    .rb-voice-strip.is-in { background: color-mix(in srgb, #3FA45B 16%, var(--card-bg)); }
+    .rb-voice-faces { flex: none; display: flex; align-items: center; padding-right: 6px; }
+    .rb-voice-face { position: relative; display: inline-flex; margin-right: -6px; border-radius: 50%; box-shadow: 0 0 0 2px var(--card-bg); transition: box-shadow 120ms ease; }
+    .rb-voice-face.is-speaking { z-index: 1; box-shadow: 0 0 0 2px var(--card-bg), 0 0 0 4px #3FA45B; }
+    .rb-voice-muted { position: absolute; right: -5px; bottom: -5px; font-size: 10px; line-height: 1; }
+    .rb-voice-label { flex: 1; min-width: 0; margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px/1.3 ${SOCIAL}; color: var(--card-text); }
+    .rb-voice-btn { flex: none; padding: 5px 11px; border: 1px solid var(--card-edge); border-radius: 999px; background: var(--card-bg); color: var(--card-text); cursor: pointer; font: 700 12px/1.2 ${SOCIAL}; }
+    .rb-voice-btn[aria-pressed="true"] { border-color: var(--card-text); background: var(--card-text); color: var(--card-bg); }
+    .rb-voice-btn.is-join { border-color: #2E7D46; background: #2E7D46; color: #fff; }
+    .rb-voice-btn.is-leave { border-color: #B83A2A; background: #B83A2A; color: #fff; }
+    .rb-voice-btn:disabled { opacity: .5; cursor: default; }
+    .rb-voice-card { border-color: #3FA45B; }
+    .rb-chat-voice { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, #3FA45B 18%, transparent); color: var(--card-text); font: 700 11px/1.4 ${SOCIAL}; }
+    @media (prefers-reduced-motion: reduce) { .rb-voice-face { transition: none; } }
     /* In a group, the first name of whoever is talking, over their run. */
     .rb-msg-sender { margin: 8px 0 1px 43px; font: 600 11px/1.3 ${SOCIAL}; color: var(--card-muted); }
     .rb-msg-sender + .rb-msg-row { margin-top: 0; }
@@ -9132,6 +9401,11 @@ export default function RecipeBox() {
                           <span className="rb-chat-lines">
                             <span className="rb-chat-who">
                               {t.name}
+                              {voiceRooms[t.with]?.length ? (
+                                <span className="rb-chat-voice" title={`${voiceRooms[t.with].length} in voice`}>
+                                  <Headphones size={12} /> {voiceRooms[t.with].length}
+                                </span>
+                              ) : null}
                               {t.unread ? <span className="rb-chat-unread">{t.unread}</span> : null}
                             </span>
                             <span className="rb-chat-last">
@@ -9227,7 +9501,14 @@ export default function RecipeBox() {
             groupFace={groupFace}
             people={messagePeople}
             onGroup={rememberGroup}
-            onLeft={() => { closeChat(c.id); refreshInbox(); }}
+            onLeft={() => { if (voiceRef.current?.chat === c.id) leaveVoice(); closeChat(c.id); refreshInbox(); }}
+            voiceRoom={voiceRooms[c.id]}
+            inVoice={voice && voice.chat === c.id ? voice : null}
+            speaking={speaking}
+            onJoinVoice={isGroupId(c.id) && canCall ? () => joinVoice(c.id) : null}
+            onLeaveVoice={() => leaveVoice()}
+            onMuteVoice={toggleVoiceMute}
+            onVoiceRoom={loadVoiceRoom}
             owner={!!profile?.owner}
             onOpenPhoto={setLightbox}
             quickEmoji={quickEmoji}
@@ -9247,6 +9528,31 @@ export default function RecipeBox() {
           />
         ))}
       </div>
+
+      {/* ═══════ A VOICE CHANNEL ═══════
+          While this page is in one, a card at the top of the screen keeps
+          mute and leave in reach whatever else is open. */}
+      {voice && !(ringingNow || call) && (() => {
+        const title = groups[voice.chat]?.title || "Group voice";
+        const room = voiceRooms[voice.chat] || [];
+        return (
+          <section className="rb-call rb-voice-card rb-noprint" aria-label={`Voice channel: ${title}`}>
+            {groupFace(voice.chat, 40, title)}
+            <div className="rb-call-lines">
+              <p className="rb-call-name">{title}</p>
+              <p className="rb-call-status" role="status">
+                {voice.phase === "joining" ? "Joining voice…" : `In voice · ${room.length} ${room.length === 1 ? "person" : "people"}${voice.muted ? " · you're muted" : ""}`}
+              </p>
+            </div>
+            <div className="rb-call-btns">
+              <button type="button" className="rb-call-btn is-mute rb-focus" onClick={toggleVoiceMute} aria-pressed={!!voice.muted} disabled={voice.phase !== "live"}>
+                {voice.muted ? "Unmute" : "Mute"}
+              </button>
+              <button type="button" className="rb-call-btn is-end rb-focus" onClick={() => leaveVoice()}>Leave</button>
+            </div>
+          </section>
+        );
+      })()}
 
       {/* ═══════ A CALL ═══════ */}
       {(ringingNow || call) && (() => {

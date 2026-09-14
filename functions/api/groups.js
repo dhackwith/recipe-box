@@ -23,6 +23,7 @@ import {
   ensureGroups, groupRow, membersOf, shapeGroup, toMembers, groupPair, tidyName,
   GROUP_MAX, PICTURE_MAX, JPEG_URL,
 } from "../../shared/groups.js";
+import { ensureVoice } from "../../shared/voice.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -58,6 +59,7 @@ export async function onRequest({ request, env }) {
 
   try {
     await ensureGroups(db);
+    await ensureVoice(db);
     await ensureGuests(db);
     await arrive(db, email);
 
@@ -152,9 +154,16 @@ export async function onRequest({ request, env }) {
       const person = body.person;
       if (person === me.id) return json({ error: "To take yourself out, leave the group" }, 400);
       if (!okId(person) || !g.members.includes(person)) return json({ error: "They aren't in the group" }, 404);
-      await db.prepare("DELETE FROM group_members WHERE group_id = ?1 AND person = ?2").bind(g.id, person).run();
+      /* out of the group, and out of its voice channel */
+      await db.batch([
+        db.prepare("DELETE FROM group_members WHERE group_id = ?1 AND person = ?2").bind(g.id, person),
+        db.prepare("DELETE FROM voice_members WHERE group_id = ?1 AND person = ?2").bind(g.id, person),
+      ]);
     } else {
-      await db.prepare("DELETE FROM group_members WHERE group_id = ?1 AND person = ?2").bind(g.id, me.id).run();
+      await db.batch([
+        db.prepare("DELETE FROM group_members WHERE group_id = ?1 AND person = ?2").bind(g.id, me.id),
+        db.prepare("DELETE FROM voice_members WHERE group_id = ?1 AND person = ?2").bind(g.id, me.id),
+      ]);
       const rest = g.members.filter((p) => p !== me.id);
       if (!rest.length) {
         await db.prepare("DELETE FROM groups WHERE id = ?1").bind(g.id).run();

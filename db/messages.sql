@@ -139,3 +139,20 @@ CREATE TABLE IF NOT EXISTS group_members (
   PRIMARY KEY (group_id, person)
 );
 CREATE INDEX IF NOT EXISTS group_members_by_person ON group_members (person);
+
+-- Who is in each group's voice channel (shared/voice.js). `session` is their
+-- Realtime relay session, never sent to a page; `ready` once their connection
+-- is up; `seen` refreshed every half minute, and rows silent for 75 seconds are
+-- cleared. shared/voice.js also creates this.
+CREATE TABLE IF NOT EXISTS voice_members (
+  group_id INTEGER NOT NULL,
+  person   TEXT    NOT NULL,
+  session  TEXT    NOT NULL,
+  track    TEXT    NOT NULL,
+  muted    INTEGER NOT NULL DEFAULT 0,
+  ready    INTEGER NOT NULL DEFAULT 0,
+  joined   TEXT    NOT NULL,
+  seen     TEXT    NOT NULL,
+  PRIMARY KEY (group_id, person)
+);
+CREATE INDEX IF NOT EXISTS voice_by_person ON voice_members (person);

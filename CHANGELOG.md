@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-14
 
+- **Talk in a group's voice channel.** Every group chat has a headphones button beside its name. Tap it to drop into the group's voice channel, and anyone else in the group can join or leave whenever they like. Under the group's name you can see who's in, with a green ring around whoever is talking. While you're in, a card at the top of the screen has Mute and Leave, even if you close the chat. The voice goes through Cloudflare, so a whole group fits and it works on networks where calls can't connect directly.
 - **Group chats.** In Messenger, tap Start a conversation and pick people. Pick one and your chat with them opens; pick two or more and a group chat starts, with up to 12 people. Everything works in a group the way it does between two people — photos, GIFs, reactions, taking a message back — and each person's first name sits over what they said.
 - **A face for every group.** A group shows the faces of the people in it: two side by side, three in a triangle, four or more in quarters. Anyone in the group can choose a picture for it instead, and everyone sees it.
 - **Run a group from its name.** Tap the group's name at the top of its chat to rename it, change its picture, add people, see who's in it, or leave. Whoever started the group can also take people out.
