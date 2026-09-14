@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 /* ?raw inlines the file at build time — the button hands out exactly the
    template that is committed alongside this component. */
 import TEMPLATE_MD from "../claude-recipe-template.md?raw";
@@ -1233,6 +1234,35 @@ function Clip({ size = 18 }) {
   );
 }
 
+/* A plus, for the menu of things to add to a message. */
+function Plus({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/* A picture, for attaching a photo. */
+function Picture({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="3" y="4" width="18" height="16" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="8.5" cy="9.5" r="1.6" fill="currentColor" />
+      <path d="M21 16l-5-5-9 9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/* The return key, at the end of the message box: Enter sends. */
+function EnterKey({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M20 5v6a3 3 0 0 1-3 3H5M9 10l-4 4 4 4" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /* Searching KLIPY for a GIF (functions/api/gifs.js). With nothing typed it
    shows what is popular. Typing waits for a pause before it asks, so a word
    costs one search rather than one a letter — a test key allows a hundred an
@@ -1409,7 +1439,29 @@ function ChatWindow({
   const threadRef = useRef(null);
   const typeRef = useRef(null);
   const fileRef = useRef(null);
+  const photoRef = useRef(null);
   const [gifOpen, setGifOpen] = useState(false);
+
+  /* The + beside the message box: a small menu of Photo, File and GIF,
+     opening upward. Its first item takes focus, the arrow keys move through
+     it, and Escape or a tap anywhere else puts it away. */
+  const [plusMenu, setPlusMenu] = useState(false);
+  const plusRef = useRef(null);
+  useEffect(() => {
+    if (!plusMenu) return;
+    plusRef.current?.querySelector('[role="menuitem"]')?.focus();
+    const away = (e) => { if (!plusRef.current?.contains(e.target)) setPlusMenu(false); };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [plusMenu]);
+  const plusMenuKeys = (e) => {
+    const items = [...plusRef.current.querySelectorAll('[role="menuitem"]')];
+    const at = items.indexOf(document.activeElement);
+    const move = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setPlusMenu(false); plusRef.current?.querySelector(".rb-plus-btn")?.focus(); }
+    else if (move) { e.preventDefault(); items[(at + move + items.length) % items.length]?.focus(); }
+  };
+  const fromPlus = (act) => { setPlusMenu(false); act(); };
 
   /* A message's reaction bar held open (by a press and hold, on a touch
      screen), and a message's ⋯ menu. Pointing at a message with a mouse opens
@@ -2184,118 +2236,137 @@ function ChatWindow({
             </button>
           </div>
         )}
-        <textarea
-          ref={typeRef}
-          /* Put away while a GIF is being chosen, when the search box is where
-             the typing goes: a chat window has no room for both and the
-             conversation. The draft is kept. */
-          hidden={gifOpen && !blocked}
-          /* A picture pasted into the box is attached, as in any messenger. */
-          onPaste={(e) => {
-            const pasted = [...(e.clipboardData?.files || [])][0];
-            if (pasted && !blocked) { e.preventDefault(); choose(pasted); }
-          }}
-          className="rb-focus"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            /* Enter sends, as it does everywhere people type to each other;
-               shift and Enter is a new line. */
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-          }}
-          rows={1}
-          maxLength={4000}
-          disabled={blocked}
-          placeholder={blocked ? `You've blocked ${first}` : `Message ${isGroup ? name : first}`}
-          aria-label={`Message ${name}`}
-          /* Rounded like the messages, the width of the window, one line to
-             start (see the effect that grows it). */
-          style={{ ...input, width: "100%", boxSizing: "border-box", resize: "none", padding: "8px 14px", borderRadius: 18, overflowY: "hidden", font: `400 14px/1.45 ${SOCIAL}` }}
-        />
-        <div className="rb-chatwin-actions">
-          <span className="rb-chatwin-tools">
+        <div className="rb-chatwin-row">
+          <span className="rb-plus-wrap" ref={plusRef}>
+            {plusMenu && (
+              <div className="rb-plus-menu" role="menu" aria-label="Add to your message" onKeyDown={plusMenuKeys}>
+                <button type="button" role="menuitem" onClick={() => fromPlus(() => photoRef.current?.click())}>
+                  <span className="rb-plus-icon" aria-hidden><Picture /></span>
+                  Photo
+                </button>
+                <button type="button" role="menuitem" onClick={() => fromPlus(() => fileRef.current?.click())}>
+                  <span className="rb-plus-icon" aria-hidden><Clip /></span>
+                  File
+                </button>
+                <button type="button" role="menuitem" onClick={() => fromPlus(() => setGifOpen(true))}>
+                  <span className="rb-plus-icon is-gif" aria-hidden>GIF</span>
+                  GIF
+                </button>
+              </div>
+            )}
             <button
               type="button"
-              className="rb-chatwin-ctl rb-focus"
-              onClick={() => fileRef.current?.click()}
+              className="rb-chatwin-ctl rb-plus-btn rb-focus"
+              onClick={() => setPlusMenu((open) => !open)}
               disabled={blocked || busy}
-              aria-label="Attach a photo or file"
-              title="Attach a photo or file"
+              aria-haspopup="menu"
+              aria-expanded={plusMenu}
+              aria-label="Add a photo, a file or a GIF"
+              title="Add a photo, a file or a GIF"
             >
-              <Clip />
+              <Plus />
             </button>
+            <input
+              ref={photoRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ""; }}
+            />
             <input
               ref={fileRef}
               type="file"
               hidden
               onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ""; }}
             />
+          </span>
+          <span className="rb-type-wrap">
+            <textarea
+              ref={typeRef}
+              /* Put away while a GIF is being chosen, when the search box is where
+                 the typing goes: a chat window has no room for both and the
+                 conversation. The draft is kept. */
+              hidden={gifOpen && !blocked}
+              /* A picture pasted into the box is attached, as in any messenger. */
+              onPaste={(e) => {
+                const pasted = [...(e.clipboardData?.files || [])][0];
+                if (pasted && !blocked) { e.preventDefault(); choose(pasted); }
+              }}
+              className="rb-focus"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                /* Enter sends, as it does everywhere people type to each other;
+                   shift and Enter is a new line. */
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              }}
+              rows={1}
+              maxLength={4000}
+              disabled={blocked}
+              placeholder={blocked ? `You've blocked ${first}` : `Message ${isGroup ? name : first}`}
+              aria-label={`Message ${name}`}
+              /* Rounded like the messages, with room at the right end for the
+                 return key, one line to start (see the effect that grows it). */
+              style={{ ...input, width: "100%", boxSizing: "border-box", resize: "none", padding: "8px 40px 8px 14px", borderRadius: 18, overflowY: "hidden", font: `400 14px/1.45 ${SOCIAL}` }}
+            />
+            {/* There is no Send button: Enter sends. The return key says so,
+                and a tap on it sends too, for a phone's keyboard. */}
             <button
               type="button"
-              className="rb-chatwin-ctl rb-gif-btn rb-focus"
-              onClick={() => setGifOpen((open) => !open)}
-              disabled={blocked}
-              aria-expanded={gifOpen}
-              aria-label="Send a GIF"
-              title="Send a GIF"
-            >
-              GIF
-            </button>
-          </span>
-          <span className="rb-chatwin-send">
-            <span className="rb-emoji-wrap" ref={emojiRef}>
-              {emojiMenu && (
-                <div className="rb-emoji-menu" role="menu" aria-label="Choose your quick emoji" onKeyDown={emojiMenuKeys}>
-                  <p className="rb-emoji-hint" aria-hidden>Your quick emoji</p>
-                  {QUICK_EMOJI.map((emoji) => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={emoji === quickEmoji}
-                      onClick={() => pickEmoji(emoji)}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <button
-                type="button"
-                className="rb-emoji-btn rb-focus"
-                disabled={busy || blocked}
-                aria-label={`Send ${quickEmoji} — press and hold, or press the up arrow, to choose a different emoji`}
-                aria-haspopup="menu"
-                aria-expanded={emojiMenu}
-                title="Send — press and hold to choose another"
-                onPointerDown={(e) => {
-                  if (e.button !== 0) return;
-                  held.current = false;
-                  clearTimeout(holdTimer.current);
-                  holdTimer.current = setTimeout(() => openEmojiMenu(true), HOLD_MS);
-                }}
-                onPointerUp={() => clearTimeout(holdTimer.current)}
-                onPointerLeave={() => clearTimeout(holdTimer.current)}
-                onPointerCancel={() => clearTimeout(holdTimer.current)}
-                /* a long press on a phone, or a right-click */
-                onContextMenu={(e) => { e.preventDefault(); openEmojiMenu(e.pointerType !== "mouse" && e.button !== 2); }}
-                onKeyDown={(e) => { if (e.key === "ArrowUp") { e.preventDefault(); openEmojiMenu(false); } }}
-                onClick={() => {
-                  if (held.current) { held.current = false; return; }
-                  if (emojiMenu) { setEmojiMenu(false); return; }
-                  sendEmoji();
-                }}
-              >
-                {quickEmoji}
-              </button>
-            </span>
-            <button
-              className="rb-btn rb-focus"
-              style={{ ...btnPrimary, padding: "7px 14px", fontSize: 13 }}
+              className="rb-enter-btn rb-focus"
+              hidden={gifOpen && !blocked}
               onClick={send}
               disabled={busy || blocked || (!draft.trim() && !pending)}
+              aria-label={busy ? "Sending" : "Send (or press Enter)"}
+              title="Send — or press Enter. Shift and Enter starts a new line."
             >
-              {busy ? "Sending…" : "Send"}
+              <EnterKey />
+            </button>
+          </span>
+          <span className="rb-emoji-wrap" ref={emojiRef}>
+            {emojiMenu && (
+              <div className="rb-emoji-menu" role="menu" aria-label="Choose your quick emoji" onKeyDown={emojiMenuKeys}>
+                <p className="rb-emoji-hint" aria-hidden>Your quick emoji</p>
+                {QUICK_EMOJI.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={emoji === quickEmoji}
+                    onClick={() => pickEmoji(emoji)}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className="rb-emoji-btn rb-focus"
+              disabled={busy || blocked}
+              aria-label={`Send ${quickEmoji} — press and hold, or press the up arrow, to choose a different emoji`}
+              aria-haspopup="menu"
+              aria-expanded={emojiMenu}
+              title="Send — press and hold to choose another"
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                held.current = false;
+                clearTimeout(holdTimer.current);
+                holdTimer.current = setTimeout(() => openEmojiMenu(true), HOLD_MS);
+              }}
+              onPointerUp={() => clearTimeout(holdTimer.current)}
+              onPointerLeave={() => clearTimeout(holdTimer.current)}
+              onPointerCancel={() => clearTimeout(holdTimer.current)}
+              /* a long press on a phone, or a right-click */
+              onContextMenu={(e) => { e.preventDefault(); openEmojiMenu(e.pointerType !== "mouse" && e.button !== 2); }}
+              onKeyDown={(e) => { if (e.key === "ArrowUp") { e.preventDefault(); openEmojiMenu(false); } }}
+              onClick={() => {
+                if (held.current) { held.current = false; return; }
+                if (emojiMenu) { setEmojiMenu(false); return; }
+                sendEmoji();
+              }}
+            >
+              {quickEmoji}
             </button>
           </span>
         </div>
@@ -3148,6 +3219,7 @@ function Popover({ trigger, children, align = "left", width = 300, label, onOpen
       {open && (
         <div
           ref={panelRef}
+          className="rb-appear"
           role="dialog"
           aria-label={label}
           style={{
@@ -3268,6 +3340,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
   const done = marks.steps.includes(stepIndex);
   return (
     <div
+      className="rb-appear"
       style={{
         position: "fixed", inset: 0, zIndex: 60, display: "flex", flexDirection: "column",
         background: `radial-gradient(120% 80% at 50% 0%, var(--page-soft) 0%, var(--page-bg) 50%, var(--page-deep) 100%)`,
@@ -3431,7 +3504,18 @@ export default function RecipeBox() {
   const [box, setBox] = useState({ name: SITE_NAME, recipes: [] });
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
-  const [view, setView] = useState("list");
+  const [view, setViewNow] = useState("list");
+  /* Changing page cross-fades the old page into the new one where the browser
+     can (View Transitions). Whatever else changes with the page — the recipe
+     opened, a scroll to the top, a cleared import — goes in `alongside`, so
+     it happens inside the change: done first, the old page would visibly jump
+     or empty out before it faded. */
+  const setView = useCallback((to, alongside) => {
+    const change = () => { alongside?.(); setViewNow(to); };
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!document.startViewTransition || still || document.visibilityState !== "visible") { change(); return; }
+    document.startViewTransition(() => flushSync(change));
+  }, []);
   const [openId, setOpenId] = useState(null);
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState(null);
@@ -4908,10 +4992,11 @@ export default function RecipeBox() {
     }
     listStateRef.current = { query, scope, tagFilter, activeBox };
     listScrollRef.current = window.scrollY;
-    setOpenId(id);
-    setFactor(1);
-    setView("detail");
-    window.scrollTo(0, 0);
+    setView("detail", () => {
+      setOpenId(id);
+      setFactor(1);
+      window.scrollTo(0, 0);
+    });
   };
 
   /* A Lately entry opens its recipe at the conversation rather than at the top:
@@ -5564,8 +5649,7 @@ export default function RecipeBox() {
      remembering it came from itself, and its back button went nowhere. */
   const openTool = (to) => {
     toolTrail.current = trailTo(toolTrail.current, view, to);
-    setView(to);
-    window.scrollTo(0, 0);
+    setView(to, () => window.scrollTo(0, 0));
   };
   const openToday = () => openTool("today");
   const openPlan = () => openTool("plan");
@@ -5615,9 +5699,11 @@ export default function RecipeBox() {
     if (unsaved && !homeArmed) { setHomeArmed(true); return; }
     setHomeArmed(false);
     setCooking(false);
-    if (view === "import") { setStaged([]); setImportErrors([]); }
-    if (view !== "list") setView("list");
-    window.scrollTo({ top: 0, behavior: view === "list" ? "smooth" : "auto" });
+    if (view === "list") { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+    setView("list", () => {
+      if (view === "import") { setStaged([]); setImportErrors([]); }
+      window.scrollTo(0, 0);
+    });
   };
 
   /* The week, turned into a shop.
@@ -5659,10 +5745,11 @@ export default function RecipeBox() {
      the list — somebody checking what Thursday needs is still planning. */
   const openFromPlan = (recipe) => {
     toolTrail.current = trailTo(toolTrail.current, "plan", "detail");
-    setOpenId(recipe.id);
-    setFactor(1);
-    setView("detail");
-    window.scrollTo(0, 0);
+    setView("detail", () => {
+      setOpenId(recipe.id);
+      setFactor(1);
+      window.scrollTo(0, 0);
+    });
   };
 
   const addRecipeToList = (recipe) => {
@@ -5902,7 +5989,7 @@ export default function RecipeBox() {
       return;
     }
     persist({ ...box, recipes: [...additions, ...box.recipes] });
-    setStaged([]); setImportErrors([]); setView("list");
+    setView("list", () => { setStaged([]); setImportErrors([]); });
     flash(`Added ${additions.length} ${additions.length === 1 ? "recipe" : "recipes"}`);
   };
 
@@ -6686,9 +6773,26 @@ export default function RecipeBox() {
       .rb-react:hover, .rb-react:focus-visible { transform: none; }
     }
     .rb-chatwin-compose { display: flex; flex-direction: column; gap: 7px; padding: 8px 10px 10px; border-top: 1px solid var(--card-edge); }
-    .rb-chatwin-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .rb-chatwin-tools { display: inline-flex; align-items: center; gap: 6px; }
     .rb-chatwin-ctl:disabled { cursor: default; opacity: .35; }
+    /* The row under a chat: a + for a photo, a file or a GIF on the left, the
+       message box with a return key at its right end (Enter sends; there is
+       no Send button), and the quick emoji on the right. */
+    .rb-chatwin-row { display: flex; align-items: flex-end; gap: 6px; }
+    .rb-chatwin-row > .rb-emoji-wrap { margin: 0 0 2px auto; }
+    .rb-plus-wrap { position: relative; flex: none; display: inline-flex; margin-bottom: 2px; }
+    .rb-plus-btn { width: 34px; height: 34px; opacity: 1; color: var(--card-accent); background: color-mix(in srgb, var(--card-accent) 14%, transparent); }
+    .rb-plus-btn svg { transition: transform 150ms ease; }
+    .rb-plus-btn[aria-expanded="true"] svg { transform: rotate(45deg); }
+    .rb-plus-menu { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 2; min-width: 150px; display: flex; flex-direction: column; gap: 1px; padding: 5px; border: 1px solid var(--card-edge); border-radius: 12px; background: var(--card-bg); box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); }
+    .rb-plus-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 12px 6px 6px; border: 0; border-radius: 8px; background: none; cursor: pointer; text-align: left; color: var(--card-text); font: 600 13.5px/1.2 ${SOCIAL}; }
+    .rb-plus-menu button:hover, .rb-plus-menu button:focus-visible { background: var(--card-lift); outline: none; }
+    .rb-plus-icon { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: color-mix(in srgb, var(--card-accent) 14%, transparent); color: var(--card-accent); }
+    .rb-plus-icon.is-gif { font: 800 9px/1 ${SOCIAL}; letter-spacing: .04em; }
+    .rb-type-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
+    .rb-enter-btn { position: absolute; right: 4px; bottom: 4px; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--card-accent); cursor: pointer; }
+    .rb-enter-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--card-accent) 14%, transparent); }
+    .rb-enter-btn:disabled { cursor: default; color: var(--card-muted); opacity: .6; }
+    @media (prefers-reduced-motion: reduce) { .rb-plus-btn svg { transition: none; } }
     /* Attachments: a photo as itself, a file as a card to download, and one
        waiting to be sent shown above the box. */
     .rb-msg-photo { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; line-height: 0; border-radius: 2px; overflow: hidden; }
@@ -6703,10 +6807,9 @@ export default function RecipeBox() {
     .rb-chat-pending img { flex: none; width: 40px; height: 40px; object-fit: cover; border-radius: 3px; }
     .rb-chat-pending-name { flex: 1; min-width: 0; display: flex; flex-direction: column; font: 600 12.5px/1.3 ${SOCIAL}; overflow-wrap: anywhere; }
     .rb-chat-pending-name > span { font: 400 11px/1.3 ${SOCIAL}; color: var(--card-muted); }
-    /* The quick emoji beside Send, and the small menu that a press and hold
+    /* The quick emoji at the end of the message row, and the small menu that a press and hold
        opens above it. The button can't be selected or called up as a
        phone's own long-press menu, or holding it would do that instead. */
-    .rb-chatwin-send { display: inline-flex; align-items: center; gap: 6px; }
     .rb-emoji-wrap { position: relative; display: inline-flex; }
     .rb-emoji-btn { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; font-size: 21px; line-height: 1; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; transition: transform 120ms ease; }
     .rb-emoji-btn:hover:not(:disabled) { transform: scale(1.12); background: color-mix(in srgb, var(--card-text) 8%, transparent); }
@@ -6738,7 +6841,6 @@ export default function RecipeBox() {
     .rb-pack-est { font-weight: 400; color: var(--card-muted); }
     .rb-love-line { margin: 5px 0 0; font: 500 12.5px/1.4 ${SOCIAL}; color: var(--card-muted); }
     .rb-entry-actions .rb-entry-x + .rb-entry-x { margin-left: 14px; }
-    .rb-gif-btn { width: auto; padding: 0 7px; border-radius: 6px; font: 700 11.5px/1 ${SOCIAL}; letter-spacing: .06em; }
     .rb-gif-panel { display: flex; flex-direction: column; gap: 6px; }
     .rb-gif-search { display: flex; align-items: center; gap: 4px; }
     .rb-gif-grid { height: min(150px, 28vh); overflow-y: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 92px; gap: 4px; margin: 0; padding: 0; list-style: none; }
@@ -6997,6 +7099,22 @@ export default function RecipeBox() {
     .rb-step { animation: rbfade 260ms ease both; }
     @keyframes rbfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
     @media (prefers-reduced-motion: reduce) { .rb-step { animation: none; } }
+    /* Nothing blinks on. Menus, popovers, chat windows and faces, pickers, the
+       photo viewer, cooking mode, the call card, timers and the status line
+       fade in. Opacity only, so each keeps its own transform (the call card is
+       centred with one). The reaction bar has its own fade and isn't listed.
+       Pages cross-fade through the browser's view transitions (setView). */
+    @keyframes rb-appear { from { opacity: 0; } to { opacity: 1; } }
+    .rb-appear, .rb-person-menu, .rb-msg-menu, .rb-emoji-menu, .rb-plus-menu, .rb-messenger-panel, .rb-chatwin, .rb-chathead, .rb-picker, .rb-gif-panel, .rb-lightbox, .rb-call, .rb-timers { animation: rb-appear 180ms ease-out both; }
+    ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 220ms; }
+    /* Hover and pressed colours ease rather than snap. :where() gives this no
+       weight, so anything with a transition of its own keeps it. */
+    :where(button, a, input, select, textarea, [role="button"]) { transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, opacity 150ms ease; }
+    @media (prefers-reduced-motion: reduce) {
+      .rb-appear, .rb-person-menu, .rb-msg-menu, .rb-emoji-menu, .rb-plus-menu, .rb-messenger-panel, .rb-chatwin, .rb-chathead, .rb-picker, .rb-gif-panel, .rb-lightbox, .rb-call, .rb-timers { animation: none; }
+      :where(button, a, input, select, textarea, [role="button"]) { transition: none; }
+      ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+    }
     @media print {
       @page { margin: 14mm; }
       /* The dark palette follows the screen onto paper otherwise, which means
@@ -7069,7 +7187,7 @@ export default function RecipeBox() {
       <Grain opacity={palette[theme].grain ?? 0.06} />
 
       {dragging && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(var(--deep-rgb), .88)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
+        <div className="rb-appear" style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(var(--deep-rgb), .88)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
           <p style={{ font: `400 30px/1.3 ${DISPLAY}`, color: "var(--page-accent)", textAlign: "center", padding: 24 }}>Drop .json or .md files to add them</p>
         </div>
       )}
@@ -7335,7 +7453,7 @@ export default function RecipeBox() {
       </header>
 
       <main className="rb-main" style={{ position: "relative", maxWidth: 1120, margin: "0 auto", padding: "30px 26px 0" }}>
-        {status && <p className="rb-noprint" style={{ font: `500 13px/1.4 ${UI}`, color: "var(--page-accent)", margin: "0 0 18px" }}>{status}</p>}
+        {status && <p className="rb-noprint rb-appear" style={{ font: `500 13px/1.4 ${UI}`, color: "var(--page-accent)", margin: "0 0 18px" }}>{status}</p>}
         {loading && <p style={{ font: `400 15px/1.6 ${UI}`, color: "rgba(var(--on-page), calc(.7 * var(--ink-k)))" }}>Opening the box…</p>}
 
         {/* ═══════ LIST ═══════ */}
@@ -7718,7 +7836,7 @@ export default function RecipeBox() {
                 >
                   Add to the box
                 </button>
-                <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => { setStaged([]); setImportErrors([]); setView("list"); }}>
+                <button className="rb-btn rb-focus" style={btnQuiet} onClick={() => setView("list", () => { setStaged([]); setImportErrors([]); })}>
                   Cancel
                 </button>
               </div>

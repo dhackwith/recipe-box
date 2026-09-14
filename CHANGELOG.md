@@ -13,6 +13,8 @@ out unless they would notice it.
 
 ## 2026-09-14
 
+- **A tidier message box.** Photos, files and GIFs now live behind a + to the left of the message box. The Send button is gone: press Enter to send (Shift and Enter for a new line), or tap the return key at the end of the box.
+- **Smoother everywhere.** Moving between pages fades one into the next instead of snapping. Menus, pop-ups, chat windows, the photo viewer, cooking mode, timers and the call card fade in as they open, and buttons ease into their hover colours. If your device is set to reduce motion, all of this is switched off.
 - **Back where you'd look for it.** In a group's list of people, the Back button now sits at the top right, beside the heading.
 - **Slimmer chat title bar.** The bar at the top of a chat takes less room, and "Last seen" is shorter so it fits on one line: just the time if it was today, "yesterday", or the date if it was longer ago. A group's message box now says the group's whole name, like "Message Da Boiz".
 - **Bubbly scrollbars in Messenger.** The friends list, chats, the message box, the people picker and GIF search have a new scrollbar: a round, colourful pill in a soft track tinted to match. It fades in when you scroll, and fades away again a second after you stop.
