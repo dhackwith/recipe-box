@@ -61,8 +61,8 @@ MESSAGES.batch = async (statements) => {
 const env = { MESSAGES };
 
 const { onRequest } = await import("../functions/api/calls.js");
-const { lapsed, hangupReason, isSdp, shapeCall, RING_MS, STALE_MS, MISSED_TEXT } = await import("../shared/calls.js");
-const { talkClock, endedLabel, callStatus, micError, callsSupported } = await import("../src/calls.js");
+const { lapsed, hangupReason, isSdp, shapeCall, RING_MS, STALE_MS, CHECK_IN_MS, KEEP_ENDED_MS, MISSED_TEXT } = await import("../shared/calls.js");
+const { talkClock, endedLabel, callStatus, micError, callsSupported, trackRings, liveRings, retryDelay } = await import("../src/calls.js");
 
 const call = async (method, query, token, body) => {
   const res = await onRequest({
@@ -144,6 +144,7 @@ is("either end can hang up", [hung.data.call.state, hung.data.call.reason], ["en
 const after = await call("GET", `?call=${id}`, devon);
 is("...and the other end sees it end", [after.data.call.state, after.data.call.reason, "answer" in after.data.call], ["ended", "ended", false]);
 is("hanging up twice is harmless", (await call("POST", "", devon, { hangup: id })).data.call.reason, "ended");
+is("an ended call keeps no connection details", Object.values(sqlite.prepare("SELECT length(offer) AS o, length(answer) AS a FROM calls WHERE id = ?").get(id)), [0, 0]);
 is("a call that was answered leaves no missed call", missedCalls("devon", "nicholas"), 0);
 
 /* ── not answered ── */
@@ -179,6 +180,16 @@ is("a call both ends walked away from doesn't keep anybody busy", (await call("P
 const fromMichael = sqlite.prepare("SELECT id FROM calls WHERE caller = 'michael' ORDER BY id DESC").get().id;
 await call("POST", "", michael, { hangup: fromMichael });
 
+/* ── old calls don't pile up ── */
+const oldestEnded = sqlite.prepare("SELECT id FROM calls WHERE state = 'ended' ORDER BY id LIMIT 1").get().id;
+const newestEnded = sqlite.prepare("SELECT id FROM calls WHERE state = 'ended' ORDER BY id DESC LIMIT 1").get().id;
+sqlite.prepare("UPDATE calls SET ended_at = ? WHERE id = ?").run(longAgo(KEEP_ENDED_MS + 60000), oldestEnded);
+const clearing = (await call("POST", "", michael, { to: "devon", offer: OFFER })).data.call.id;
+const kept = sqlite.prepare("SELECT id FROM calls").all().map((r) => r.id);
+is("ringing somebody clears away calls that ended over a week ago", kept.includes(oldestEnded), false);
+is("...but keeps recent ones", kept.includes(newestEnded), true);
+await call("POST", "", michael, { hangup: clearing });
+
 /* ── blocks ── */
 sqlite.prepare("INSERT INTO blocks (blocker, blocked, at) VALUES ('nicholas', 'devon', ?)").run(new Date().toISOString());
 is("somebody who blocked you can't be called", (await call("POST", "", devon, { to: "nicholas", offer: OFFER })).data.error, "You can't call Nicholas Heyer");
@@ -195,6 +206,12 @@ is("an ended call stays ended", lapsed({ state: "ended", at: "2000-01-01T00:00:0
 is("hanging up a ring you're getting declines it", hangupReason({ state: "ringing", callee: "nicholas" }, "nicholas"), "declined");
 is("...one you made cancels it", hangupReason({ state: "ringing", callee: "nicholas" }, "devon"), "cancelled");
 is("...and a call going just ends", hangupReason({ state: "active", callee: "nicholas" }, "devon"), "ended");
+is("a call checks in at least twice before it could be counted as dropped", CHECK_IN_MS * 2 < STALE_MS, true);
+const seenOnce = trackRings([], [{ id: 5 }], 1000);
+is("a ring remembers when this page first saw it", trackRings(seenOnce, [{ id: 5 }, { id: 6 }], 9000).map((r) => [r.id, r.seen]), [[5, 1000], [6, 9000]]);
+is("...and stops RING_MS after that, whether or not the page is still asking", liveRings(seenOnce, 1000 + RING_MS).length, 0);
+is("...but not before", liveRings(seenOnce, 1000 + RING_MS - 1).length, 1);
+is("asking again after failures waits longer each time, up to twenty seconds", [1, 2, 3, 4, 9].map(retryDelay), [3000, 6000, 12000, 20000, 20000]);
 is("an offer is v=0 first", [isSdp(OFFER), isSdp("x"), isSdp(42), isSdp("v=0" + "a".repeat(30000))], [true, false, false, false]);
 is("a call's shape names the other end", shapeCall({ id: 1, caller: "a", callee: "b", state: "active", answer: "v=0", at: "t" }, "b", (x) => x.toUpperCase()).name, "A");
 
@@ -208,6 +225,18 @@ is("a going call shows its clock", callStatus({ phase: "active", since: 1000, no
 is("an error is said in its own words", callStatus({ phase: "ended", error: "No microphone was found on this device." }), "No microphone was found on this device.");
 is("a refused microphone says how to fix it", micError({ name: "NotAllowedError" }).startsWith("Calls need your microphone"), true);
 is("node can't make calls, and says so", callsSupported({}), false);
+
+/* A request that never answers is given up on, so no loop waits on it for good. */
+const { callsCall } = await import("../src/calls.js");
+const certsFetch = globalThis.fetch;
+globalThis.fetch = (url, opts) => new Promise((_, reject) => {
+  opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+});
+const gaveUp = await callsCall("GET", "?ringing", undefined, 50).then(() => null, (err) => [err.status, err.message]);
+is("a request that never answers is given up on", gaveUp, [0, "The site took too long to answer"]);
+globalThis.fetch = async () => new Response("<!doctype html>", { status: 200 });
+is("a page that isn't the calls API says calls aren't here", await callsCall("GET", "?ringing").then(() => null, (err) => err.status), 501);
+globalThis.fetch = certsFetch;
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

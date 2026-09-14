@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-13
 
+- **Calls tidy up after themselves.** Hanging up now ends the call on the other person's screen straight away. A call can't ring on forever in a tab left in the background, and a call that loses touch with the site ends itself instead of trying again and again. A call left open uses far less of the site's free allowance, and old calls are cleared away after a week.
 - **Call each other.** Every chat window has a phone button beside the _ that rings the other person, wherever they are on the site. They get a card at the top of the screen with Answer and Decline, and once you're talking you can Mute or Hang up. The call goes straight between your two devices. If somebody isn't on the site when you ring, or doesn't pick up, a "📞 Missed call" is left in your chat. Some networks, often a phone on mobile data, won't let a call connect directly. If that happens the card says so, and it usually works with both of you on Wi-Fi.
 - **Double tap a message to love it.** On a phone or tablet, tap somebody's message twice quickly and a ❤️ appears on it, the same as tapping Love. Double tap again to take it back. Double tapping a message no longer zooms the page.
 - **Chats no longer scroll sideways.** A loved message could give a chat window a scroll bar along the bottom, because the heart hangs off the corner of the message. It doesn't any more.

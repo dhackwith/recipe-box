@@ -19,7 +19,7 @@ import { identity, personFor } from "../../shared/access.js";
 import { ensureGuests, arrive, directory } from "../../shared/guests.js";
 import {
   ensureCalls, lapsed, hangupReason, isSdp, shapeCall,
-  RINGING, ACTIVE, ENDED, MISSED_TEXT,
+  RINGING, ACTIVE, ENDED, MISSED_TEXT, KEEP_ENDED_MS,
 } from "../../shared/calls.js";
 
 const json = (data, status = 200) =>
@@ -41,11 +41,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readCall = (db, id) => db.prepare("SELECT * FROM calls WHERE id = ?1").bind(id).first();
 
 /* Ends a call once, however many ask at the same moment: only the request
-   whose update changed the row goes on to leave a missed call behind. */
+   whose update changed the row goes on to leave a missed call behind. The
+   offer and answer go with it — nothing needs them after, and they hold each
+   end's network addresses. */
 async function endCall(db, row, reason) {
   const at = nowIso();
   const done = await db
-    .prepare("UPDATE calls SET state = ?1, reason = ?2, ended_at = ?3 WHERE id = ?4 AND state != ?1")
+    .prepare("UPDATE calls SET state = ?1, reason = ?2, ended_at = ?3, offer = '', answer = '' WHERE id = ?4 AND state != ?1")
     .bind(ENDED, reason, at, row.id)
     .run();
   if (done?.meta?.changes && row.state === RINGING && (reason === "missed" || reason === "cancelled")) {
@@ -206,6 +208,12 @@ export async function onRequest({ request, env }) {
       if (await liveCallOf(db, me.id)) return json({ error: "You're already on a call" }, 409);
       if (await liveCallOf(db, to)) return json({ error: `${names.nameOf(to)} is on another call` }, 409);
 
+      /* Calls that ended over a week ago are cleared away first, so the table
+         only ever holds recent ones. */
+      await db
+        .prepare("DELETE FROM calls WHERE state = ?1 AND ended_at < ?2")
+        .bind(ENDED, new Date(Date.now() - KEEP_ENDED_MS).toISOString())
+        .run();
       const at = nowIso();
       const made = await db
         .prepare(`INSERT INTO calls (pair, caller, callee, state, offer, at, caller_seen)

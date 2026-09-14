@@ -4,26 +4,56 @@
  * of setting a call up that doesn't need React.
  */
 
-import { STUN_SERVERS, RING_MS } from "../shared/calls.js";
+import { STUN_SERVERS, RING_MS, CHECK_IN_MS, STALE_MS } from "../shared/calls.js";
 
-export { STUN_SERVERS, RING_MS };
+export { STUN_SERVERS, RING_MS, CHECK_IN_MS, STALE_MS };
 export const CALLS_API = "/api/calls";
+
+/* Rings as this page knows them. Each keeps the moment the page first saw it
+   and stops RING_MS after that, whether or not the page is still asking — a
+   tab left in the background stops asking, and must not ring forever. */
+export function trackRings(prev, list, now = Date.now()) {
+  const seen = new Map(prev.map((r) => [r.id, r.seen]));
+  return list.map((r) => ({ ...r, seen: seen.get(r.id) ?? now }));
+}
+export const liveRings = (rings, now = Date.now()) => rings.filter((r) => now - r.seen < RING_MS);
+
+/* How long to wait before asking about a call again after that many failures
+   in a row: longer each time, up to twenty seconds. */
+export const retryDelay = (failures) => Math.min(20000, 3000 * 2 ** Math.max(0, failures - 1));
 
 /* A browser that can make a call: WebRTC and a microphone to ask for. */
 export function callsSupported(w = globalThis) {
   return !!(w.RTCPeerConnection && w.navigator?.mediaDevices?.getUserMedia);
 }
 
-export async function callsCall(method, query = "", body) {
-  const res = await fetch(CALLS_API + query, {
-    method,
-    credentials: "same-origin",
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  let data = null;
-  try { data = await res.json(); } catch { data = null; }
+/* The longest any request here may take. The site holds a waiting request for
+   twenty-five seconds at most, so one still out after this has been lost — a
+   network change can leave a request that never answers, and a loop waiting
+   on it would be stuck for good, its call card with it. */
+export const REQUEST_TIMEOUT_MS = 40 * 1000;
+
+export async function callsCall(method, query = "", body, timeoutMs = REQUEST_TIMEOUT_MS) {
   const fail = (message, status) => Object.assign(new Error(message), { status });
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  let res;
+  let data = null;
+  try {
+    res = await fetch(CALLS_API + query, {
+      method,
+      credentials: "same-origin",
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: abort.signal,
+    });
+    try { data = await res.json(); } catch { data = null; }
+  } catch (err) {
+    if (abort.signal.aborted) throw fail("The site took too long to answer", 0);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) throw fail((data && data.error) || `Couldn't reach calls (${res.status})`, res.status);
   /* A dev server answers with the page itself, which isn't JSON. */
   if (data === null) throw fail("Calls aren't available here — this needs the deployed site", 501);

@@ -30,6 +30,7 @@ import { QUICK_EMOJI, DEFAULT_QUICK_EMOJI, asQuickEmoji, emojiOnly } from "./emo
 import { gifUrl, isGifMessage } from "../shared/gif.js";
 import {
   CALLS_API, STUN_SERVERS, callsSupported, callsCall, callStatus, iceGathered, micError, isMicError, playTone,
+  RING_MS, CHECK_IN_MS, STALE_MS, trackRings, liveRings, retryDelay,
 } from "./calls.js";
 
 /* ══════════════════════════════════════════════════════════════════
@@ -3549,16 +3550,23 @@ export default function RecipeBox() {
     setCall(value);
   };
 
-  /* The microphone off and the connection closed — never left listening. */
-  const dropMedia = () => {
-    const { pc, stream } = rtc.current;
-    rtc.current = { pc: null, stream: null };
-    try { pc?.close(); } catch { /* already closed */ }
+  /* The microphone off and the connection closed — never left listening. When
+     this end is the one leaving, it first says "bye" down the connection
+     itself, and keeps the connection a moment longer so the word gets there. */
+  const dropMedia = (sayBye = false) => {
+    const { pc, stream, bye } = rtc.current;
+    rtc.current = { pc: null, stream: null, bye: null };
     stream?.getTracks().forEach((t) => t.stop());
     if (remoteAudio.current) remoteAudio.current.srcObject = null;
+    let linger = 0;
+    if (sayBye && bye?.readyState === "open") {
+      try { bye.send("bye"); linger = 400; } catch { /* closing anyway */ }
+    }
+    const close = () => { try { pc?.close(); } catch { /* already closed */ } };
+    if (linger) setTimeout(close, linger); else close();
   };
-  const endHere = (reason, error = "") => {
-    dropMedia();
+  const endHere = (reason, error = "", sayBye = false) => {
+    dropMedia(sayBye);
     putCall((c) => (c && c.phase !== "ended" ? { ...c, phase: "ended", reason, error } : c));
   };
   /* The connection gave up. Before it ever joined, that is almost always a
@@ -3566,7 +3574,7 @@ export default function RecipeBox() {
   const failCall = (reason) => {
     const c = callRef.current;
     if (!c || c.phase === "ended") return;
-    endHere(reason || (c.phase === "active" ? "dropped" : "failed"));
+    endHere(reason || (c.phase === "active" ? "dropped" : "failed"), "", true);
     if (c.id) callsCall("POST", "", { hangup: c.id }).catch(() => {});
   };
 
@@ -3583,7 +3591,12 @@ export default function RecipeBox() {
       throw Object.assign(new Error("gone"), { name: "Gone" });
     }
     const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
-    rtc.current = { pc, stream };
+    /* A channel for the two ends to say "bye" on, so a hang-up reaches the
+       other end at once without either of them asking the site. Both sides
+       make it the same way (negotiated, id 0), so it needs no setting up. */
+    const bye = pc.createDataChannel("bye", { negotiated: true, id: 0 });
+    bye.onmessage = () => { if (rtc.current.pc === pc) endHere("ended"); };
+    rtc.current = { pc, stream, bye };
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
     pc.ontrack = (e) => {
       const el = remoteAudio.current;
@@ -3661,7 +3674,7 @@ export default function RecipeBox() {
   const hangUp = () => {
     const c = callRef.current;
     if (!c || c.phase === "ended") { putCall(null); return; }
-    endHere(c.outgoing && c.phase === "calling" ? "cancelled" : "ended");
+    endHere(c.outgoing && c.phase === "calling" ? "cancelled" : "ended", "", true);
     if (c.id) callsCall("POST", "", { hangup: c.id }).catch(() => {});
   };
 
@@ -3690,7 +3703,7 @@ export default function RecipeBox() {
           if (stop) return;
           const list = data.ringing || [];
           known = list.map((r) => r.id).join(",");
-          setIncoming(list);
+          setIncoming((prev) => trackRings(prev, list));
         } catch (err) {
           known = null;
           await new Promise((r) => setTimeout(r, err?.status === 501 || err?.status === 403 ? 120000 : 20000));
@@ -3701,17 +3714,35 @@ export default function RecipeBox() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* The call this page is in, watched until it ends. Not paused when hidden: a
-     phone in a pocket is still on the call, and asking is how this end says so. */
+     phone in a pocket is still on the call, and asking is how this end says so.
+
+     While it rings or connects, a waiting request, so the answer lands in a
+     second. Once the two are talking, a hang-up comes down the connection
+     ("bye" in openPeer), so the site is only asked every CHECK_IN_MS.
+
+     And it doesn't ask forever. If the site can't be reached for as long as
+     the site waits before counting this end as gone, the site has ended the
+     call already, so this end ends it too, rather than trying again and again
+     with the card stuck on screen. */
   const watchId = call && call.phase !== "ended" ? call.id : null;
   useEffect(() => {
     if (!watchId) return;
     let stop = false;
     let state = null;
+    let failures = 0;
+    let failingSince = 0;
     (async () => {
       while (!stop) {
         try {
-          const data = await callsCall("GET", state ? `?call=${watchId}&wait=1&state=${state}` : `?call=${watchId}`);
+          const talking = callRef.current?.phase === "active";
+          if (talking) {
+            await new Promise((r) => setTimeout(r, CHECK_IN_MS));
+            if (stop) return;
+          }
+          const data = await callsCall("GET", state && !talking ? `?call=${watchId}&wait=1&state=${state}` : `?call=${watchId}`);
           if (stop) return;
+          failures = 0;
+          failingSince = 0;
           const c = data.call;
           state = c.state;
           if (c.state === "ended") {
@@ -3726,7 +3757,10 @@ export default function RecipeBox() {
         } catch (err) {
           if (stop) return;
           if (err?.status === 404) { endHere("ended"); return; }
-          await new Promise((r) => setTimeout(r, 3000));
+          failures += 1;
+          failingSince ||= Date.now();
+          if (Date.now() - failingSince > STALE_MS) { failCall("dropped"); return; }
+          await new Promise((r) => setTimeout(r, retryDelay(failures)));
         }
       }
     })();
@@ -3759,7 +3793,7 @@ export default function RecipeBox() {
       if (c?.id && c.phase !== "ended") {
         navigator.sendBeacon?.(CALLS_API, new Blob([JSON.stringify({ hangup: c.id })], { type: "application/json" }));
       }
-      dropMedia();
+      dropMedia(true);
     };
     window.addEventListener("pagehide", bye);
     return () => window.removeEventListener("pagehide", bye);
@@ -3767,6 +3801,13 @@ export default function RecipeBox() {
 
   /* A ring for whoever is calling this page, and a quieter one while this
      page waits for somebody to pick up. */
+  /* Each ring stops by itself RING_MS after this page first saw it. */
+  useEffect(() => {
+    if (!incoming.length) return;
+    const soonest = Math.min(...incoming.map((r) => r.seen + RING_MS));
+    const t = setTimeout(() => setIncoming((all) => liveRings(all)), Math.max(0, soonest - Date.now()) + 50);
+    return () => clearTimeout(t);
+  }, [incoming]);
   const ringingNow = !call || call.phase === "ended" ? incoming.find((r) => r.id !== call?.id) || null : null;
   const tone = ringingNow ? "incoming" : call?.phase === "calling" && call.id ? "outgoing" : null;
   useEffect(() => (tone ? playTone(tone) : undefined), [tone]);
