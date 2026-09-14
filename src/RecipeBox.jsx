@@ -34,6 +34,7 @@ import {
 } from "./calls.js";
 import { createLive, watcher, liveUrl, RESYNC_MS, RECONNECTING_MS } from "./live.js";
 import { VOICE_API, VOICE_HERE_MS, voiceCall, connectedWithin, createSpeakingMeter } from "./voice.js";
+import { AWAY_MS } from "../shared/presence.js";
 
 /* ══════════════════════════════════════════════════════════════════
    What's new
@@ -3999,20 +4000,40 @@ export default function RecipeBox() {
      server should not put an error on the page. */
   useEffect(() => {
     let stop = false;
+    /* The check-in says this page is open — a background tab too, which is
+       what makes somebody away rather than offline — and how long since its
+       person last did anything on it (shared/presence.js). */
+    let lastActive = Date.now();
+    let timer = null;
     const look = async () => {
-      if (stop || document.hidden) return;
+      if (stop) return;
+      clearTimeout(timer);
       try {
-        const beat = await messagesCall("POST", "", { here: true });
+        const beat = await messagesCall("POST", "", { here: true, idle: Math.round((Date.now() - lastActive) / 1000) });
         if (stop) return;
         setUnreadMessages(beat.unread || 0);
         if (beat.people) setPresence(Object.fromEntries(beat.people.map((p) => [p.id, p])));
       } catch { /* quiet */ }
+      if (!stop) timer = setTimeout(look, document.hidden ? 90000 : 45000);
     };
-    look();
-    const every = setInterval(look, 45000);
-    const onWake = () => look();
+    /* Doing anything counts. Coming back after five quiet minutes checks in
+       at once, so the zzz goes as soon as they're back. */
+    const touch = () => {
+      const quiet = Date.now() - lastActive;
+      lastActive = Date.now();
+      if (quiet >= AWAY_MS) look();
+    };
+    const events = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart", "scroll"];
+    events.forEach((e) => window.addEventListener(e, touch, { passive: true, capture: true }));
+    const onWake = () => { if (!document.hidden) touch(); };
     document.addEventListener("visibilitychange", onWake);
-    return () => { stop = true; clearInterval(every); document.removeEventListener("visibilitychange", onWake); };
+    look();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, touch, { capture: true }));
+      document.removeEventListener("visibilitychange", onWake);
+    };
   }, []);
 
   /* Who is waiting to be read. This one holds a request open rather than
@@ -4668,10 +4689,15 @@ export default function RecipeBox() {
   /* Green if they have used the site in the last five minutes, unlit
      otherwise — and said in words too, because a colour on its own is no use
      to somebody who cannot see it. */
-  const lightOn = (id) => !!presence[id]?.online;
+  /* active, away or offline (shared/presence.js); a page from before away
+     existed only knows online. */
+  const stateOfPerson = (id) => presence[id]?.state || (presence[id]?.online ? "active" : "offline");
+  const lightOn = (id) => stateOfPerson(id) === "active";
   const lastSeenOf = (id) => presence[id]?.seen || null;
   const statusFor = (id) => {
-    if (lightOn(id)) return <>Online now</>;
+    const state = stateOfPerson(id);
+    if (state === "active") return <>Online now</>;
+    if (state === "away") return <>Away</>;
     const seen = lastSeenOf(id);
     return seen ? <>Last seen <When iso={seen} /></> : null;
   };
@@ -4698,13 +4724,24 @@ export default function RecipeBox() {
       <span className="rb-face rb-face-blank" aria-hidden style={style}>{initialsOf(name)}</span>
     );
   };
-  /* In the messenger the online light sits on the corner of the face. */
-  const faceWithLight = (id, name, size) => (
-    <span className="rb-face-wrap">
-      {face(id, name, size)}
-      <span className={`rb-chat-light${lightOn(id) ? " is-on" : ""}`} aria-hidden />
-    </span>
-  );
+  /* In the messenger a status bubble sits on the corner of the face: green
+     when active, a yellow zzz when away, a gray × when offline. The words
+     beside the face say the same, for anybody who can't see the colours. */
+  const faceWithLight = (id, name, size) => {
+    const state = stateOfPerson(id);
+    return (
+      <span className="rb-face-wrap">
+        {face(id, name, size)}
+        <span className={`rb-chat-light is-${state}${state === "active" ? " is-on" : ""}`} aria-hidden>
+          {state === "away" ? "zzz" : state === "offline" ? (
+            <svg viewBox="0 0 10 10" width="100%" height="100%" focusable="false">
+              <path d="M3 3l4 4M7 3l-4 4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            </svg>
+          ) : null}
+        </span>
+      </span>
+    );
+  };
 
   /* A group's face: the picture somebody chose for it, or else the other
      people in it — two side by side, three in a triangle, four or more in
@@ -6435,14 +6472,15 @@ export default function RecipeBox() {
     .rb-chathead { position: relative; flex: none; align-self: flex-end; margin-bottom: 10px; pointer-events: auto; }
     .rb-chathead-face { position: relative; display: block; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; box-shadow: 0 6px 18px -8px rgba(0, 0, 0, .55); transition: transform 120ms ease; }
     .rb-chathead-face:hover { transform: scale(1.06); }
-    .rb-chathead-face .rb-face { border: 2px solid var(--card-bg); }
-    .rb-chathead-face .rb-face-wrap > .rb-chat-light { right: 0; bottom: 0; width: 14px; height: 14px; border-width: 2.5px; }
+    .rb-chathead-face .rb-face { box-shadow: none; }
+    .rb-chathead-face .rb-face-wrap > .rb-chat-light { right: 0; bottom: 0; width: 15px; height: 15px; }
+    .rb-chathead-face .rb-face-wrap > .rb-chat-light.is-away { width: auto; min-width: 21px; font-size: 8px; line-height: 15px; }
     .rb-chathead.has-unread .rb-chathead-face { animation: rb-chathead-waiting 2s steps(1, end) infinite; }
     @keyframes rb-chathead-waiting {
       0%, 49.9% { box-shadow: 0 0 0 3px var(--card-accent), 0 6px 18px -8px rgba(0, 0, 0, .55); }
       50%, 100% { box-shadow: 0 6px 18px -8px rgba(0, 0, 0, .55); }
     }
-    .rb-chathead-count { position: absolute; top: -4px; right: -5px; min-width: 20px; box-sizing: border-box; padding: 1px 5px; border: 2px solid var(--card-bg); border-radius: 999px; background: var(--card-accent); color: var(--on-accent); font: 700 11px/1.4 ${SOCIAL}; text-align: center; }
+    .rb-chathead-count { position: absolute; top: -4px; right: -5px; min-width: 18px; box-sizing: border-box; padding: 1px 5px; border: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, .4); border-radius: 999px; background: var(--card-accent); color: var(--on-accent); font: 700 11px/1.4 ${SOCIAL}; text-align: center; }
     .rb-chathead-close { position: absolute; top: -5px; left: -5px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--card-edge); border-radius: 50%; background: var(--card-bg); color: var(--card-text); font: 700 13px/1 ${SOCIAL}; cursor: pointer; opacity: 0; transition: opacity 120ms ease; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .45); }
     .rb-chathead:hover .rb-chathead-close, .rb-chathead:focus-within .rb-chathead-close { opacity: 1; }
     @media (hover: none) { .rb-chathead-close { opacity: .9; } }
@@ -6476,8 +6514,8 @@ export default function RecipeBox() {
     .rb-voice-strip { display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 12px; border-bottom: 1px solid var(--card-edge); background: color-mix(in srgb, #3FA45B 8%, var(--card-bg)); }
     .rb-voice-strip.is-in { background: color-mix(in srgb, #3FA45B 16%, var(--card-bg)); }
     .rb-voice-faces { flex: none; display: flex; align-items: center; padding-right: 6px; }
-    .rb-voice-face { position: relative; display: inline-flex; margin-right: -6px; border-radius: 50%; box-shadow: 0 0 0 2px var(--card-bg); transition: box-shadow 120ms ease; }
-    .rb-voice-face.is-speaking { z-index: 1; box-shadow: 0 0 0 2px var(--card-bg), 0 0 0 4px #3FA45B; }
+    .rb-voice-face { position: relative; display: inline-flex; margin-right: -4px; border-radius: 50%; transition: box-shadow 120ms ease; }
+    .rb-voice-face.is-speaking { z-index: 1; box-shadow: 0 0 0 2.5px #3FA45B; }
     .rb-voice-muted { position: absolute; right: -5px; bottom: -5px; font-size: 10px; line-height: 1; }
     .rb-voice-label { flex: 1; min-width: 0; margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px/1.3 ${SOCIAL}; color: var(--card-text); }
     .rb-voice-btn { flex: none; padding: 5px 11px; border: 1px solid var(--card-edge); border-radius: 999px; background: var(--card-bg); color: var(--card-text); cursor: pointer; font: 700 12px/1.2 ${SOCIAL}; }
@@ -6493,15 +6531,15 @@ export default function RecipeBox() {
     .rb-msg-sender + .rb-msg-row { margin-top: 0; }
     /* A group without a picture, drawn from the others in it: two side by
        side and cut off, three in a triangle, four or more in quarters. */
-    .rb-group-face { --group: var(--face, 28px); position: relative; flex: none; display: inline-block; box-sizing: border-box; width: var(--group); height: var(--group); border-radius: 50%; overflow: hidden; background: var(--card-lift); border: 1px solid var(--card-edge); }
+    .rb-group-face { --group: var(--face, 28px); position: relative; flex: none; display: inline-block; box-sizing: border-box; width: var(--group); height: var(--group); border-radius: 50%; overflow: hidden; background: var(--card-lift); border: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, .28), 0 1px 1px rgba(0, 0, 0, .14); }
     .rb-group-tile { position: absolute; display: block; overflow: hidden; }
-    .rb-group-tile > .rb-face { width: 100%; height: 100%; border: 0; border-radius: 0; font-size: calc(var(--group) * .26); }
+    .rb-group-tile > .rb-face { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; font-size: calc(var(--group) * .26); }
     .rb-group-face.is-one .rb-group-tile { inset: 0; }
     .rb-group-face.is-pair .rb-group-tile { top: 0; bottom: 0; width: calc(50% - .5px); }
     .rb-group-face.is-pair .rb-group-tile:first-child { left: 0; }
     .rb-group-face.is-pair .rb-group-tile:last-child { right: 0; }
-    .rb-group-face.is-tri { overflow: visible; background: transparent; border: 0; }
-    .rb-group-face.is-tri .rb-group-tile { width: 56%; height: 56%; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--card-bg); }
+    .rb-group-face.is-tri { overflow: visible; background: transparent; box-shadow: none; }
+    .rb-group-face.is-tri .rb-group-tile { width: 56%; height: 56%; border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
     .rb-group-face.is-tri .rb-group-tile > .rb-face { border-radius: 50%; font-size: calc(var(--group) * .22); }
     .rb-group-face.is-tri .rb-group-tile:nth-child(1) { top: 0; left: 22%; }
     .rb-group-face.is-tri .rb-group-tile:nth-child(2) { bottom: 0; left: 0; }
@@ -6687,7 +6725,7 @@ export default function RecipeBox() {
     /* A face: the picture somebody chose, or their initials on a wash of the
        accent when they haven't. Sized by --face, set where it is used, so one
        rule serves the menu, the messenger, notes and Lately. */
-    .rb-face { --face: 28px; flex: none; align-self: center; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: var(--face); height: var(--face); border-radius: 50%; object-fit: cover; overflow: hidden; border: 1px solid var(--card-edge); background: var(--card-lift); }
+    .rb-face { --face: 28px; flex: none; align-self: center; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: var(--face); height: var(--face); border-radius: 50%; object-fit: cover; overflow: hidden; border: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, .28), 0 1px 1px rgba(0, 0, 0, .14); background: var(--card-lift); }
     .rb-face-blank { background: color-mix(in srgb, var(--card-accent) 24%, var(--card-bg)); color: var(--card-text); font: 700 calc(var(--face) * .38)/1 ${SOCIAL}; letter-spacing: .02em; }
     .rb-lately .rb-face { border-color: rgba(var(--on-page), calc(.2 * var(--ink-k))); }
     .rb-lately .rb-face-blank { background: rgba(var(--on-page), calc(.12 * var(--ink-k))); color: rgb(var(--on-page)); }
@@ -6696,8 +6734,13 @@ export default function RecipeBox() {
     /* The online light, moved onto the corner of the face. Unlit is a ring
        rather than nothing, so the corner never looks like a missing piece. */
     .rb-face-wrap { position: relative; flex: none; display: inline-flex; }
-    .rb-face-wrap > .rb-chat-light { position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; box-sizing: border-box; border: 2px solid var(--card-bg); }
-    .rb-face-wrap > .rb-chat-light:not(.is-on) { background: var(--card-bg); box-shadow: inset 0 0 0 1.5px var(--card-muted); }
+    /* The status bubble on a face's corner: green when active, a yellow zzz
+       when away, a gray × when offline. No ring around it; a shadow gives it
+       weight against the face instead. */
+    .rb-face-wrap > .rb-chat-light { position: absolute; right: -2px; bottom: -2px; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; box-sizing: border-box; border: 0; border-radius: 999px; box-shadow: 0 1px 3px rgba(0, 0, 0, .45); }
+    .rb-face-wrap > .rb-chat-light.is-active { background: #3FA45B; box-shadow: 0 1px 3px rgba(0, 0, 0, .45); }
+    .rb-face-wrap > .rb-chat-light.is-away { width: auto; min-width: 17px; padding: 0 3px; background: #E8B931; color: #3A2A00; font: 800 6.5px/12px ${SOCIAL}; letter-spacing: -.02em; }
+    .rb-face-wrap > .rb-chat-light.is-offline { padding: 2px; background: #8E949A; color: #FFFFFF; }
     .rb-chat-lines { flex: 1; min-width: 0; }
     .rb-msg-row { display: flex; align-items: flex-end; gap: 7px; }
     .rb-msg-row.is-mine { justify-content: flex-end; }
@@ -9416,8 +9459,10 @@ export default function RecipeBox() {
                       </li>
                     );
                   };
-                  const online = everyone.filter((p) => lightOn(p.id));
-                  const offline = everyone.filter((p) => !lightOn(p.id));
+                  /* Away people have the site open, so they're listed with
+                     the online, with "Away" under their name. */
+                  const online = everyone.filter((p) => stateOfPerson(p.id) !== "offline");
+                  const offline = everyone.filter((p) => stateOfPerson(p.id) === "offline");
                   const row = (p) => {
                     const t = threads.get(p.id);
                     /* The section already says who is on, so only the offline

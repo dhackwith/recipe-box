@@ -156,3 +156,12 @@ CREATE TABLE IF NOT EXISTS voice_members (
   PRIMARY KEY (group_id, person)
 );
 CREATE INDEX IF NOT EXISTS voice_by_person ON voice_members (person);
+
+-- When each person last did anything on the site (shared/presence.js), beside
+-- `presence`, which is when a page of theirs last checked in. Together they
+-- make active, away (a page open but idle five minutes) or offline.
+-- shared/presence.js also creates this.
+CREATE TABLE IF NOT EXISTS activity (
+  person TEXT PRIMARY KEY,
+  at     TEXT NOT NULL
+);

@@ -232,10 +232,38 @@ const stale = (await call("GET", "?people", nick)).data.people.find((p) => p.id 
 is("six minutes out and the light is off", stale.online, false);
 is("...but it still says when they were last seen", typeof stale.seen, "string");
 
+/* A page checks in every minute or so, even in the background, so two
+   minutes since the last one is still an open page (shared/presence.js). */
 sqlite.prepare("UPDATE presence SET at = ?1 WHERE person = ?2")
-  .run(new Date(Date.now() - 4 * 60 * 1000).toISOString(), "devon");
-is("four minutes out is still here",
+  .run(new Date(Date.now() - 2 * 60 * 1000).toISOString(), "devon");
+is("two minutes since a page checked in is still here",
   (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon")?.online, true);
+
+/* Away: a page open, nothing done on it for five minutes. */
+sqlite.prepare("UPDATE activity SET at = ?1 WHERE person = 'devon'").run(new Date(Date.now() - 20 * 60 * 1000).toISOString());
+await call("POST", "", devon, { here: true, idle: 400 });
+const awayNow = (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon");
+is("a page open but idle for over five minutes is away", [awayNow.state, awayNow.away, awayNow.online], ["away", true, false]);
+is("...and says when they were last active", Date.now() - Date.parse(awayNow.seen) > 6 * 60 * 1000, true);
+await call("POST", "", devon, { here: true, idle: 3 });
+is("doing something again makes them active", (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon").state, "active");
+await call("POST", "", devon, { here: true, idle: 900 });
+is("a quieter second tab doesn't make somebody look away", (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon").state, "active");
+sqlite.prepare("UPDATE presence SET at = ?1 WHERE person = ?2").run(new Date(Date.now() - 4 * 60 * 1000).toISOString(), "devon");
+is("no page checking in for three minutes is offline", (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon").state, "offline");
+await call("POST", "", devon, { here: true });
+is("a page from before idle existed counts as active", (await call("GET", "?people", nick)).data.people.find((p) => p.id === "devon").state, "active");
+const { stateOf, activeAt, OPEN_MS, AWAY_MS } = await import("../shared/presence.js");
+const tNow = Date.parse("2026-09-14T12:00:00.000Z");
+is("the three states, by the rules", [
+  stateOf(null, null, tNow),
+  stateOf(new Date(tNow - 10000).toISOString(), new Date(tNow - 60000).toISOString(), tNow),
+  stateOf(new Date(tNow - 10000).toISOString(), new Date(tNow - AWAY_MS - 1).toISOString(), tNow),
+  stateOf(new Date(tNow - OPEN_MS - 1).toISOString(), new Date(tNow - 1000).toISOString(), tNow),
+], ["offline", "active", "away", "offline"]);
+is("an idle figure is trusted only as far as a week", [activeAt(tNow, 60), activeAt(tNow, -5), activeAt(tNow, "nope"), activeAt(tNow, 1e12)], [
+  "2026-09-14T11:59:00.000Z", "2026-09-14T12:00:00.000Z", "2026-09-14T12:00:00.000Z", "2026-09-07T12:00:00.000Z",
+]);
 
 is("being here needs a sign-in too", (await call("POST", "", null, { here: true })).status, 403);
 is("saying you are here twice keeps one row, not two",

@@ -23,6 +23,7 @@ import { personFor, isPerson, addressKey, people } from "./access.js";
 import { ensureLoves } from "./loves.js";
 import { haveTables } from "./schema.js";
 import { ensureGroups } from "./groups.js";
+import { ensureActivity } from "./presence.js";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS guests (
@@ -58,6 +59,7 @@ export async function rekey(db, from, to) {
   if (!from || !to || from === to) return;
   await ensureLoves(db);
   await ensureGroups(db);
+  await ensureActivity(db);
   /* Every statement mentions ?2, so each can be bound the same two values. */
   const step = (sql) => db.prepare(sql).bind(from, to);
   await db.batch([
@@ -75,6 +77,7 @@ export async function rekey(db, from, to) {
     step("DELETE FROM loves WHERE person = ?1 AND ?2 IS NOT NULL"),
     step(`UPDATE loves SET pair = ${rebuilt("pair")} WHERE kind = 'm' AND ${holds("pair")}`),
     step("DELETE FROM presence WHERE person = ?1 AND ?2 IS NOT NULL"),
+    step("DELETE FROM activity WHERE person = ?1 AND ?2 IS NOT NULL"),
     /* groups they're in, and any they made; a group's own conversation keeps
        its "grp:" name, which the pair rebuild above leaves alone */
     step("UPDATE OR IGNORE group_members SET person = ?2 WHERE person = ?1"),
