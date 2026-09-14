@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-14
 
+- **Just the time for today.** Chats, notes and the photo viewer now show only the time for anything from today, like "1:35 AM", instead of "Today at 1:35 AM". Yesterday still says "Yesterday at", and older things still show the date.
 - **Video calls.** In a chat with one person, the camera button beside the phone starts a video call. When someone video calls you, answer with Video, or with Voice to keep your camera off. During any call you can start or stop your video, flip to the back camera on a phone, and shrink the call to a small window so you can keep using the site. Video goes straight between the two of you, so it costs nothing, and it works best when you're both on Wi-Fi.
 - **Messenger is now Friends.** The tab in the corner says Friends, with a little group of people instead of an envelope, and it's smaller, so it takes up less of the screen.
 - **Choose how your picture is cropped.** When you pick a new profile picture or group picture, you can now drag the photo and zoom in to choose exactly what shows in the circle, before it's saved.

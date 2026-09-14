@@ -29,8 +29,8 @@ function dayIn(date, timeZone) {
 const sameDay = (a, b) => a.y === b.y && a.m === b.m && a.d === b.d;
 
 /**
- * "Today at 2:42 PM", "Yesterday at 9:15 pm", "13 September at 9:42 am", and
- * the year too once it isn't this one. inSentence gives the form that follows
+ * "2:42 PM" today, "Yesterday at 9:15 pm", "13 September at 9:42 am", and the
+ * year too once it isn't this one. inSentence gives the form that follows
  * other words: "today at …", "on 13 September at …".
  */
 export function whenAt(iso, { now = new Date(), timeZone, locale, inSentence = false } = {}) {
@@ -42,8 +42,11 @@ export function whenAt(iso, { now = new Date(), timeZone, locale, inSentence = f
   const yesterday = dayIn(new Date(now.getTime() - 24 * 60 * 60 * 1000), timeZone);
   const time = new Intl.DateTimeFormat(locale, { timeZone, hour: "numeric", minute: "2-digit" }).format(date);
 
+  /* Standing on its own, today needs no word: the time says enough. */
+  if (sameDay(day, today) && !inSentence) return time;
+
   let label;
-  if (sameDay(day, today)) label = inSentence ? "today" : "Today";
+  if (sameDay(day, today)) label = "today";
   else if (sameDay(day, yesterday)) label = inSentence ? "yesterday" : "Yesterday";
   else label = `${inSentence ? "on " : ""}${day.d} ${MONTH_NAMES[day.m - 1]}${day.y === today.y ? "" : ` ${day.y}`}`;
 

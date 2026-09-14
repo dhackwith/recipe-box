@@ -28,8 +28,8 @@ is("in Auckland the same note was Saturday morning", whenAt(note, { ...NZ, now: 
 
 /* ── today and yesterday are the reader's today and yesterday ── */
 const soon = new Date("2026-09-13T00:30:00.000Z");     // 5:30 pm Sat 12th in LA, 12:30 pm Sun 13th in NZ
-is("a few hours later it is today in Los Angeles", whenAt(note, { ...LA, now: soon }), "Today at 2:42 PM");
-is("...and today in Auckland too", whenAt(note, { ...NZ, now: soon }), "Today at 9:42 am");
+is("a few hours later, today is just the time in Los Angeles", whenAt(note, { ...LA, now: soon }), "2:42 PM");
+is("...and in Auckland too", whenAt(note, { ...NZ, now: soon }), "9:42 am");
 
 const dayBefore = "2026-09-11T20:00:00.000Z";          // 1 pm Fri 11th in LA, 8 am Sat 12th in NZ
 is("yesterday in Los Angeles", whenAt(dayBefore, { ...LA, now: soon }), "Yesterday at 1:00 PM");
@@ -38,7 +38,7 @@ is("yesterday in Auckland", whenAt(dayBefore, { ...NZ, now: soon }), "Yesterday 
 const lateNight = new Date("2026-09-13T11:30:00.000Z"); // 4:30 am Sun 13th in LA, 11:30 pm Sun 13th in NZ
 is("a note from the night before is yesterday in one place and today in the other",
   [whenAt("2026-09-13T06:30:00.000Z", { ...LA, now: lateNight }), whenAt("2026-09-13T06:30:00.000Z", { ...NZ, now: lateNight })],
-  ["Yesterday at 11:30 PM", "Today at 6:30 pm"]);
+  ["Yesterday at 11:30 PM", "6:30 pm"]);
 
 /* ── in a sentence, for "made this …" ── */
 is("today, mid-sentence", whenAt(note, { ...LA, now: soon, inSentence: true }), "today at 2:42 PM");
