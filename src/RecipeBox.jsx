@@ -1872,7 +1872,10 @@ function ChatWindow({
               )}
               {menuMode === "members" && (
                 <div>
-                  <p className="rb-menu-label">People in the group</p>
+                  <div className="rb-menu-top">
+                    <p className="rb-menu-label">People in the group</p>
+                    <button type="button" className="rb-picker-cancel rb-focus" onClick={() => setMenuMode("menu")}>Back</button>
+                  </div>
                   <ul className="rb-menu-members">
                     {group.members.map((mb) => (
                       <li key={mb.id}>
@@ -1897,9 +1900,6 @@ function ChatWindow({
                       </li>
                     ))}
                   </ul>
-                  <div className="rb-menu-actions">
-                    <button type="button" className="rb-picker-cancel rb-focus" onClick={() => setMenuMode("menu")}>Back</button>
-                  </div>
                 </div>
               )}
               {menuMode === "add" && (
@@ -6619,6 +6619,10 @@ export default function RecipeBox() {
     .rb-menu-form { display: flex; flex-direction: column; }
     .rb-menu-label { margin: 2px 0 6px; font: 700 11px/1.3 ${SOCIAL}; letter-spacing: .05em; text-transform: uppercase; color: var(--card-muted); }
     .rb-menu-note { margin: 6px 2px 8px; font: 400 11.5px/1.4 ${SOCIAL}; color: var(--card-muted); }
+    /* A panel's heading with its Back button at the top right. */
+    .rb-menu-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; }
+    .rb-menu-top .rb-menu-label { margin: 0; }
+    .rb-person-menu .rb-menu-top .rb-picker-cancel { padding: 4px 12px; font-size: 12px; }
     .rb-menu-members { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
     .rb-menu-members li { display: flex; align-items: center; gap: 8px; font: 600 13px/1.3 ${SOCIAL}; color: var(--card-text); }
     .rb-menu-members li > span:not(.rb-face) { flex: 1; min-width: 0; }
