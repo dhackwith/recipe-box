@@ -26,8 +26,9 @@ export const NOTE = "n";
 /* Reactions on messages: one per person per message. Kept in the same `loved`
    column as a number — 0 is none — so nothing about the table changed when
    reactions arrived. 1 is ❤️ because every love given before then was stored
-   as 1, so those hearts simply carry on as hearts. Notes only ever use 1. */
-export const REACTIONS = ["❤️", "👍", "😂", "😢", "😠", "🤢"];
+   as 1, so those hearts simply carry on as hearts. Notes only ever use 1.
+   New reactions go on the end, so a stored number never changes meaning. */
+export const REACTIONS = ["❤️", "👍", "😂", "😢", "😠", "🤢", "😮"];
 export const reactionCode = (emoji) => REACTIONS.indexOf(emoji) + 1;
 export const reactionOf = (code) => REACTIONS[code - 1] || null;
 

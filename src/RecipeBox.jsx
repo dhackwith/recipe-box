@@ -1127,8 +1127,10 @@ const MAX_CHATS = 5;
 const TAKE_BACK_MS = 60 * 1000;
 /* A chat shows the time only where this long has passed between messages. */
 const TIME_GAP_MS = 5 * 60 * 1000;
+/* The message box grows a line at a time up to this many, then scrolls. */
+const TYPE_LINES = 4;
 /* The reactions, left to right as the bar shows them (stored by shared/loves.js). */
-const REACTION_BAR = [["👍", "Thumbs up"], ["❤️", "Heart"], ["😂", "Laughing"], ["😢", "Crying"], ["😠", "Angry"], ["🤢", "Disgusted"]];
+const REACTION_BAR = [["👍", "Thumbs up"], ["❤️", "Heart"], ["😂", "Laughing"], ["😮", "Surprised"], ["😢", "Crying"], ["😠", "Angry"], ["🤢", "Disgusted"]];
 /* Two taps on a message this close in time and place are a double tap. */
 const DOUBLE_TAP_MS = 320;
 const DOUBLE_TAP_SLOP = 24;
@@ -1328,6 +1330,22 @@ function ChatWindow({
     }, HOLD_MS);
   };
   const endPress = () => clearTimeout(pressTimer.current);
+
+  /* The message box starts one line tall and grows a line at a time as the
+     message does, up to TYPE_LINES, then scrolls. Measured before paint, so it
+     never flickers a line too short; shrinks back when the message is sent. */
+  useLayoutEffect(() => {
+    const box = typeRef.current;
+    if (!box || box.hidden) return;
+    const style = getComputedStyle(box);
+    const px = (v) => parseFloat(v) || 0;
+    const borders = px(style.borderTopWidth) + px(style.borderBottomWidth);
+    const most = Math.ceil(px(style.lineHeight) * TYPE_LINES + px(style.paddingTop) + px(style.paddingBottom) + borders);
+    box.style.height = "auto";
+    const wanted = box.scrollHeight + borders;
+    box.style.height = `${Math.min(wanted, most)}px`;
+    box.style.overflowY = wanted > most ? "auto" : "hidden";
+  }, [draft, gifOpen, minimized]);
 
   /* Tapping their name opens a small menu about them — for now, Block or
      Unblock — the way Facebook's chat does. A tap anywhere else, Escape, or
@@ -1851,12 +1869,14 @@ function ChatWindow({
                shift and Enter is a new line. */
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
           }}
-          rows={2}
+          rows={1}
           maxLength={4000}
           disabled={blocked}
           placeholder={blocked ? `You've blocked ${first}` : `Message ${first}`}
           aria-label={`Message ${name}`}
-          style={{ ...input, resize: "none", padding: "8px 10px", font: `400 14px/1.45 ${SOCIAL}` }}
+          /* Rounded like the messages, the width of the window, one line to
+             start (see the effect that grows it). */
+          style={{ ...input, width: "100%", boxSizing: "border-box", resize: "none", padding: "8px 14px", borderRadius: 18, overflowY: "hidden", font: `400 14px/1.45 ${SOCIAL}` }}
         />
         <div className="rb-chatwin-actions">
           <span className="rb-chatwin-tools">
