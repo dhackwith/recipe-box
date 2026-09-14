@@ -99,8 +99,33 @@ export function displayName(email) {
    A message is between people, not addresses: Nicholas answers to two, and a
    conversation with him is one conversation. An id is the stable name of a
    person, so it is what a message, a block and a read marker are keyed by.
-   Somebody signed in but not on the roster is their own address, which is
-   unique and cannot collide with a roster id. */
+   Somebody signed in but not on the roster is a guest: their id is a hash of
+   their address (g- and sixteen hex digits), stable from visit to visit, which
+   cannot collide with a roster id and never puts an address in front of the
+   page as the name of a conversation. Guests are remembered, with a name made
+   from their address, in D1 (shared/guests.js). */
+
+/* FNV-1a, twice with different seeds for 64 bits. Not a secret — only a label
+   that is the same every time and doesn't read as an email address. */
+function fnv(s, seed) {
+  let h = seed >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+const guestIdFor = (addr) => `g-${fnv(addr, 0x811c9dc5)}${fnv(addr, 0x9e3779b9)}`;
+
+/** Whether an id is a guest's rather than somebody on the roster. */
+export const isGuestId = (id) => /^g-[0-9a-f]{16}$/.test(String(id ?? ""));
+
+/** A signed-in address as it is keyed: lower case, without any +suffix. Guests
+    were keyed by exactly this before they had ids of their own. */
+export function addressKey(email) {
+  const parts = addressOf(email);
+  return parts ? parts.addr : null;
+}
 
 /** Everyone the box knows: ids and names, and never anybody's address. */
 export const people = () => PEOPLE.map(({ id, name }) => ({ id, name }));
@@ -110,13 +135,15 @@ export function personFor(email) {
   const parts = addressOf(email);
   if (!parts) return null;
   const known = BY_ADDRESS.get(parts.addr) || BY_ADDRESS.get(parts.local);
-  return known ? { id: known.id, name: known.name } : { id: parts.addr, name: fromAddress(parts.local) };
+  return known ? { id: known.id, name: known.name } : { id: guestIdFor(parts.addr), name: fromAddress(parts.local) };
 }
 
-/** What to call an id, roster or not. */
+/** What to call a roster id. A guest's name lives in D1 (shared/guests.js),
+    so a guest id on its own is only "Someone". */
 export function personName(id) {
   const known = PEOPLE.find((p) => p.id === id);
   if (known) return known.name;
+  if (isGuestId(id)) return "Someone";
   const parts = addressOf(id);
   return parts ? fromAddress(parts.local) : "Someone";
 }

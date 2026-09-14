@@ -5248,7 +5248,10 @@ export default function RecipeBox() {
     .rb-chat-side { min-width: 0; }
     .rb-chat-heading { margin: 18px 0 6px; font: 600 9.5px/1 ${SOCIAL}; letter-spacing: .12em; text-transform: uppercase; color: var(--card-muted); }
     .rb-chat-list { list-style: none; margin: 0; padding: 0; }
-    .rb-chat-person { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--card-edge); padding: 10px 2px; cursor: pointer; }
+    /* The left padding clears the bar an open chat's row gets, so a face is
+       never drawn on top of it — and every row has it, so opening one doesn't
+       shift it sideways. */
+    .rb-chat-person { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--card-edge); padding: 10px 2px 10px 11px; cursor: pointer; }
     .rb-chat-person.is-open { box-shadow: inset 3px 0 0 var(--card-accent); }
     .rb-chat-who { display: flex; align-items: baseline; gap: 8px; font: 600 14px/1.3 ${SOCIAL}; color: var(--card-text); }
     .rb-chat-unread { flex: none; min-width: 18px; padding: 1px 6px; border-radius: 999px; background: var(--card-accent); color: var(--on-accent); font: 600 11px/1.5 ${SOCIAL}; text-align: center; }

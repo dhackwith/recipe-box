@@ -61,6 +61,17 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE INDEX IF NOT EXISTS attachments_by_message ON attachments (message);
 
+-- People Cloudflare Access lets in who aren't on the roster yet. id is g- and
+-- a hash of the address; the address itself stays here, server-side, only to
+-- move their conversations when that id changes. shared/guests.js also creates
+-- this if it is missing.
+CREATE TABLE IF NOT EXISTS guests (
+  id      TEXT PRIMARY KEY,
+  name    TEXT NOT NULL,
+  address TEXT NOT NULL UNIQUE,
+  at      TEXT NOT NULL
+);
+
 -- Hearts on messages (kind 'm', target = message id, pair = its conversation)
 -- and on notes (kind 'n', target = the note's KV key, pair = ''). One row per
 -- person per thing, switched on and off; every change takes the next seq, so a
