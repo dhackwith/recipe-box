@@ -1125,6 +1125,10 @@ const MAX_CHATS = 5;
 /* How long Take back is offered after sending. The server holds the same line
    by its own clock (functions/api/messages.js). */
 const TAKE_BACK_MS = 60 * 1000;
+/* A chat shows the time only where this long has passed between messages. */
+const TIME_GAP_MS = 5 * 60 * 1000;
+/* The reactions, left to right as the bar shows them (stored by shared/loves.js). */
+const REACTION_BAR = [["👍", "Thumbs up"], ["❤️", "Heart"], ["😂", "Laughing"], ["😢", "Crying"], ["😠", "Angry"], ["🤢", "Disgusted"]];
 /* Two taps on a message this close in time and place are a double tap. */
 const DOUBLE_TAP_MS = 320;
 const DOUBLE_TAP_SLOP = 24;
@@ -1151,6 +1155,16 @@ function Phone({ size = 18 }) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function Dots({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="5" cy="12" r="2" fill="currentColor" />
+      <circle cx="12" cy="12" r="2" fill="currentColor" />
+      <circle cx="19" cy="12" r="2" fill="currentColor" />
     </svg>
   );
 }
@@ -1276,6 +1290,44 @@ function ChatWindow({
   const typeRef = useRef(null);
   const fileRef = useRef(null);
   const [gifOpen, setGifOpen] = useState(false);
+
+  /* A message's reaction bar held open (by a press and hold, on a touch
+     screen), and a message's ⋯ menu. Pointing at a message with a mouse opens
+     the bar by itself. A tap elsewhere or Escape puts either away. */
+  const [openMsg, setOpenMsg] = useState(null);
+  const [menuMsg, setMenuMsg] = useState(null);
+  useEffect(() => {
+    if (openMsg === null && menuMsg === null) return;
+    const away = (e) => {
+      if (e.target.closest?.(".rb-msg-wrap.is-open")) return;
+      setOpenMsg(null);
+      setMenuMsg(null);
+    };
+    const escape = (e) => { if (e.key === "Escape") { setOpenMsg(null); setMenuMsg(null); } };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [openMsg, menuMsg]);
+
+  /* Press and hold a message on a touch screen for what pointing at it does
+     with a mouse: the reactions on theirs, the menu on yours. A finger that
+     scrolls cancels the press. */
+  const pressTimer = useRef(null);
+  const pressType = useRef("mouse");
+  useEffect(() => () => clearTimeout(pressTimer.current), []);
+  const startPress = (e, m, canReact, hasMenu) => {
+    pressType.current = e.pointerType;
+    if (e.pointerType === "mouse" || (!canReact && !hasMenu)) return;
+    clearTimeout(pressTimer.current);
+    pressTimer.current = setTimeout(() => {
+      if (canReact) setOpenMsg(m.id);
+      else setMenuMsg(m.id);
+    }, HOLD_MS);
+  };
+  const endPress = () => clearTimeout(pressTimer.current);
 
   /* Tapping their name opens a small menu about them — for now, Block or
      Unblock — the way Facebook's chat does. A tap anywhere else, Escape, or
@@ -1421,7 +1473,7 @@ function ChatWindow({
           if (typeof got.loveSeq === "number") loveSince.current = Math.max(loveSince.current, got.loveSeq);
           if (got.loved && got.loved.length) {
             const hearts = new Map(got.loved.map((l) => [l.id, l]));
-            setMessages((all) => all.map((m) => (hearts.has(m.id) ? { ...m, loves: hearts.get(m.id).loves, loved: hearts.get(m.id).loved } : m)));
+            setMessages((all) => all.map((m) => (hearts.has(m.id) ? { ...m, ...hearts.get(m.id) } : m)));
           }
           wait = true;
           if (!holding) await heard.sleep(pushed ? RESYNC_MS : RECONNECTING_MS);
@@ -1491,21 +1543,22 @@ function ChatWindow({
     }
   };
 
-  /* A heart on one of their messages, or taking it back. Both ends see it:
-     theirs finds out through its waiting request. */
-  const toggleLove = async (m) => {
+  /* A reaction on one of their messages. One per person: picking another
+     swaps it, and picking the one you already gave takes it off. Both ends see
+     it at once (shared/live.js). */
+  const react = async (m, emoji) => {
     setError("");
+    setOpenMsg(null);
     try {
-      const res = await messagesCall("POST", "", { love: m.id, on: !m.loved });
-      setMessages((all) => all.map((x) => (x.id === res.id ? { ...x, loves: res.loves, loved: res.loved } : x)));
+      const res = await messagesCall("POST", "", { react: m.id, emoji: m.reacted === emoji ? null : emoji });
+      setMessages((all) => all.map((x) => (x.id === res.id ? { ...x, ...res } : x)));
     } catch (err) {
       setError(String(err.message || err));
     }
   };
 
-  /* Two quick taps on one of their messages love it, or take the love back,
-     as the Love link beside the time does — mostly for phones, where that
-     link is a small target. Touch and pen only: a mouse double-click is
+  /* Two quick taps on one of their messages give it a heart, or take the
+     heart off — mostly for phones. Touch and pen only: a mouse double-click is
      how people select a word to copy. Taps on the message's own buttons and
      links don't count, and a finger that scrolls never gets a pointerup. */
   const lastTap = useRef({ id: 0, at: 0, x: 0, y: 0 });
@@ -1516,7 +1569,7 @@ function ChatWindow({
     const near = Math.hypot(e.clientX - last.x, e.clientY - last.y) < DOUBLE_TAP_SLOP;
     if (last.id === m.id && e.timeStamp - last.at < DOUBLE_TAP_MS && near) {
       lastTap.current = { id: 0, at: 0, x: 0, y: 0 };
-      toggleLove(m);
+      react(m, "❤️");
     } else {
       lastTap.current = { id: m.id, at: e.timeStamp, x: e.clientX, y: e.clientY };
     }
@@ -1621,14 +1674,55 @@ function ChatWindow({
           <ol className="rb-chat-thread">
             {messages.length === 0 && !error && <li className="rb-chat-empty">Nothing yet. Say hello.</li>}
             {messages.map((m, i) => {
-              /* Their face beside the last of a run of their messages, as
-                 most messengers do, rather than beside every line. */
-              const endsRun = !m.mine && (!messages[i + 1] || messages[i + 1].mine);
+              /* The time goes in only where 5 minutes or more have passed, so
+                 both ends see the same times in the same places and a bubble
+                 holds just the message. A run of messages from one person
+                 tucks together, with their face beside the last. */
+              const prev = messages[i - 1];
+              const next = messages[i + 1];
+              const at = Date.parse(m.at);
+              const newTime = !prev || at - Date.parse(prev.at) >= TIME_GAP_MS;
+              const runStart = newTime || prev.mine !== m.mine;
+              const runEnd = !next || next.mine !== m.mine || Date.parse(next.at) - at >= TIME_GAP_MS;
               const gif = !m.deleted && !m.attachment ? gifUrl(m.text) : null;
+              const photo = (m.attachment?.picture && !m.deleted) || gif;
+              const bigEmoji = !m.deleted && !m.attachment && !gif && emojiOnly(m.text);
+              const given = m.deleted ? [] : m.reactions || (m.loves || []).map((who) => ({ who, emoji: "❤️" }));
+              const canReact = !m.mine && !m.deleted && !blocked;
+              const fresh = m.mine && Date.now() - at < TAKE_BACK_MS;
+              const hasMenu = !m.deleted && (m.mine || owner);
+              const nearTop = i < 2;
+              const reactedBy = given.map((r) => `${r.who === id ? first : "You"} ${r.emoji}`).join(", ");
+              const more = hasMenu && (
+                <button
+                  type="button"
+                  className="rb-msg-more rb-focus"
+                  onClick={() => setMenuMsg(menuMsg === m.id ? null : m.id)}
+                  aria-label="More options for this message"
+                  aria-haspopup="menu"
+                  aria-expanded={menuMsg === m.id}
+                >
+                  <Dots />
+                </button>
+              );
               return (
-                <li key={m.id} className={`rb-msg-row${m.mine ? " is-mine" : ""}`}>
-                  {!m.mine && (endsRun ? face(id, name, 24) : <span className="rb-face-gap" aria-hidden />)}
-                  <div className={`rb-msg${m.mine ? " is-mine" : ""}${(m.attachment?.picture && !m.deleted) || gif ? " has-photo" : ""}${!m.deleted && !m.attachment && emojiOnly(m.text) ? " is-emoji" : ""}${!m.deleted && m.loves?.length ? " has-love" : ""}`} onPointerUp={(e) => tapToLove(e, m)}>
+                <React.Fragment key={m.id}>
+                  {newTime && <li className="rb-chat-time" role="separator"><When iso={m.at} /></li>}
+                  <li className={`rb-msg-row${m.mine ? " is-mine" : ""}${runStart ? " is-run-start" : ""}${runEnd ? " is-run-end" : ""}${given.length ? " has-reactions" : ""}${nearTop ? " is-near-top" : ""}`}>
+                  {!m.mine && (runEnd ? face(id, name, 24) : <span className="rb-face-gap" aria-hidden />)}
+                  <div className={`rb-msg-wrap${openMsg === m.id || menuMsg === m.id ? " is-open" : ""}`}>
+                  {m.mine && more}
+                  <div className="rb-msg-hold">
+                  <div
+                    className={`rb-msg-bubble${photo ? " has-photo" : ""}${bigEmoji ? " is-emoji" : ""}${m.deleted ? " is-gone" : ""}`}
+                    tabIndex={0}
+                    title={whenFull(m.at)}
+                    onPointerDown={(e) => startPress(e, m, canReact, hasMenu)}
+                    onPointerUp={(e) => { endPress(); if (canReact) tapToLove(e, m); }}
+                    onPointerCancel={endPress}
+                    onPointerLeave={endPress}
+                    onContextMenu={(e) => { if (pressType.current !== "mouse") e.preventDefault(); }}
+                  >
                     {gif && (
                       <button
                         type="button"
@@ -1658,39 +1752,57 @@ function ChatWindow({
                       </a>
                     ))}
                     {(m.deleted || (m.text && !gif)) && (
-                      <p className={m.deleted ? "rb-msg-text rb-msg-gone" : "rb-msg-text"}>
+                      <p className="rb-msg-text">
                         {m.deleted ? (m.removed ? "Removed" : "Taken back") : m.text}
                       </p>
                     )}
-                    <p className="rb-msg-when">
-                      <When iso={m.at} />
-                      {!m.mine && !m.deleted && !blocked && (
-                        <button type="button" className="rb-entry-x rb-focus" onClick={() => toggleLove(m)} aria-pressed={!!m.loved}>
-                          {m.loved ? "Unlove" : "Love"}
+                  </div>
+                  {canReact && (
+                    <div className="rb-react-bar" role="toolbar" aria-label="React to this message">
+                      {REACTION_BAR.map(([emoji, label]) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          className="rb-react"
+                          onClick={() => react(m, emoji)}
+                          aria-label={label}
+                          aria-pressed={m.reacted === emoji}
+                          title={label}
+                        >
+                          {emoji}
                         </button>
-                      )}
-                      {!m.deleted && (m.mine && Date.now() - Date.parse(m.at) < TAKE_BACK_MS ? (
-                        <button type="button" className="rb-entry-x rb-focus" onClick={() => takeBack(m.id)}>
+                      ))}
+                    </div>
+                  )}
+                  {given.length > 0 && (
+                    <span className="rb-msg-reactions" role="img" aria-label={`Reactions: ${reactedBy}`} title={reactedBy}>
+                      {[...new Set(given.map((r) => r.emoji))].map((e) => <span key={e} aria-hidden>{e}</span>)}
+                      {given.length > 1 && <span className="rb-msg-reactions-n" aria-hidden>{given.length}</span>}
+                    </span>
+                  )}
+                  </div>
+                  {!m.mine && more}
+                  {menuMsg === m.id && (
+                    <div className={`rb-msg-menu${nearTop ? " is-below" : ""}`} role="menu" aria-label="Options for this message">
+                      {fresh ? (
+                        <button type="button" role="menuitem" autoFocus onClick={() => { setMenuMsg(null); takeBack(m.id); }}>
                           Take back
                         </button>
                       ) : owner ? (
-                        <button type="button" className="rb-entry-x rb-focus" onClick={() => takeBack(m.id, true)} aria-label="Remove this message">
-                          Remove
+                        <button type="button" role="menuitem" autoFocus onClick={() => { setMenuMsg(null); takeBack(m.id, true); }}>
+                          Remove for both of you
                         </button>
-                      ) : null)}
-                    </p>
-                    {!m.deleted && m.loves?.length > 0 && (
-                      <span
-                        className="rb-love-badge"
-                        role="img"
-                        aria-label={m.mine ? `${first} loved this` : "You loved this"}
-                        title={m.mine ? `${first} loved this` : "You loved this"}
-                      >
-                        ❤️
-                      </span>
-                    )}
+                      ) : null}
+                      <p>
+                        {fresh
+                          ? "You can take a message back for a minute after sending it."
+                          : `Sent ${whenAt(m.at, { inSentence: true })}.${m.mine ? " Messages can only be taken back in the first minute." : ""}`}
+                      </p>
+                    </div>
+                  )}
                   </div>
-                </li>
+                  </li>
+                </React.Fragment>
               );
             })}
           </ol>
@@ -5660,11 +5772,7 @@ export default function RecipeBox() {
     .rb-chat-name { font: 400 19px/1.2 ${SOCIAL}; color: var(--card-text); }
     .rb-chat-empty { font: 400 14px/1.6 ${SOCIAL}; color: var(--card-muted); margin: 0; }
     .rb-chat-thread { list-style: none; margin: 0; padding: 14px 0 0; display: flex; flex-direction: column; gap: 12px; max-height: 52vh; overflow-y: auto; }
-    .rb-msg { max-width: min(78%, 520px); padding: 9px 12px; border: 1px solid var(--card-edge); border-radius: 3px; background: var(--card-lift); }
-    .rb-msg.is-mine { margin-left: auto; border-color: var(--card-accent); }
     .rb-msg-text { margin: 0; font: 400 15px/1.65 ${SOCIAL}; color: var(--card-text); white-space: pre-wrap; }
-    .rb-msg-gone { font-style: italic; color: var(--card-muted); }
-    .rb-msg-when { display: flex; align-items: baseline; gap: 10px; margin: 5px 0 0; font: 400 11.5px/1.4 ${SOCIAL}; color: var(--card-muted); }
     .rb-chat-compose { display: flex; gap: 10px; align-items: flex-end; margin-top: 14px; }
 
     /* The messenger docks along the bottom of every page, the way Facebook's
@@ -5722,18 +5830,74 @@ export default function RecipeBox() {
        be a scroll box of its own, or a love badge hanging off a bubble's
        corner gives it a sideways scroll bar. */
     .rb-chatwin-body { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 10px 12px; }
-    .rb-chatwin-body .rb-chat-thread { max-height: none; overflow: visible; padding-top: 0; gap: 8px; }
-    .rb-chatwin .rb-msg { padding: 7px 10px; }
-    .rb-chatwin .rb-msg-text { font-size: 14px; line-height: 1.5; }
+    .rb-chatwin-body .rb-chat-thread { max-height: none; overflow: visible; padding-top: 0; gap: 2px; }
+    /* The conversation, drawn the way Facebook's messenger draws it: the time
+       only where 5 minutes or more have passed, rounded bubbles that hold just
+       the message, and a run of messages from one person tucked together. */
+    .rb-chat-time { align-self: center; margin: 12px 0 4px; font: 600 11.5px/1.3 ${SOCIAL}; color: var(--card-muted); }
+    .rb-chat-thread > .rb-chat-time:first-child { margin-top: 2px; }
+    .rb-msg-row.is-run-start { margin-top: 6px; }
+    .rb-chat-time + .rb-msg-row { margin-top: 0; }
+    .rb-msg-row.has-reactions { margin-top: 16px; }
+    .rb-msg-wrap { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 80%; }
+    .rb-msg-hold { position: relative; min-width: 0; }
+    .rb-msg-bubble { padding: 7px 12px; border-radius: 18px; background: color-mix(in srgb, var(--card-accent) 11%, var(--card-lift)); color: var(--card-text); overflow-wrap: anywhere; outline: none; touch-action: manipulation; }
+    .rb-msg-row.is-mine .rb-msg-bubble { background: var(--card-accent); color: var(--on-accent); }
+    .rb-msg-bubble:focus-visible { box-shadow: 0 0 0 2px var(--card-bg), 0 0 0 4px var(--card-accent); }
+    .rb-chatwin .rb-msg-bubble .rb-msg-text { color: inherit; font-size: 14px; line-height: 1.45; }
+    .rb-msg-row:not(.is-mine):not(.is-run-end) .rb-msg-bubble { border-bottom-left-radius: 5px; }
+    .rb-msg-row:not(.is-mine):not(.is-run-start) .rb-msg-bubble { border-top-left-radius: 5px; }
+    .rb-msg-row.is-mine:not(.is-run-end) .rb-msg-bubble { border-bottom-right-radius: 5px; }
+    .rb-msg-row.is-mine:not(.is-run-start) .rb-msg-bubble { border-top-right-radius: 5px; }
+    .rb-msg-bubble.has-photo { padding: 3px; overflow: hidden; }
+    .rb-msg-bubble.has-photo .rb-msg-photo { border-radius: 15px; }
+    .rb-chatwin .rb-msg-bubble.has-photo > .rb-msg-text { padding: 3px 9px 5px; }
+    .rb-msg-row .rb-msg-bubble.is-emoji { padding: 0 2px; background: transparent; color: var(--card-text); }
+    .rb-chatwin .rb-msg-bubble.is-emoji > .rb-msg-text { font-size: 34px; line-height: 1.15; }
+    .rb-msg-row .rb-msg-bubble.is-gone { background: transparent; border: 1px dashed var(--card-edge); color: var(--card-muted); font-style: italic; }
+    .rb-msg-bubble .rb-msg-file { margin: 2px 0; }
+    @media (hover: none) { .rb-msg-bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
+    /* The ⋯ beside your own messages, only just noticeable, and its menu. It
+       opens upward, because the messages people act on are the newest, at the
+       bottom — except for the first couple, which have no room above. */
+    .rb-msg-more { flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--card-muted); cursor: pointer; opacity: 0; transition: opacity 140ms ease; }
+    .rb-msg-wrap:hover .rb-msg-more, .rb-msg-wrap:focus-within .rb-msg-more, .rb-msg-wrap.is-open .rb-msg-more { opacity: .75; }
+    @media (hover: none) { .rb-msg-more { opacity: .45; } }
+    .rb-msg-more:hover, .rb-msg-more:focus-visible { opacity: 1; background: color-mix(in srgb, var(--card-text) 9%, transparent); }
+    .rb-msg-menu { position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 4; width: 214px; padding: 5px; border: 1px solid var(--card-edge); border-radius: 12px; background: var(--card-bg); box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); }
+    .rb-msg-menu.is-below { bottom: auto; top: calc(100% + 6px); }
+    .rb-msg-row:not(.is-mine) .rb-msg-menu { right: auto; left: 0; }
+    .rb-msg-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none; text-align: left; cursor: pointer; color: var(--card-text); font: 700 13.5px/1.3 ${SOCIAL}; }
+    .rb-msg-menu button:hover, .rb-msg-menu button:focus-visible { background: var(--card-lift); outline: none; }
+    .rb-msg-menu p { margin: 0; padding: 4px 10px 6px; color: var(--card-muted); font: 400 12px/1.45 ${SOCIAL}; }
+    /* The reactions: an ellipse of six just above their message, opened by
+       pointing at it (or pressing and holding), and what's been given sitting
+       on the bubble's top corner. */
+    .rb-react-bar { position: absolute; left: -4px; bottom: calc(100% + 7px); z-index: 3; display: flex; gap: 1px; padding: 4px 6px; border: 1px solid var(--card-edge); border-radius: 999px; background: var(--card-bg); box-shadow: 0 10px 24px -12px rgba(0, 0, 0, .5); opacity: 0; transform: translateY(5px) scale(.94); transform-origin: 20% 100%; pointer-events: none; transition: opacity 140ms ease, transform 160ms cubic-bezier(.2, .9, .3, 1.25); }
+    .rb-react-bar::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 12px; }
+    .rb-msg-row.has-reactions .rb-react-bar { bottom: calc(100% + 16px); }
+    .rb-msg-row.is-near-top .rb-react-bar { bottom: auto; top: calc(100% + 7px); transform-origin: 20% 0; }
+    .rb-msg-row.is-near-top .rb-react-bar::after { top: auto; bottom: 100%; }
+    @media (hover: hover) { .rb-msg-hold:hover .rb-react-bar { opacity: 1; transform: none; pointer-events: auto; } }
+    .rb-msg-hold:focus-within .rb-react-bar, .rb-msg-wrap.is-open .rb-react-bar { opacity: 1; transform: none; pointer-events: auto; }
+    .rb-react { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; font-size: 19px; line-height: 1; transition: transform 120ms ease; }
+    .rb-react:hover, .rb-react:focus-visible { transform: translateY(-3px) scale(1.22); outline: none; }
+    .rb-react:focus-visible { background: var(--card-lift); }
+    .rb-react[aria-pressed="true"] { background: color-mix(in srgb, var(--card-accent) 22%, transparent); }
+    .rb-msg-reactions { position: absolute; top: -13px; right: -4px; z-index: 2; display: inline-flex; align-items: center; gap: 2px; padding: 2px 5px; border: 1px solid var(--card-edge); border-radius: 999px; background: var(--card-bg); color: var(--card-text); font: 700 11px/1.2 ${SOCIAL}; white-space: nowrap; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .45); }
+    .rb-msg-row.is-mine .rb-msg-reactions { right: auto; left: -4px; }
+    .rb-msg-reactions > span[aria-hidden] { font-size: 12px; }
+    .rb-msg-reactions > .rb-msg-reactions-n { font-size: 11px; margin-left: 1px; }
+    @media (prefers-reduced-motion: reduce) {
+      .rb-react-bar, .rb-react, .rb-msg-more { transition: none; }
+      .rb-react:hover, .rb-react:focus-visible { transform: none; }
+    }
     .rb-chatwin-compose { display: flex; flex-direction: column; gap: 7px; padding: 8px 10px 10px; border-top: 1px solid var(--card-edge); }
     .rb-chatwin-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .rb-chatwin-tools { display: inline-flex; align-items: center; gap: 6px; }
     .rb-chatwin-ctl:disabled { cursor: default; opacity: .35; }
     /* Attachments: a photo as itself, a file as a card to download, and one
        waiting to be sent shown above the box. */
-    .rb-chatwin .rb-msg.has-photo { padding: 4px; }
-    .rb-chatwin .rb-msg.has-photo > .rb-msg-text, .rb-chatwin .rb-msg.has-photo > .rb-msg-when { padding: 0 6px; }
-    .rb-chatwin .rb-msg.has-photo > .rb-msg-when { padding-bottom: 3px; }
     .rb-msg-photo { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; line-height: 0; border-radius: 2px; overflow: hidden; }
     .rb-msg-photo img { display: block; max-width: 100%; max-height: 240px; width: auto; height: auto; object-fit: contain; }
     .rb-msg-photo + .rb-msg-text { margin-top: 6px; }
@@ -5746,10 +5910,6 @@ export default function RecipeBox() {
     .rb-chat-pending img { flex: none; width: 40px; height: 40px; object-fit: cover; border-radius: 3px; }
     .rb-chat-pending-name { flex: 1; min-width: 0; display: flex; flex-direction: column; font: 600 12.5px/1.3 ${SOCIAL}; overflow-wrap: anywhere; }
     .rb-chat-pending-name > span { font: 400 11px/1.3 ${SOCIAL}; color: var(--card-muted); }
-    /* A message that is only an emoji or three is shown large, without a
-       bubble, as messengers do. */
-    .rb-chatwin .rb-msg.is-emoji { padding: 0 2px; border-color: transparent; background: transparent; }
-    .rb-chatwin .rb-msg.is-emoji > .rb-msg-text { font-size: 34px; line-height: 1.15; }
     /* The quick emoji beside Send, and the small menu that a press and hold
        opens above it. The button can't be selected or called up as a
        phone's own long-press menu, or holding it would do that instead. */
@@ -5763,10 +5923,6 @@ export default function RecipeBox() {
     .rb-emoji-menu button { width: 38px; height: 38px; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; font-size: 22px; line-height: 1; }
     .rb-emoji-menu button:hover, .rb-emoji-menu button:focus-visible { background: var(--card-lift); outline: none; }
     .rb-emoji-menu button[aria-checked="true"] { background: color-mix(in srgb, var(--card-accent) 24%, transparent); }
-    /* a double tap loves a message, so it mustn't also zoom the page */
-    .rb-chatwin .rb-msg { touch-action: manipulation; }
-    .rb-msg.has-love { position: relative; margin-bottom: 10px; }
-    .rb-love-badge { position: absolute; right: -5px; bottom: -11px; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid var(--card-edge); border-radius: 50%; background: var(--card-bg); font-size: 11.5px; line-height: 1; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .5); }
     /* A call: one card at the top of the screen, over everything — cooking
        mode and the timers included, because somebody may well ring while you
        cook. Words on the buttons, not just icons: it's a phone call. */

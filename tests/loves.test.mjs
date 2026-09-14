@@ -77,7 +77,9 @@ is("the sender sees the heart on their message", devonSees.data.messages.find((m
 is("...as not their own heart", devonSees.data.messages.find((m) => m.id === first.id).loved, false);
 
 const caughtUp = await msg("GET", `?with=nicholas&since=${answer.id}&loves=${opened.data.loveSeq}`, devon);
-is("an open chat is told of a heart on a message it already has", caughtUp.data.loved, [{ id: first.id, loves: ["nicholas"], loved: false }]);
+is("an open chat is told of a heart on a message it already has", caughtUp.data.loved, [
+  { id: first.id, reactions: [{ who: "nicholas", emoji: "❤️" }], reacted: null, loves: ["nicholas"], loved: false },
+]);
 is("...with no messages resent", caughtUp.data.messages, []);
 const seq = caughtUp.data.loveSeq;
 is("...and moves on past it", seq > 0, true);
@@ -89,7 +91,7 @@ setTimeout(() => { msg("POST", "", nick, { love: first.id, on: false }); }, 150)
 const started = Date.now();
 const before = db.queries;
 const woke = await waiting;
-is("a waiting chat wakes when a heart is taken back", woke.data.loved, [{ id: first.id, loves: [], loved: false }]);
+is("a waiting chat wakes when a heart is taken back", woke.data.loved, [{ id: first.id, reactions: [], reacted: null, loves: [], loved: false }]);
 is("...within a couple of seconds", Date.now() - started < 3000, true);
 is("...well inside fifty queries", db.queries - before < 50, true);
 
@@ -110,6 +112,23 @@ await msg("DELETE", `?id=${fresh.id}`, devon);
 const afterTakeBack = (await msg("GET", "?with=nicholas&since=0", devon)).data.messages.find((m) => m.id === fresh.id);
 is("a message taken back loses its hearts", [afterTakeBack.deleted, afterTakeBack.loves], [true, []]);
 is("...and loving it now is refused", (await msg("POST", "", nick, { love: fresh.id })).status, 409);
+
+/* ── reactions ── */
+console.log("\n— reactions on messages —");
+const laughed = await msg("POST", "", nick, { react: first.id, emoji: "😂" });
+is("reacting with one of the six works", [laughed.status, laughed.data.reacted, laughed.data.reactions], [200, "😂", [{ who: "nicholas", emoji: "😂" }]]);
+is("...and still reads as a love to an older page", [laughed.data.loves, laughed.data.loved], [["nicholas"], true]);
+const swapped = await msg("POST", "", nick, { react: first.id, emoji: "👍" });
+is("picking another swaps it: one reaction per person", swapped.data.reactions, [{ who: "nicholas", emoji: "👍" }]);
+const devonReads = (await msg("GET", "?with=nicholas&since=0", devon)).data.messages.find((m) => m.id === first.id);
+is("the sender sees which reaction", [devonReads.reactions, devonReads.reacted], [[{ who: "nicholas", emoji: "👍" }], null]);
+is("anything but the six is refused", (await msg("POST", "", nick, { react: first.id, emoji: "🍕" })).status, 400);
+const cleared = await msg("POST", "", nick, { react: first.id, emoji: null });
+is("null takes it off", [cleared.data.reacted, cleared.data.reactions], [null, []]);
+await msg("POST", "", nick, { love: first.id, on: true });
+is("a love from an older page is a heart", (await msg("GET", "?with=nicholas&since=0", devon)).data.messages.find((m) => m.id === first.id).reactions, [{ who: "nicholas", emoji: "❤️" }]);
+is("...stored as 1, the way every heart before reactions was", (await db.prepare("SELECT loved FROM loves WHERE kind = 'm' AND target = ?1 AND person = 'nicholas'").bind(String(first.id)).first()).loved, 1);
+is("nobody reacts to their own message", (await msg("POST", "", devon, { react: first.id, emoji: "😂" })).status, 400);
 
 /* ── notes ── */
 console.log("\n— hearts on notes —");

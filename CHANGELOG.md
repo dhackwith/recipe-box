@@ -11,6 +11,12 @@ after it explains what they can now do.
 Write it for whoever is cooking, not for whoever is coding, and leave the plumbing
 out unless they would notice it.
 
+## 2026-09-14
+
+- **A new look for chats.** Messages sit in rounded bubbles that hold just what was said, and messages sent back to back tuck together. The time shows in the middle of the chat wherever 5 minutes or more have passed, the same for both of you. Point at a message to see exactly when it was sent.
+- **React with an emoji.** Point at somebody's message, or press and hold it on a phone, and 👍 ❤️ 😂 😢 😠 🤢 pop up above it. Tap one and it shows on the top corner of their message, for both of you. Pick a different one to swap it, or the same one to take it off. Double tap still gives a ❤️, and every heart you'd already given is still there.
+- **Take back is in a menu.** A small ⋯ beside each message you send opens Take back, which still works for a minute after sending.
+
 ## 2026-09-13
 
 - **Messenger keeps working after a break.** Coming back to the site could leave a chat saying "Couldn't reach your messages (503)". Each open page was asking the site about once a second whether anything had changed, and that used more of Cloudflare's free allowance than it permits, so some requests were refused. Now the site tells your page the moment a message, heart or call arrives, so messages show up straight away and a page left open costs almost nothing. A one-off hiccup is retried quietly instead of showing an error.

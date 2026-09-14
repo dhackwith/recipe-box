@@ -23,6 +23,14 @@ import { haveTables } from "./schema.js";
 export const MESSAGE = "m";
 export const NOTE = "n";
 
+/* Reactions on messages: one per person per message. Kept in the same `loved`
+   column as a number — 0 is none — so nothing about the table changed when
+   reactions arrived. 1 is ❤️ because every love given before then was stored
+   as 1, so those hearts simply carry on as hearts. Notes only ever use 1. */
+export const REACTIONS = ["❤️", "👍", "😂", "😢", "😠", "🤢"];
+export const reactionCode = (emoji) => REACTIONS.indexOf(emoji) + 1;
+export const reactionOf = (code) => REACTIONS[code - 1] || null;
+
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS loves (
      kind TEXT NOT NULL, target TEXT NOT NULL, person TEXT NOT NULL,
@@ -46,13 +54,13 @@ export function ensureLoves(db) {
 }
 
 /* On or off, in one statement, so the sequence number cannot be taken twice. */
-export async function setLove(db, { kind, target, person, pair = "", on }) {
+export async function setLove(db, { kind, target, person, pair = "", on, emoji = "❤️" }) {
   await db
     .prepare(`INSERT INTO loves (kind, target, person, pair, loved, seq, at)
               VALUES (?1, ?2, ?3, ?4, ?5, (SELECT COALESCE(MAX(seq), 0) + 1 FROM loves), ?6)
               ON CONFLICT (kind, target, person)
               DO UPDATE SET loved = excluded.loved, seq = excluded.seq, at = excluded.at`)
-    .bind(kind, String(target), person, pair, on ? 1 : 0, new Date().toISOString())
+    .bind(kind, String(target), person, pair, on ? reactionCode(emoji) || 1 : 0, new Date().toISOString())
     .run();
 }
 
@@ -66,13 +74,32 @@ export async function lovesFor(db, kind, targets) {
   if (!ids.length) return out;
   const { results } = await db
     .prepare(`SELECT target, person FROM loves
-              WHERE kind = ?1 AND loved = 1 AND target IN (SELECT value FROM json_each(?2))
+              WHERE kind = ?1 AND loved > 0 AND target IN (SELECT value FROM json_each(?2))
               ORDER BY seq`)
     .bind(kind, JSON.stringify(ids))
     .all();
   for (const r of results || []) {
     if (!out.has(r.target)) out.set(r.target, []);
     out.get(r.target).push(r.person);
+  }
+  return out;
+}
+
+/* Who reacted to each of these, and with what, in the order they did: a Map of
+   target to [{ person, emoji }]. One query however many are asked about. */
+export async function reactionsFor(db, kind, targets) {
+  const out = new Map();
+  const ids = [...new Set(targets.map(String))];
+  if (!ids.length) return out;
+  const { results } = await db
+    .prepare(`SELECT target, person, loved FROM loves
+              WHERE kind = ?1 AND loved > 0 AND target IN (SELECT value FROM json_each(?2))
+              ORDER BY seq`)
+    .bind(kind, JSON.stringify(ids))
+    .all();
+  for (const r of results || []) {
+    if (!out.has(r.target)) out.set(r.target, []);
+    out.get(r.target).push({ person: r.person, emoji: reactionOf(Number(r.loved)) || "❤️" });
   }
   return out;
 }
