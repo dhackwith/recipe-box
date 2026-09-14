@@ -1612,22 +1612,26 @@ function ChatWindow({
     </button>
   );
 
+  /* Minimised, a chat is just the person's face in a round bubble, a little
+     larger than it is anywhere else — their picture, or their initials — with
+     their light on its corner. Tap it to open the chat again; × closes it; a
+     ring flashes and a count shows when something unread arrives. */
   if (minimized) {
     return (
-      <div className={`rb-chatwin is-min${unread ? " has-unread" : ""}`}>
-        <div className="rb-chatwin-head">
-          <button
-            type="button"
-            className="rb-chatwin-title rb-focus"
-            onClick={onRestore}
-            aria-label={`Open your chat with ${name}${unread ? ` — ${unread} unread` : ""}`}
-          >
-            {faceWithLight(id, name, 26)}
-            <span className="rb-chatwin-name">{name}</span>
-            {unread ? <span className="rb-chat-unread">{unread}</span> : null}
-          </button>
-          {closeButton}
-        </div>
+      <div className={`rb-chathead${unread ? " has-unread" : ""}`}>
+        <button
+          type="button"
+          className="rb-chathead-face rb-focus"
+          onClick={onRestore}
+          aria-label={`Open your chat with ${name}${unread ? ` — ${unread} unread` : ""}`}
+          title={name}
+        >
+          {faceWithLight(id, name, 44)}
+          {unread ? <span className="rb-chathead-count" aria-hidden>{unread}</span> : null}
+        </button>
+        <button type="button" className="rb-chathead-close rb-focus" onClick={onClose} aria-label={`Close your chat with ${name}`} title="Close">
+          <span aria-hidden>×</span>
+        </button>
       </div>
     );
   }
@@ -5816,7 +5820,9 @@ export default function RecipeBox() {
     }
     @media (prefers-reduced-motion: reduce) {
       .rb-messenger-chip { animation: none; background: var(--card-accent); color: var(--on-accent); }
-      .rb-chatwin.is-min.has-unread .rb-chatwin-head { animation: none; background: var(--card-accent); color: var(--on-accent); }
+      .rb-chathead.has-unread .rb-chathead-face { animation: none; box-shadow: 0 0 0 3px var(--card-accent), 0 6px 18px -8px rgba(0, 0, 0, .55); }
+      .rb-chathead-face { transition: none; }
+      .rb-chathead-face:hover { transform: none; }
     }
     .rb-messenger-panel { width: 280px; height: min(72vh, 480px); display: flex; flex-direction: column; box-sizing: border-box; border: 1px solid var(--card-edge); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--card-bg); box-shadow: 0 -8px 30px -16px rgba(0, 0, 0, .6); overflow: hidden; }
     .rb-messenger-head { display: flex; align-items: center; gap: 2px; padding: 5px 5px 5px 4px; border-bottom: 1px solid var(--card-edge); background: var(--card-lift); color: var(--card-text); }
@@ -5826,11 +5832,24 @@ export default function RecipeBox() {
 
     /* One chat window. Its title bar minimises it, as the _ beside it does. */
     .rb-chatwin { flex: none; width: 310px; height: min(72vh, 440px); display: flex; flex-direction: column; box-sizing: border-box; border: 1px solid var(--card-edge); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--card-bg); box-shadow: 0 -8px 30px -16px rgba(0, 0, 0, .6); overflow: hidden; }
-    .rb-chatwin.is-min { flex: 0 1 200px; width: 200px; min-width: 58px; height: auto; }
     .rb-chatwin-head { display: flex; align-items: center; gap: 2px; padding: 5px 5px 5px 4px; background: var(--card-lift); border-bottom: 1px solid var(--card-edge); color: var(--card-text); }
-    .rb-chatwin.is-min .rb-chatwin-head { border-bottom: 0; }
-    /* a minimised chat with something unread in it flashes, like a name waiting */
-    .rb-chatwin.is-min.has-unread .rb-chatwin-head { animation: rb-chip-waiting 2s steps(1, end) infinite; }
+    /* A minimised chat: the person's face in a round bubble sitting in the
+       dock, like Facebook's chat heads. A ring flashes on and off — a step, as
+       the waiting names do — while something in it is unread. */
+    .rb-chathead { position: relative; flex: none; align-self: flex-end; margin-bottom: 10px; pointer-events: auto; }
+    .rb-chathead-face { position: relative; display: block; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; box-shadow: 0 6px 18px -8px rgba(0, 0, 0, .55); transition: transform 120ms ease; }
+    .rb-chathead-face:hover { transform: scale(1.06); }
+    .rb-chathead-face .rb-face { border: 2px solid var(--card-bg); }
+    .rb-chathead-face .rb-face-wrap > .rb-chat-light { right: 0; bottom: 0; width: 14px; height: 14px; border-width: 2.5px; }
+    .rb-chathead.has-unread .rb-chathead-face { animation: rb-chathead-waiting 2s steps(1, end) infinite; }
+    @keyframes rb-chathead-waiting {
+      0%, 49.9% { box-shadow: 0 0 0 3px var(--card-accent), 0 6px 18px -8px rgba(0, 0, 0, .55); }
+      50%, 100% { box-shadow: 0 6px 18px -8px rgba(0, 0, 0, .55); }
+    }
+    .rb-chathead-count { position: absolute; top: -4px; right: -5px; min-width: 20px; box-sizing: border-box; padding: 1px 5px; border: 2px solid var(--card-bg); border-radius: 999px; background: var(--card-accent); color: var(--on-accent); font: 700 11px/1.4 ${SOCIAL}; text-align: center; }
+    .rb-chathead-close { position: absolute; top: -5px; left: -5px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--card-edge); border-radius: 50%; background: var(--card-bg); color: var(--card-text); font: 700 13px/1 ${SOCIAL}; cursor: pointer; opacity: 0; transition: opacity 120ms ease; box-shadow: 0 2px 6px -3px rgba(0, 0, 0, .45); }
+    .rb-chathead:hover .rb-chathead-close, .rb-chathead:focus-within .rb-chathead-close { opacity: 1; }
+    @media (hover: none) { .rb-chathead-close { opacity: .9; } }
     .rb-chatwin-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; background: none; border: 0; border-radius: 6px; padding: 4px 6px; cursor: pointer; text-align: left; color: inherit; font: 600 13.5px/1.25 ${SOCIAL}; }
     .rb-chatwin-title:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
     .rb-chatwin-lines { min-width: 0; display: flex; flex-direction: column; }
@@ -5976,15 +5995,14 @@ export default function RecipeBox() {
     .rb-gif-credit { margin: 0; text-align: right; font: 600 10.5px/1.2 ${SOCIAL}; letter-spacing: .04em; color: var(--card-muted); }
     .rb-emoji-hint { grid-column: 1 / -1; margin: 2px 4px 4px; font: 600 10.5px/1.2 ${SOCIAL}; letter-spacing: .04em; color: var(--card-muted); }
     @media (prefers-reduced-motion: reduce) { .rb-emoji-btn { transition: none; } .rb-emoji-btn:hover:not(:disabled), .rb-emoji-btn:active:not(:disabled) { transform: none; } }
-    /* On a phone an open chat takes the width of the screen above the dock,
-       and a minimised one gives up its name and keeps its face. */
+    /* On a phone an open chat takes the width of the screen above the dock;
+       minimised ones stay as faces in the dock. */
     @media (max-width: 699px) {
       .rb-messenger { right: 8px; gap: 6px; }
       .rb-messenger-open { width: auto; }
       .rb-messenger-panel { width: min(92vw, 340px); }
-      .rb-chatwin:not(.is-min) { position: fixed; left: 8px; right: 8px; bottom: 50px; width: auto; height: min(70vh, 460px); border-bottom: 1px solid var(--card-edge); border-radius: 8px; }
-      .rb-chatwin.is-min { flex: 0 0 auto; width: auto; min-width: 0; }
-      .rb-chatwin.is-min .rb-chatwin-name, .rb-chatwin.is-min .rb-chatwin-ctl { display: none; }
+      .rb-chatwin { position: fixed; left: 8px; right: 8px; bottom: 50px; width: auto; height: min(70vh, 460px); border-bottom: 1px solid var(--card-edge); border-radius: 8px; }
+      .rb-chathead { margin-bottom: 6px; }
     }
     /* The light: lit for somebody who has used the site in the last five
        minutes, and unlit rather than red for somebody who has not — they are

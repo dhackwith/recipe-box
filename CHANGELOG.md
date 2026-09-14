@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-14
 
+- **Minimised chats are faces.** Shrinking a chat with _ now leaves the person's picture in a round bubble along the bottom of the screen, or their initials if they haven't chosen one. Tap it to open the chat again. A ring flashes around it and a number shows when something new arrives, and the × on its corner closes it.
 - **A surprised face to react with.** 😮 joins the reactions, between 😂 and 😢.
 - **The message box matches the chat.** It's rounded like the messages and runs the width of the chat window. It starts one line tall and grows a line at a time as you type, up to four lines, then scrolls.
 - **A new look for chats.** Messages sit in rounded bubbles that hold just what was said, and messages sent back to back tuck together. The time shows in the middle of the chat wherever 5 minutes or more have passed, the same for both of you. Point at a message to see exactly when it was sent.
