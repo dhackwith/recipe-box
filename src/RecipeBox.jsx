@@ -31,7 +31,7 @@ import { asFavorites, emptyFavorites, isFavorite, setFavorite, mergeFavorites } 
 import { QUICK_EMOJI, DEFAULT_QUICK_EMOJI, asQuickEmoji, emojiOnly } from "./emoji.js";
 import { gifUrl, isGifMessage } from "../shared/gif.js";
 import {
-  CALLS_API, STUN_SERVERS, callsSupported, callsCall, callStatus, iceGathered, micError, isMicError, playTone,
+  CALLS_API, iceServers, hasRelay, callsSupported, callsCall, callStatus, iceGathered, micError, isMicError, playTone,
   RING_MS, CHECK_IN_MS, STALE_MS, trackRings, liveRings, retryDelay,
 } from "./calls.js";
 import {
@@ -4553,7 +4553,16 @@ export default function RecipeBox() {
     if (cameraFailed) flash(cameraError(cameraFailed), 6000);
     const [cam = null] = got.getVideoTracks();
     const stream = new MediaStream(got.getAudioTracks());
-    const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
+    /* Cloudflare's relay as well as its STUN, when the site has one. Some
+       networks — a VPN, strict work Wi-Fi — won't let two browsers reach each
+       other at all, and the call goes through the relay instead. */
+    const ice = await iceServers();
+    if (!still()) {
+      got.getTracks().forEach((t) => t.stop());
+      throw Object.assign(new Error("gone"), { name: "Gone" });
+    }
+    putCall((c) => (c ? { ...c, relay: hasRelay(ice) } : c));
+    const pc = new RTCPeerConnection({ iceServers: ice });
     /* A channel for the two ends to say "bye" on, so a hang-up reaches the
        other end at once without either of them asking the site. Both sides
        make it the same way (negotiated, id 0), so it needs no setting up. */
@@ -5047,7 +5056,11 @@ export default function RecipeBox() {
         video: false,
       });
       if (!still()) { stream.getTracks().forEach((t) => t.stop()); return; }
-      const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS, bundlePolicy: "max-bundle" });
+      /* The relay here too: it reaches the voice channel over ordinary web
+         ports, for somebody whose network won't pass a call any other way. */
+      const ice = await iceServers();
+      if (!still()) { stream.getTracks().forEach((t) => t.stop()); return; }
+      const pc = new RTCPeerConnection({ iceServers: ice, bundlePolicy: "max-bundle" });
       const meter = createSpeakingMeter((state) => setSpeaking(state));
       const r = { ...freshVoiceRtc(), pc, stream, meter };
       voiceRtc.current = r;

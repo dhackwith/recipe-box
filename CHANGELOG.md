@@ -11,6 +11,10 @@ after it explains what they can now do.
 Write it for whoever is cooking, not for whoever is coding, and leave the plumbing
 out unless they would notice it.
 
+## 2026-09-15
+
+- **Calls connect on networks that used to refuse them.** If your call kept saying "Connecting…" and then gave up, it was because your two devices couldn't reach each other directly — a VPN or a strict work or hotel network usually. Calls can now go through Cloudflare instead when that happens, using the same connection ordinary websites do. Calls that worked before are unchanged and still go straight between the two of you. Group voice channels get the same help.
+
 ## 2026-09-14
 
 - **Choose your camera and microphone.** During a call, tap Device settings to see the cameras and microphones your device has. Pick one and the call switches to it straight away, and it's remembered for your next call. A headset or webcam plugged in during the call shows up in the list, and if you unplug the microphone you're using, the call carries on with your device's usual one.

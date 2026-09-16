@@ -5,9 +5,37 @@
  */
 
 import { STUN_SERVERS, RING_MS, CHECK_IN_MS, STALE_MS } from "../shared/calls.js";
+import { usableIce, hasRelay } from "../shared/turn.js";
 
-export { STUN_SERVERS, RING_MS, CHECK_IN_MS, STALE_MS };
+export { STUN_SERVERS, RING_MS, CHECK_IN_MS, STALE_MS, usableIce, hasRelay };
 export const CALLS_API = "/api/calls";
+export const TURN_API = "/api/turn";
+
+/* Where the two ends of a call can meet: Cloudflare's free STUN, and its
+   relay as well when the site has a TURN key (functions/api/turn.js). Asked
+   for once and kept until the login is nearly out of date, since every call
+   this page makes can share it. A site without the key, or a moment's trouble
+   reaching it, leaves a call with STUN alone rather than no call at all —
+   which is how calls worked before there was a relay. */
+let ice = null;
+export const forgetIce = () => { ice = null; };
+export async function iceServers(now = Date.now()) {
+  if (ice && ice.until > now) return ice.servers;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 5000);
+  try {
+    const res = await fetch(TURN_API, { credentials: "same-origin", signal: abort.signal });
+    const data = await res.json();
+    const servers = usableIce(data);
+    if (!res.ok || !hasRelay(servers)) throw new Error("no relay");
+    ice = { servers, until: now + Math.max(60, (Number(data.seconds) || 0) - 60) * 1000 };
+    return ice.servers;
+  } catch {
+    return STUN_SERVERS;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /* Rings as this page knows them. Each keeps the moment the page first saw it
    and stops RING_MS after that, whether or not the page is still asking — a
@@ -71,26 +99,31 @@ export function talkClock(ms) {
 
 const firstOf = (name) => String(name || "").trim().split(/\s+/)[0] || "They";
 
-/* Why a call ended, from where you sit. */
-export function endedLabel(reason, outgoing, name) {
+/* Why a call ended, from where you sit. A call that couldn't connect says
+   something different once there's a relay to have tried: without one, both
+   being on Wi-Fi often does it; with one, the network is refusing calls
+   outright and moving to Wi-Fi won't help. */
+export function endedLabel(reason, outgoing, name, relay = false) {
   const first = firstOf(name);
   switch (reason) {
     case "declined": return outgoing ? `${first} can't talk right now` : "Call declined";
     case "missed": return outgoing ? `${first} didn't answer` : `Missed call from ${first}`;
     case "cancelled": return outgoing ? "Call cancelled" : `Missed call from ${first}`;
     case "dropped": return "The call dropped";
-    case "failed": return "Couldn't connect. One of your networks won't allow a direct call — try both being on Wi-Fi.";
+    case "failed": return relay
+      ? "Couldn't connect. Neither a direct call nor Cloudflare's relay could get through — a VPN or a strict network is in the way."
+      : "Couldn't connect. One of your networks won't allow a direct call — try both being on Wi-Fi.";
     default: return "Call ended";
   }
 }
 
 /* The line under the name on the call card. */
-export function callStatus({ phase, outgoing, reason, error, name, since, now = Date.now() }) {
+export function callStatus({ phase, outgoing, reason, error, name, since, relay, now = Date.now() }) {
   switch (phase) {
     case "calling": return "Calling…";
     case "connecting": return "Connecting…";
     case "active": return talkClock(now - (since || now));
-    case "ended": return error || endedLabel(reason, outgoing, name);
+    case "ended": return error || endedLabel(reason, outgoing, name, relay);
     default: return "";
   }
 }
@@ -109,10 +142,11 @@ export function micError(err) {
 export const isMicError = (err) => /^(NotAllowed|NotFound|NotReadable|Security|Overconstrained)Error$/.test(err?.name || "");
 
 /* Waits for the browser to finish finding its routes, so the offer or answer
-   sent carries all of them and nothing more has to follow it. STUN answers in
-   well under a second; a slow network gets `ms`, then whatever has been found
-   goes. */
-export function iceGathered(pc, ms = 2500) {
+   sent carries all of them and nothing more has to follow it. STUN and the
+   relay both answer in well under a second on an ordinary connection; a slow
+   one — a VPN adds a leg to every question — gets `ms`, then whatever has
+   been found goes. */
+export function iceGathered(pc, ms = 4000) {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve) => {
     const done = () => {
