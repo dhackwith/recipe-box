@@ -4939,6 +4939,20 @@ export default function RecipeBox() {
     const t = setTimeout(() => failCall(), 30000);
     return () => clearTimeout(t);
   }, [call?.phase, call?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* Nobody picked up. The site ends a ring that has had its five rings, and
+     this page hears so when it next asks — but a page that can't reach the
+     site just then would otherwise sit on "Calling…" with no end in sight, so
+     it gives up by itself a moment after the ringing stops. */
+  useEffect(() => {
+    if (call?.phase !== "calling") return;
+    const t = setTimeout(() => {
+      const c = callRef.current;
+      if (c?.phase !== "calling") return;
+      endHere("missed", "", true);
+      if (c.id) callsCall("POST", "", { hangup: c.id }).catch(() => {});
+    }, RING_MS + 4000);
+    return () => clearTimeout(t);
+  }, [call?.phase, call?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (call?.phase !== "ended") return;
     const t = setTimeout(() => putCall((c) => (c?.phase === "ended" ? null : c)), 5000);

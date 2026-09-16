@@ -13,6 +13,7 @@ out unless they would notice it.
 
 ## 2026-09-15
 
+- **Calls stop ringing sooner.** A call now rings five times, about twenty seconds, instead of three quarters of a minute. If nobody picks up it says so and ends, and a missed call is left in the chat as before. Calling used to be able to sit on "Calling…" well past that if your phone or laptop briefly lost touch with the site; now it gives up on its own.
 - **Calls connect on networks that used to refuse them.** If your call kept saying "Connecting…" and then gave up, it was because your two devices couldn't reach each other directly — a VPN or a strict work or hotel network usually. Calls can now go through Cloudflare instead when that happens, using the same connection ordinary websites do. Calls that worked before are unchanged and still go straight between the two of you. Group voice channels get the same help.
 
 ## 2026-09-14

@@ -61,7 +61,7 @@ MESSAGES.batch = async (statements) => {
 const env = { MESSAGES };
 
 const { onRequest } = await import("../functions/api/calls.js");
-const { lapsed, hangupReason, isSdp, shapeCall, ensureCalls, RING_MS, STALE_MS, CHECK_IN_MS, KEEP_ENDED_MS, MISSED_TEXT, MISSED_VIDEO_TEXT } = await import("../shared/calls.js");
+const { lapsed, hangupReason, isSdp, shapeCall, ensureCalls, RING_MS, RING_EVERY_MS, RING_TIMES, STALE_MS, CHECK_IN_MS, KEEP_ENDED_MS, MISSED_TEXT, MISSED_VIDEO_TEXT } = await import("../shared/calls.js");
 const { talkClock, endedLabel, callStatus, micError, callsSupported, trackRings, liveRings, retryDelay } = await import("../src/calls.js");
 
 const call = async (method, query, token, body) => {
@@ -266,6 +266,8 @@ is("hanging up a ring you're getting declines it", hangupReason({ state: "ringin
 is("...one you made cancels it", hangupReason({ state: "ringing", callee: "nicholas" }, "devon"), "cancelled");
 is("...and a call going just ends", hangupReason({ state: "active", callee: "nicholas" }, "devon"), "ended");
 is("a call checks in at least twice before it could be counted as dropped", CHECK_IN_MS * 2 < STALE_MS, true);
+is("a call rings five times, four seconds apart, and no longer", [RING_TIMES, RING_EVERY_MS, RING_MS], [5, 4000, 20000]);
+is("...so a ring one ring short is still going", lapsed({ state: "ringing", at: new Date(now - RING_MS + RING_EVERY_MS).toISOString() }, now), null);
 const seenOnce = trackRings([], [{ id: 5 }], 1000);
 is("a ring remembers when this page first saw it", trackRings(seenOnce, [{ id: 5 }, { id: 6 }], 9000).map((r) => [r.id, r.seen]), [[5, 1000], [6, 9000]]);
 is("...and stops RING_MS after that, whether or not the page is still asking", liveRings(seenOnce, 1000 + RING_MS).length, 0);

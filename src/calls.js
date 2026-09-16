@@ -4,10 +4,10 @@
  * of setting a call up that doesn't need React.
  */
 
-import { STUN_SERVERS, RING_MS, CHECK_IN_MS, STALE_MS } from "../shared/calls.js";
+import { STUN_SERVERS, RING_MS, RING_EVERY_MS, RING_TIMES, CHECK_IN_MS, STALE_MS } from "../shared/calls.js";
 import { usableIce, hasRelay } from "../shared/turn.js";
 
-export { STUN_SERVERS, RING_MS, CHECK_IN_MS, STALE_MS, usableIce, hasRelay };
+export { STUN_SERVERS, RING_MS, RING_EVERY_MS, RING_TIMES, CHECK_IN_MS, STALE_MS, usableIce, hasRelay };
 export const CALLS_API = "/api/calls";
 export const TURN_API = "/api/turn";
 
@@ -160,11 +160,12 @@ export function iceGathered(pc, ms = 4000) {
   });
 }
 
-/* A ring, made on the spot rather than a sound file: two short bursts every
-   three seconds (and a buzz, where a phone can) for somebody calling you, a
-   long quiet tone every four while you wait for them. Browsers only let a page
-   make a sound once somebody has used it, so a page nobody has touched rings
-   silently — the card still shows. Returns the way to stop it. */
+/* A ring, made on the spot rather than a sound file: two short bursts (and a
+   buzz, where a phone can) for somebody calling you, a long quiet tone while
+   you wait for them — both every RING_EVERY_MS, and RING_TIMES times, which is
+   as long as a call rings for. Browsers only let a page make a sound once
+   somebody has used it, so a page nobody has touched rings silently — the card
+   still shows. Returns the way to stop it. */
 export function playTone(kind) {
   const Ctx = globalThis.AudioContext || globalThis.webkitAudioContext;
   /* A buzz too, but only once somebody has touched the page: before that the
@@ -200,7 +201,12 @@ export function playTone(kind) {
     else beep(t, 1.2, 0.05);
   };
   cycle();
-  const every = setInterval(cycle, kind === "incoming" ? 3000 : 4000);
+  let rung = 1;
+  const every = setInterval(() => {
+    if (rung >= RING_TIMES) { clearInterval(every); return; }
+    rung += 1;
+    cycle();
+  }, RING_EVERY_MS);
   return () => {
     clearInterval(every);
     if (kind === "incoming") buzz(0);
