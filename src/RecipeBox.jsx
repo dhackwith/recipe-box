@@ -2787,7 +2787,20 @@ const clock = (s) => {
   const sec = s % 60;
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
 };
-const durLabel = (s) => (s >= 3600 ? `${Math.round((s / 3600) * 10) / 10} hr` : s >= 60 ? `${Math.round(s / 60)} min` : `${s} sec`);
+
+/* The words on the timer button. It names what the timer will actually run
+   for, to the second: rounding 75 seconds to "1 min" reads as a promise the
+   timer does not keep, and the cook watching the step is the one who notices.
+   A whole unit stays short — "10 min", "2 hr" — and only a remainder earns a
+   second part. */
+const durLabel = (s) => {
+  const t = Math.max(0, Math.round(Number(s) || 0));
+  const parts = [];
+  if (t >= 3600) parts.push(`${Math.floor(t / 3600)} hr`);
+  if (Math.floor((t % 3600) / 60)) parts.push(`${Math.floor((t % 3600) / 60)} min`);
+  if (t % 60 || !parts.length) parts.push(`${t % 60} sec`);
+  return parts.join(" ");
+};
 
 /* ══════════════════════════════════════════════════════════════════
    The alarm
