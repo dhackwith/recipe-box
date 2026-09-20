@@ -11,6 +11,8 @@
  * that text has to carry each step's photos to wherever its line went.
  */
 
+import { parseSections } from "../shared/sections.js";
+
 export const STEP_PHOTO_MAX = 3;
 /* Wide enough to fill cooking mode on a laptop; small enough that a recipe
    with a photo on every step is a few megabytes, not a few dozen. */
@@ -24,9 +26,16 @@ export const stepImageUrl = (id) => `/api/storage?image=${encodeURIComponent(id)
 export const newStepPhotoId = () =>
   `sp${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 
-/** The steps a block of step text holds: one for each line with anything on it. */
-export const stepLines = (text) =>
-  String(text ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+/**
+ * The steps a block of step text holds: one for each line with anything on it.
+ *
+ * A "# For the sauce" heading line is not a step, so it is not counted here —
+ * which is the whole reason this goes through sections.js rather than doing
+ * its own split. Every photo is keyed by a step's position, and if a heading
+ * counted as a step then typing one in would slide every photo below it onto
+ * the wrong instruction.
+ */
+export const stepLines = (text) => parseSections(text).items;
 
 /** Every photo id on a recipe's steps. */
 export const stepPhotoIds = (steps) =>

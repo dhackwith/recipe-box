@@ -2,7 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from
 import { flushSync, createPortal } from "react-dom";
 /* ?raw inlines the file at build time — the button hands out exactly the
    template that is committed alongside this component. */
-import TEMPLATE_MD from "../claude-recipe-template.md?raw";
+import TEMPLATE_MD from "../recipe-template.md?raw";
 import CHANGELOG_MD from "../CHANGELOG.md?raw";
 /* Quantities live in units.js — one place that knows what "1½" means, rather
    than one here and one there that can drift apart. */
@@ -27,7 +27,7 @@ import { whenAt, whenFull, seenAt } from "./when.js";
 import { ZOOM_MAX, cropStart, cropMove, cropZoom, cropRect, cropView } from "./crop.js";
 /* The one thing the box will not keep — see shared/hate.js. */
 import { hasHate, newHate, HATE_MESSAGE } from "../shared/hate.js";
-import { asFavorites, emptyFavorites, isFavorite, setFavorite, mergeFavorites } from "./favorites.js";
+import { asFavorites, emptyFavorites, isFavorite, favoriteIds, setFavorite, mergeFavorites } from "./favorites.js";
 import { QUICK_EMOJI, DEFAULT_QUICK_EMOJI, asQuickEmoji, emojiOnly } from "./emoji.js";
 import { gifUrl, isGifMessage } from "../shared/gif.js";
 import {
@@ -38,6 +38,18 @@ import {
   cameraConstraints, cameraError, nextFacing, STATE_CHANNEL, stateMessage, readState, videoTransceiver, onScreen, gridFor,
   MIC_CONSTRAINTS, deviceChoices, withDevice, DEVICES_KEY, asDevicePrefs,
 } from "./video.js";
+/* Headings inside a recipe — "For the sauce" — kept beside the lists rather
+   than in them, so every tick, timer and step photo still points at its line. */
+import { asSections, bySection, parseSections, sectionLines, hasSections } from "../shared/sections.js";
+/* How long it takes, what sort of thing it is, and the order the shelf uses. */
+import {
+  asMinutes, totalMinutes, minutesLabel, timeParts, TIME_LIMITS,
+  COURSES, asCourse, courseLabel, CUISINE_HINTS, asCuisine,
+  SORTS, DEFAULT_SORT, isSort, sortRecipes,
+  emptyFilters, countFilters, matchesFilters, browseShelf,
+} from "../shared/shelf.js";
+/* The family's star count (functions/api/favorites.js) — how many, never who. */
+import { asIdList } from "../shared/tally.js";
 import { createLive, watcher, liveUrl, RESYNC_MS, RECONNECTING_MS } from "./live.js";
 import { VOICE_API, VOICE_HERE_MS, voiceCall, connectedWithin, createSpeakingMeter } from "./voice.js";
 import { AWAY_MS } from "../shared/presence.js";
@@ -2668,6 +2680,7 @@ const TOMBSTONE_LIFE = 7 * 24 * 60 * 60 * 1000;   // outlives a weekly shop
 
 /* Favorites (src/favorites.js): this device's copy, and the person's own key
    in the account, which syncs the same way the shopping list does. */
+const SORT_KEY = "rb-sort";
 const FAV_KEY = "rb-favorites";
 const FAV_SYNC_KEY = "favorites";
 
@@ -2991,6 +3004,24 @@ function resolvePlaceholders(text, ingredients) {
   return text.replace(/\{([A-Za-z0-9_-]+)\}/g, (whole, id) => byId.get(id) ?? whole);
 }
 
+/* Frontmatter can name the part each ingredient or step belongs to:
+     - group: "Sauce"
+       name: "2 tomatoes"
+   A run of items sharing a group becomes one heading above the first of them,
+   which is the shape sections.js keeps (and the shape a reader sees). A group
+   repeated later opens a second heading rather than reaching back, because
+   that is what the file said the order was. */
+function sectionsFromGroups(items, count) {
+  const out = [];
+  let last = null;
+  (Array.isArray(items) ? items : []).forEach((item, i) => {
+    const name = item && typeof item === "object" ? String(item.group ?? item.section ?? item.part ?? "").trim() : "";
+    if (name && name !== last) out.push({ at: i, name });
+    last = name;
+  });
+  return asSections(out, count);
+}
+
 function parseMarkdown(raw) {
   const { meta, body } = parseFrontmatter(raw);
 
@@ -3034,11 +3065,17 @@ function parseMarkdown(raw) {
       description: meta.description || meta.summary || "",
       servings: servings || meta.yield || "",
       time: meta.time || (minutes ? `${minutes} minutes` : "") || meta.total_time || "",
+      prepMinutes: meta.prep_time_minutes ?? meta.prep_minutes ?? meta.prep,
+      cookMinutes: meta.cook_time_minutes ?? meta.cook_minutes ?? meta.cook,
+      course: meta.course ?? meta.category,
+      cuisine: meta.cuisine,
       tags: [meta.tags, meta.category, meta.categories].flat().filter(Boolean),
       ingredients,
+      ingredientSections: sectionsFromGroups(metaIngredients, ingredients.length),
       equipment: meta.equipment || meta.tools || meta.appliances || [],
       nutrition: meta.nutrition || meta.nutrition_facts || meta.nutritional_facts,
       steps,
+      stepSections: sectionsFromGroups(metaSteps, steps.length),
       notes: [meta.yield && servings ? `Yield: ${meta.yield}` : "", prose].filter(Boolean).join("\n\n"),
     });
   }
@@ -3066,6 +3103,14 @@ function parseMarkdown(raw) {
         : "steps";
       continue;
     }
+    /* A heading that is not one of the recipe's own sections, inside the
+       ingredients or the method, is the recipe naming one of its parts — "###
+       For the sauce". It used to be flattened into an ingredient called "For
+       the sauce"; now it is kept as the heading it is, by passing the line
+       through for parseSections to pick up below. */
+    const sub = (section === "ingredients" || section === "steps") && /^#{1,6}\s+\S/.test(line);
+    if (sub) { (section === "ingredients" ? ingredients : steps).push(line.replace(/\**/g, "").trim()); continue; }
+
     if (section === "head") head.push(clean(line));
     else if (section === "ingredients") ingredients.push(clean(stripBullet(line)));
     else if (section === "equipment") equipment.push(clean(stripBullet(line)));
@@ -3073,17 +3118,26 @@ function parseMarkdown(raw) {
     else notes.push(clean(stripBullet(line)));
   }
 
+  const ing = parseSections(ingredients);
+  const method = parseSections(steps);
+
   return normalize({
     title: meta.title || head[0] || "",
     contributor: meta.contributor || meta.author || meta.from || "",
     description: meta.description || head.slice(1).join(" "),
     servings: meta.servings || meta.yield || "",
     time: meta.time || meta.totaltime || "",
+    prepMinutes: meta.prep_time_minutes ?? meta.prep_minutes ?? meta.prep,
+    cookMinutes: meta.cook_time_minutes ?? meta.cook_minutes ?? meta.cook,
+    course: meta.course ?? meta.category,
+    cuisine: meta.cuisine,
     tags: meta.tags || meta.categories || "",
-    ingredients,
+    ingredients: ing.items,
+    ingredientSections: ing.sections,
     equipment: meta.equipment || meta.tools || meta.appliances || equipment,
     nutrition: meta.nutrition || meta.nutrition_facts || meta.nutritional_facts,
-    steps,
+    steps: method.items,
+    stepSections: method.sections,
     notes: notes.join("\n"),
   });
 }
@@ -3173,12 +3227,22 @@ function normalize(r) {
     description: clean(r.description || r.summary || ""),
     servings: clean(r.servings || r.recipeYield || r.yield || ""),
     time: clean(r.time || r.totalTime || r.totaltime || ""),
+    /* Prep and cook as plain numbers beside the written line, so the shelf can
+       sort and "under 30 minutes" is a question it can answer (shared/shelf.js). */
+    prepMinutes: asMinutes(r.prepMinutes ?? r.prep_time_minutes ?? r.prepMinutesTotal),
+    cookMinutes: asMinutes(r.cookMinutes ?? r.cook_time_minutes),
+    course: asCourse(r.course ?? r.recipeCategory ?? r.category),
+    cuisine: asCuisine(r.cuisine ?? r.recipeCuisine),
     tags,
     imageUrl: typeof (r.image || r.photo || r.imageUrl) === "string" ? clean(r.image || r.photo || r.imageUrl) : "",
     thumb: typeof r.thumb === "string" ? r.thumb : "",
     ingredients,
     equipment,
     steps,
+    /* Checked against the list each one labels, so a heading can never be left
+       pointing past the end of a recipe that has since been edited. */
+    ingredientSections: asSections(r.ingredientSections, ingredients.length),
+    stepSections: asSections(r.stepSections, steps.length),
     notes: clean(r.notes || r.note || r.tips || ""),
     nutrition: normalizeNutrition(r.nutrition || r.nutritionalFacts || r.nutritionInformation),
     created: r.created || Date.now(),
@@ -3222,11 +3286,6 @@ function isoMinutes(v) {
   const mins = (+m[1] || 0) * 1440 + (+m[2] || 0) * 60 + (+m[3] || 0) + (+m[4] || 0) / 60;
   return mins > 0 ? Math.round(mins) : null;
 }
-const minutesLabel = (n) => {
-  const h = Math.floor(n / 60);
-  const m = n % 60;
-  return [h && `${h} ${h === 1 ? "hour" : "hours"}`, m && `${m} ${m === 1 ? "minute" : "minutes"}`].filter(Boolean).join(" ");
-};
 
 /* Yields arrive as "4", ["4", "4 servings"] or ["2", "2 dozen"]. The longest
    entry says the most — a bare "2" beside "2 dozen" means two dozen cookies,
@@ -3251,15 +3310,31 @@ function schemaTime(node) {
 
 /* Instructions come as one blob, a list of strings, HowToSteps, or HowToSections
    holding HowToSteps. Flatten all of it. A step's name is used as its title only
-   when it says something the text does not — many sites repeat the text there. */
+   when it says something the text does not — many sites repeat the text there.
+ *
+ * A HowToSection is the page's own heading over a run of steps — "Make the
+ * sauce" — and it is kept, as the position of the first step beneath it, so an
+ * imported recipe arrives laid out the way it was published rather than as one
+ * undifferentiated column. Returns { steps, sections }. */
 function schemaSteps(v) {
   const out = [];
+  const sections = [];
   const walk = (x) => {
     if (x == null) return;
     if (typeof x === "string") { out.push(...htmlToLines(x)); return; }
     if (Array.isArray(x)) { x.forEach(walk); return; }
     if (typeof x !== "object") return;
-    if (x.itemListElement) { walk(x.itemListElement); return; }
+    if (x.itemListElement) {
+      /* A section's own name goes above the steps it holds. A page that wraps
+         everything in one unnamed list is not a section, and neither is one
+         whose heading is the whole first instruction. */
+      const name = htmlToText(x.name || "");
+      if (name && name.length <= 60 && String(x["@type"] || "").includes("Section")) {
+        sections.push({ at: out.length, name });
+      }
+      walk(x.itemListElement);
+      return;
+    }
     const text = htmlToText(x.text || x.description || x.name || "");
     if (!text) return;
     const name = htmlToText(x.name || "");
@@ -3267,7 +3342,7 @@ function schemaSteps(v) {
     out.push(titled ? { title: name, text } : text);
   };
   walk(v);
-  return out;
+  return { steps: out, sections: asSections(sections, out.length) };
 }
 
 function schemaImage(img, base) {
@@ -3304,6 +3379,7 @@ function fromSchemaRecipe(node, pageUrl) {
      offers neither. */
   const primary = [...words(node.recipeCategory), ...words(node.recipeCuisine)];
   const tags = [...new Set(primary.length ? primary : words(node.keywords).filter((k) => k.split(" ").length <= 2))].slice(0, 6);
+  const method = schemaSteps(node.recipeInstructions);
   const nutrition = {};
   if (node.nutrition && typeof node.nutrition === "object") {
     for (const [k, v] of Object.entries(node.nutrition)) {
@@ -3323,9 +3399,18 @@ function fromSchemaRecipe(node, pageUrl) {
     description: htmlToText(node.description),
     servings: schemaServings(node.recipeYield ?? node.yield),
     time: schemaTime(node),
+    /* The two figures every recipe site publishes and the box never kept. */
+    prepMinutes: isoMinutes(node.prepTime),
+    cookMinutes: isoMinutes(node.cookTime),
+    /* These used to be flattened into tags and nothing else. They stay in the
+       tags — a filter chip for "italian" is still wanted — but they now also
+       fill the fields the shelf browses by. */
+    course: asCourse([].concat(node.recipeCategory ?? []).map(htmlToText).join(", ")),
+    cuisine: asCuisine([].concat(node.recipeCuisine ?? []).map(htmlToText).join(", ")),
     tags,
     ingredients: [].concat(node.recipeIngredient ?? node.ingredients ?? []).map(htmlToText).filter(Boolean),
-    steps: schemaSteps(node.recipeInstructions),
+    steps: method.steps,
+    stepSections: method.sections,
     /* the few sites that do list equipment publish it as tool */
     equipment: [].concat(node.tool ?? []).map((t) => htmlToText(typeof t === "string" ? t : t?.name || t?.text)).filter(Boolean),
     nutrition: Object.keys(nutrition).length ? nutrition : null,
@@ -3423,7 +3508,7 @@ const UNFILED = "\u0000unfiled";   // sentinel: recipes with no author named
    was refused before it began. */
 const isFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
 
-const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "", nutrition: null, photoChoices: [], photoPick: "", stepPhotos: [] };
+const BLANK = { thumb: "", full: null, photoTouched: false, title: "", contributor: "", description: "", servings: "", time: "", prepText: "", cookText: "", course: "", cuisine: "", tagText: "", ingredientText: "", equipmentText: "", stepText: "", notes: "", nutrition: null, photoChoices: [], photoPick: "", stepPhotos: [] };
 
 /* ══════════════════════════════════════════════════════════════════
    Shared bits
@@ -3582,6 +3667,15 @@ const menuRow = (on) => ({
   font: `500 14px/1.3 ${UI}`, background: on ? "var(--card-lift)" : "transparent", color: on ? "var(--card-accent)" : "var(--card-text)",
 });
 const menuLabel = { font: `600 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--card-muted)", margin: "4px 4px 8px" };
+/* One choice in a row of them — a tag, a course, a cuisine, a time. Filled
+   when it is on, outlined when it is not, and pressing an on one turns it off,
+   which is what makes a row of these its own undo. */
+const pillStyle = (on) => ({
+  font: `500 12.5px/1 ${UI}`, padding: "7px 12px", borderRadius: 999, cursor: "pointer",
+  border: `1px solid ${on ? "var(--card-accent)" : "var(--card-edge)"}`,
+  background: on ? "var(--card-accent)" : "transparent",
+  color: on ? "var(--card-bg)" : "var(--card-text)",
+});
 /* the toolbar buttons on the page, matched to the search box beside them */
 const toolbarButton = {
   display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 12, minHeight: 50,
@@ -3606,6 +3700,10 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
   const step = stepParts(steps[stepIndex]);
   const secs = stepDuration(steps[stepIndex]);
   const done = marks.steps.includes(stepIndex);
+  /* Which part of the recipe this step belongs to — "For the sauce". Worth a
+     line here more than anywhere: one step fills the screen, so without it
+     there is nothing to say you have moved on to the icing. */
+  const part = bySection(steps, recipe.stepSections).find((run) => run.items.some((it) => it.index === stepIndex))?.name || "";
   return (
     <div
       className="rb-appear"
@@ -3620,7 +3718,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
         <div>
           <p style={{ font: `400 17px/1.3 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: 0 }}>{recipe.title}</p>
           <p style={{ font: `500 12px/1.4 ${UI}`, color: "rgba(var(--on-page), calc(.55 * var(--ink-k)))", margin: "2px 0 0" }}>
-            Step {stepIndex + 1} of {steps.length}
+            Step {stepIndex + 1} of {steps.length}{part ? ` · ${part}` : ""}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -3712,8 +3810,19 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
           <div style={{ maxWidth: 780, margin: "34px auto 0", borderTop: "1px solid rgba(var(--on-page), calc(.2 * var(--ink-k)))", paddingTop: 20 }}>
             <p style={{ font: `400 19px/1.2 ${DISPLAY}`, color: "rgb(var(--on-page))", margin: "0 0 4px" }}>Ingredients</p>
             <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.5 * var(--ink-k)))", margin: "0 0 8px" }}>Tap each one as it goes in.</p>
+            {/* Headings run down the columns with the lines they label, so the
+                sauce's ingredients are not read as part of the dough's. */}
             <ul style={{ listStyle: "none", padding: 0, margin: 0, columns: "220px 2", columnGap: 30 }}>
-              {recipe.ingredients.map((ing, i) => {
+              {bySection(recipe.ingredients, recipe.ingredientSections).flatMap((run) => [
+                ...(run.name ? [(
+                  <li key={`h-${run.at}`} style={{ breakInside: "avoid", breakAfter: "avoid" }}>
+                    <p style={{
+                      font: `600 10.5px/1 ${UI}`, letterSpacing: ".13em", textTransform: "uppercase",
+                      color: "rgba(var(--on-page), calc(.55 * var(--ink-k)))", margin: run.at ? "16px 0 4px" : "0 0 4px",
+                    }}>{run.name}</p>
+                  </li>
+                )] : []),
+                ...run.items.map(({ value: ing, index: i }) => {
                 const got = marks.ing.includes(i);
                 return (
                   <li key={i} style={{ breakInside: "avoid" }}>
@@ -3731,7 +3840,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
                     </button>
                   </li>
                 );
-              })}
+              })])}
             </ul>
             {recipe.equipment?.length > 0 && (
               <>
@@ -3786,11 +3895,26 @@ export default function RecipeBox() {
   }, []);
   const [openId, setOpenId] = useState(null);
   const [query, setQuery] = useState("");
-  const [tagFilter, setTagFilter] = useState(null);
+  /* Tags are a list and they are ANDed: picking "vegetarian" and "quick" means
+     both, which is what narrowing a list is for. It used to be one at a time. */
+  const [tagFilters, setTagFilters] = useState([]);
+  const [courseFilter, setCourseFilter] = useState("");
+  const [cuisineFilter, setCuisineFilter] = useState("");
+  const [maxMinutes, setMaxMinutes] = useState(null);
   /* only the recipes this person has starred */
   const [favOnly, setFavOnly] = useState(false);
+  const [sort, setSort] = useState(() => {
+    /* Kept on the device rather than in the account: which order you like to
+       read the shelf in is a habit of the screen you are at, and it costs
+       nothing to remember. */
+    try { const v = localStorage.getItem(SORT_KEY); return isSort(v) ? v : DEFAULT_SORT; }
+    catch { return DEFAULT_SORT; }
+  });
   const [activeBox, setActiveBox] = useState(null);   // null = every box
   const [scope, setScope] = useState("all");
+  useEffect(() => {
+    try { localStorage.setItem(SORT_KEY, sort); } catch { /* it just won't be remembered */ }
+  }, [sort]);
   /* Mirrored locally, like the colour theme, so the first paint is already in
      the right mode. With nothing stored, follow the device's own setting. */
   const [theme, setTheme] = useState(() => {
@@ -3833,7 +3957,7 @@ export default function RecipeBox() {
   const photoRef = useRef(null);
   /* Snapshot of the list the recipe was opened from, so Back returns to the
      same search, scope, tag and box — not to a reset list. */
-  const listStateRef = useRef({ query: "", scope: "all", tagFilter: null, activeBox: null });
+  const listStateRef = useRef({ query: "", scope: "all", filters: emptyFilters(), activeBox: null });
   /* How far down the box somebody had scrolled when they opened a recipe, and
      whether the next render of the list is the one that should go back there.
      Changing view does not move the page by itself: opening the fourth recipe
@@ -5500,6 +5624,10 @@ export default function RecipeBox() {
   /* the next step to do — but only once one is done; before that nothing is "current" */
   const currentStep = openRecipe && marks.steps.length ? openRecipe.steps.findIndex((_, k) => !marks.steps.includes(k)) : -1;
   const allTags = Array.from(new Set(box.recipes.flatMap((r) => r.tags || []))).sort();
+  /* Only what the box actually holds is offered. A menu of thirteen courses
+     under a box of nine puddings would be a menu of ten dead ends. */
+  const shelfCourses = COURSES.filter((c) => box.recipes.some((r) => r.course === c.id));
+  const allCuisines = Array.from(new Set(box.recipes.map((r) => r.cuisine).filter(Boolean))).sort();
   const allAuthors = Array.from(
     new Set([...(box.authors || DEFAULT_AUTHORS), ...box.recipes.map((r) => r.contributor).filter(Boolean)])
   ).sort();
@@ -5511,7 +5639,7 @@ export default function RecipeBox() {
     if (view === "plan" || view === "shopping" || view === "today") {
       toolTrail.current = trailTo(toolTrail.current, view, "detail");
     }
-    listStateRef.current = { query, scope, tagFilter, activeBox };
+    listStateRef.current = { query, scope, filters, activeBox };
     listScrollRef.current = window.scrollY;
     setView("detail", () => {
       setOpenId(id);
@@ -5532,7 +5660,7 @@ export default function RecipeBox() {
     const from = listStateRef.current;
     setQuery(from.query);
     setScope(from.scope);
-    setTagFilter(from.tagFilter);
+    applyFilters(from.filters);
     setActiveBox(from.activeBox);
     setView("list");
     restoreScrollRef.current = listScrollRef.current;
@@ -5556,7 +5684,7 @@ export default function RecipeBox() {
   /* what Back will say, described from the snapshot rather than current state */
   const backLabel = () => {
     const from = listStateRef.current;
-    if (from.query || from.tagFilter) return "Back to results";
+    if (from.query || countFilters(from.filters)) return "Back to results";
     if (from.activeBox === UNFILED) return "Back to unattributed";
     if (from.activeBox) return `Back to ${from.activeBox}'s recipes`;
     return "Back to all recipes";
@@ -5741,6 +5869,46 @@ export default function RecipeBox() {
     try { localStorage.setItem(FAV_KEY, JSON.stringify(f)); } catch { /* the account's copy still follows */ }
   };
 
+  /* ── How many people kept each recipe ────────────────────────────────
+     Devon's answer to star ratings: with a dozen people, an average of three
+     scores says almost nothing, but "four of us kept this" says plenty. Your
+     own stars stay private — only the totals are served, so the count never
+     says whose they are (functions/api/favorites.js, shared/tally.js). */
+  const [lovedCounts, setLovedCounts] = useState({});
+  /* Nothing feeds this yet: the made-it log is stored per note, so counting it
+     would mean reading every note on the site. The sort it drives hides itself
+     until something does, so it costs nothing to leave ready. */
+  const [cookedCounts] = useState({});
+
+  const shareFavCount = useCallback(async (favs) => {
+    try {
+      const res = await fetch("/api/favorites", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: asIdList([...favoriteIds(favs)]) }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.counts) setLovedCounts(data.counts);
+    } catch {
+      /* The count is decoration on top of a working shelf. If it cannot be
+         written, the stars themselves are still safe in their own key. */
+    }
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/favorites");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (alive && data && data.counts) setLovedCounts(data.counts);
+      } catch { /* the shelf reads perfectly well without it */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   const syncFavorites = useCallback(async () => {
     if (favSyncing.current) { favAgain.current = true; return; }
     favSyncing.current = true;
@@ -5762,6 +5930,10 @@ export default function RecipeBox() {
          nothing when the account already says the same. */
       const differs = theirs ? JSON.stringify(merged) !== JSON.stringify(theirs) : Object.keys(merged.stars).length > 0;
       if (differs) await window.storage.set(FAV_SYNC_KEY, JSON.stringify(merged));
+      /* The flattened copy the family's count is added up from: just the ids,
+         written after the merge has settled so it reflects what was actually
+         kept. Only totals ever come back — see functions/api/favorites.js. */
+      shareFavCount(merged);
     } catch {
       /* Offline, or not signed in: this device's stars stand, and the next
          change or the next visit tries again. */
@@ -6174,6 +6346,7 @@ export default function RecipeBox() {
   };
   const openToday = () => openTool("today");
   const openPlan = () => openTool("plan");
+  const openBrowse = () => openTool("browse");
   const openShopping = () => {
     setConfirmClear(false);
     openTool("shopping");
@@ -6186,6 +6359,7 @@ export default function RecipeBox() {
   const BACK_TO = {
     list: "Back to recipes", detail: "Back to the recipe", form: "Back to editing", import: "Back to the import",
     plan: "Back to the meal plan", shopping: "Back to the shopping list", today: "Back to the tracker",
+    browse: "Back to browsing",
   };
   /* what a tool page's back button will say: wherever the path actually leads */
   const toolBackLabel = () => {
@@ -6375,11 +6549,38 @@ export default function RecipeBox() {
     const url = URL.createObjectURL(new Blob([TEMPLATE_MD], { type: "text/markdown" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "claude-recipe-template.md";
+    a.download = "recipe-template.md";
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+
+  /* Everything the Filters panel is asking for, in the one shape shelf.js
+     understands, so the rules live in a module with tests rather than inline
+     in a render. The search box and the box on the shelf stay separate: those
+     are not narrowings, they are where you are. */
+  const filters = { tags: tagFilters, course: courseFilter, cuisine: cuisineFilter, maxMinutes, favOnly };
+  const applyFilters = (f) => {
+    const next = { ...emptyFilters(), ...(f || {}) };
+    setTagFilters(next.tags);
+    setCourseFilter(next.course);
+    setCuisineFilter(next.cuisine);
+    setMaxMinutes(next.maxMinutes);
+    setFavOnly(next.favOnly);
+  };
+  const clearFilters = () => applyFilters(emptyFilters());
+  const toggleTag = (t) =>
+    setTagFilters((was) => (was.includes(t) ? was.filter((x) => x !== t) : [...was, t]));
+  /* A course or cuisine on an open recipe is a way back to the shelf as well
+     as a label: tapping it shows everything else of that kind. */
+  const openShelfWith = (f) => {
+    setQuery("");
+    setScope("all");
+    setActiveBox(null);
+    applyFilters(f);
+    toolTrail.current = [];
+    setView("list", () => window.scrollTo(0, 0));
   };
 
   /* Comma-separated terms are ANDed: "lime, tequila" means both, not either. */
@@ -6393,12 +6594,23 @@ export default function RecipeBox() {
     );
   };
 
-  const visible = box.recipes.filter((r) => {
+  const matching = box.recipes.filter((r) => {
     const hay = haystack(r);
     const hitQ = !terms.length || terms.every((t) => hay.includes(t));
     const inBox =
       activeBox === null ? true : activeBox === UNFILED ? !r.contributor : r.contributor === activeBox;
-    return hitQ && (!tagFilter || (r.tags || []).includes(tagFilter)) && (!favOnly || isFavorite(favorites, r.id)) && inBox;
+    return hitQ && inBox && matchesFilters(r, filters, (id) => isFavorite(favorites, id));
+  });
+  /* Put in order last, so the order is of what is actually on screen. The box
+     itself is left alone — it is stored newest-first and stays that way. */
+  const visible = sortRecipes(matching, sort, { loved: lovedCounts });
+  /* A sort with nothing to sort on is not offered: no Most loved until
+     somebody has starred something. */
+  const sortChoices = SORTS.filter((s2) => {
+    if (s2.needs === "loved") return Object.keys(lovedCounts).length > 0;
+    if (s2.needs === "cooked") return Object.keys(cookedCounts).length > 0;
+    if (s2.needs === "time") return box.recipes.some((r) => totalMinutes(r) != null);
+    return true;
   });
   /* how many recipes still in the box are starred — a star on a recipe since
      removed is not counted */
@@ -6516,7 +6728,7 @@ export default function RecipeBox() {
 
   /* form */
   const startAdd = () => {
-    listStateRef.current = { query, scope, tagFilter, activeBox };
+    listStateRef.current = { query, scope, filters, activeBox };
     const prefill = activeBox && activeBox !== UNFILED ? { ...BLANK, contributor: activeBox } : BLANK;
     setForm(prefill);
     setPasteText("");
@@ -6532,8 +6744,14 @@ export default function RecipeBox() {
       thumb: r.thumb || "", full: null, photoTouched: false,
       title: r.title, contributor: r.contributor || "", description: r.description || "",
       servings: r.servings || "", time: r.time || "", tagText: (r.tags || []).join(", "),
-      ingredientText: r.ingredients.join("\n"), equipmentText: (r.equipment || []).join("\n"),
-      stepText: r.steps.map(stepLine).join("\n"), notes: r.notes || "", nutrition: r.nutrition || null,
+      prepText: r.prepMinutes ? String(r.prepMinutes) : "", cookText: r.cookMinutes ? String(r.cookMinutes) : "",
+      course: r.course || "", cuisine: r.cuisine || "",
+      /* Headings go back into the boxes as the "# Sauce" lines they were typed
+         as, so opening a recipe to edit shows it the way it was written. */
+      ingredientText: sectionLines(r.ingredients, r.ingredientSections).join("\n"),
+      equipmentText: (r.equipment || []).join("\n"),
+      stepText: sectionLines(r.steps, r.stepSections, stepLine).join("\n"),
+      notes: r.notes || "", nutrition: r.nutrition || null,
       stepPhotos: r.steps.map((s) => stepPhotoIds([s]).map((id) => ({ id }))),
     });
     setStepPicking(null);
@@ -6545,12 +6763,19 @@ export default function RecipeBox() {
       ...f,
       title: p.title || f.title, contributor: p.contributor || f.contributor, description: p.description || f.description,
       servings: p.servings || f.servings, time: p.time || f.time,
+      prepText: p.prepMinutes ? String(p.prepMinutes) : f.prepText,
+      cookText: p.cookMinutes ? String(p.cookMinutes) : f.cookText,
+      course: p.course || f.course, cuisine: p.cuisine || f.cuisine,
       tagText: p.tags?.length ? p.tags.join(", ") : f.tagText,
-      ingredientText: p.ingredients.length ? p.ingredients.join("\n") : f.ingredientText,
+      ingredientText: p.ingredients.length
+        ? sectionLines(p.ingredients, p.ingredientSections).join("\n") : f.ingredientText,
       equipmentText: p.equipment?.length ? p.equipment.join("\n") : f.equipmentText,
-      stepText: p.steps.length ? p.steps.map(stepLine).join("\n") : f.stepText,
+      stepText: p.steps.length ? sectionLines(p.steps, p.stepSections, stepLine).join("\n") : f.stepText,
+      /* Matched on the steps themselves, never on the heading lines between
+         them, so an import that brings its own headings doesn't shuffle the
+         photos already on the form. */
       stepPhotos: p.steps.length
-        ? carryStepPhotos(stepLines(f.stepText), stepLines(p.steps.map(stepLine).join("\n")), f.stepPhotos || [])
+        ? carryStepPhotos(stepLines(f.stepText), p.steps.map(stepLine), f.stepPhotos || [])
         : f.stepPhotos,
       notes: p.notes || f.notes, nutrition: p.nutrition || f.nutrition,
     }));
@@ -6749,6 +6974,9 @@ export default function RecipeBox() {
     const refused = [
       ["name", form.title], ["author", form.contributor], ["line about it", form.description],
       ["servings", form.servings], ["time", form.time], ["tags", form.tagText],
+      /* Course comes from a fixed list, so there is nothing to check there;
+         cuisine is typed, and the headings inside the two lists are typed too. */
+      ["cuisine", form.cuisine],
       ["ingredients", form.ingredientText], ["equipment", form.equipmentText],
       ["steps", form.stepText], ["notes", form.notes],
     ].find(([, text]) => hasHate(text));
@@ -6758,6 +6986,10 @@ export default function RecipeBox() {
     }
     importRun.current += 1;
     photoPickRun.current += 1;
+    /* The two lists carry their own headings in the text — "# For the sauce" —
+       and they come out here, beside the lines rather than among them. */
+    const ing = parseSections(form.ingredientText);
+    const method = parseSections(form.stepText);
     const recipe = {
       id: editingId || `r-${Date.now()}`,
       thumb: form.thumb || "",
@@ -6767,14 +6999,20 @@ export default function RecipeBox() {
       description: form.description.trim(),
       servings: form.servings.trim(),
       time: form.time.trim(),
+      prepMinutes: asMinutes(form.prepText),
+      cookMinutes: asMinutes(form.cookText),
+      course: asCourse(form.course),
+      cuisine: asCuisine(form.cuisine),
       tags: form.tagText.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
-      ingredients: form.ingredientText.split("\n").map((l) => l.trim()).filter(Boolean),
+      ingredients: ing.items,
+      ingredientSections: ing.sections,
       equipment: form.equipmentText.split("\n").map((l) => l.trim()).filter(Boolean),
-      steps: stepLines(form.stepText).map((line, i) => {
+      steps: method.items.map((line, i) => {
         const step = stepParts(line);
         const ids = (form.stepPhotos?.[i] || []).slice(0, STEP_PHOTO_MAX).map((p) => p.id);
         return ids.length ? { ...step, photos: ids } : step;
       }),
+      stepSections: method.sections,
       notes: form.notes.trim(),
       created: editingId ? box.recipes.find((r) => r.id === editingId)?.created : Date.now(),
       /* carried on the form, so it survives an edit and a pasted import alike */
@@ -7623,6 +7861,27 @@ export default function RecipeBox() {
     .rb-stats > div:last-child { border-right: 0; }
     .rb-stats dt { font: 600 9.5px/1 ${UI}; letter-spacing: .12em; text-transform: uppercase; color: var(--card-muted); margin: 0 0 6px; }
     .rb-stats dd { font: 400 16px/1 ${DISPLAY}; margin: 0; color: var(--card-text); }
+    /* The heading over one part of a recipe — "For the sauce". Set small and
+       lettered rather than large, because it labels a run of lines; it must not
+       compete with "Ingredients" and "Method" above it. The first one in a list
+       has no rule above it, since the section heading is right there. */
+    .rb-part {
+      font: 600 10.5px/1 ${UI}; letter-spacing: .13em; text-transform: uppercase;
+      color: var(--card-accent); margin: 22px 0 8px; padding-top: 14px;
+      border-top: 1px solid var(--card-edge);
+    }
+    .rb-part:first-child, div:first-child > .rb-part { margin-top: 4px; padding-top: 0; border-top: 0; }
+
+    /* Browse: the box's table of contents, a card per course. */
+    .rb-browse { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+    .rb-browse-shelf { border: 1px solid var(--card-edge); border-radius: 3px; padding: 16px 18px 18px; background: var(--card-lift); }
+    .rb-browse-course {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%;
+      background: none; border: none; padding: 0; cursor: pointer; text-align: left;
+      font: 400 21px/1.2 ${DISPLAY}; color: var(--card-text);
+    }
+    .rb-browse-course:hover { color: var(--card-accent); }
+    .rb-browse-course .rb-num { font-size: 15px; }
     .rb-detail { display: grid; grid-template-columns: 1fr; gap: 34px; }
     @media (min-width: 760px) { .rb-detail { grid-template-columns: 292px 1fr; gap: 52px; } }
     /* A tile is a photograph with its name under it — no card, no border, no
@@ -8024,6 +8283,10 @@ export default function RecipeBox() {
               <span aria-hidden style={{ marginRight: 7 }}>◷</span>Daily nutrition{todayTotals.calories ? ` (${todayTotals.calories})` : ""}
             </button>
 
+            <button className="rb-btn rb-focus" style={btnGhost} onClick={openBrowse}>
+              <span aria-hidden style={{ marginRight: 7 }}>☰</span>Browse
+            </button>
+
             <button className="rb-btn rb-focus" style={btnPrimary} onClick={startAdd}>Add a recipe</button>
           </div>
         </div>
@@ -8053,7 +8316,7 @@ export default function RecipeBox() {
                 ...(unfiled ? [{ key: UNFILED, name: "No author", count: unfiled }] : []),
               ];
               const current = shelf.find((b) => b.key === activeBox) || shelf[0];
-              const activeFilters = (scope !== "all" ? 1 : 0) + (tagFilter ? 1 : 0) + (favOnly ? 1 : 0);
+              const activeFilters = (scope !== "all" ? 1 : 0) + countFilters(filters);
               const chip = (key, label, onClear) => (
                 <button
                   key={key}
@@ -8199,24 +8462,70 @@ export default function RecipeBox() {
                             </span>
                             <span style={{ font: `500 12px/1 ${UI}`, color: "var(--card-muted)" }}>{favCount}</span>
                           </button>
+                          {/* One tap on an already-chosen figure clears it, so
+                              every row here is its own undo. */}
+                          <p style={menuLabel}>Ready in</p>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 2px", marginBottom: 14 }}>
+                            {TIME_LIMITS.map((t) => {
+                              const on = maxMinutes === t.id;
+                              return (
+                                <button
+                                  key={t.id}
+                                  className="rb-focus"
+                                  aria-pressed={on}
+                                  onClick={() => setMaxMinutes(on ? null : t.id)}
+                                  style={pillStyle(on)}
+                                >
+                                  {t.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {shelfCourses.length > 0 && (
+                            <>
+                              <p style={menuLabel}>Course</p>
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 2px", marginBottom: 14 }}>
+                                {shelfCourses.map((c) => {
+                                  const on = courseFilter === c.id;
+                                  return (
+                                    <button key={c.id} className="rb-focus" aria-pressed={on}
+                                      onClick={() => setCourseFilter(on ? "" : c.id)} style={pillStyle(on)}>
+                                      {c.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
+
+                          {allCuisines.length > 0 && (
+                            <>
+                              <p style={menuLabel}>Cuisine</p>
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 2px", marginBottom: 14 }}>
+                                {allCuisines.map((c) => {
+                                  const on = cuisineFilter === c;
+                                  return (
+                                    <button key={c} className="rb-focus" aria-pressed={on}
+                                      onClick={() => setCuisineFilter(on ? "" : c)} style={pillStyle(on)}>
+                                      {c}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
+
                           {allTags.length > 0 && (
                             <>
                               <p style={menuLabel}>Tags</p>
                               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 2px" }}>
+                                {/* Several at once, and all of them have to match. */}
                                 {allTags.map((t) => {
-                                  const on = tagFilter === t;
+                                  const on = tagFilters.includes(t);
                                   return (
-                                    <button
-                                      key={t}
-                                      className="rb-focus"
-                                      aria-pressed={on}
-                                      onClick={() => setTagFilter(on ? null : t)}
-                                      style={{
-                                        font: `500 12.5px/1 ${UI}`, padding: "7px 12px", borderRadius: 999, cursor: "pointer",
-                                        border: `1px solid ${on ? "var(--card-accent)" : "var(--card-edge)"}`,
-                                        background: on ? "var(--card-accent)" : "transparent", color: on ? "var(--card-bg)" : "var(--card-text)",
-                                      }}
-                                    >
+                                    <button key={t} className="rb-focus" aria-pressed={on}
+                                      onClick={() => toggleTag(t)} style={pillStyle(on)}>
                                       {t}
                                     </button>
                                   );
@@ -8225,10 +8534,49 @@ export default function RecipeBox() {
                             </>
                           )}
                           {activeFilters > 0 && (
-                            <button className="rb-focus" onClick={() => { setScope("all"); setTagFilter(null); setFavOnly(false); }} style={{ ...linkButton, margin: "14px 4px 2px", fontSize: 13 }}>
+                            <button className="rb-focus" onClick={() => { setScope("all"); clearFilters(); }} style={{ ...linkButton, margin: "14px 4px 2px", fontSize: 13 }}>
                               Clear filters
                             </button>
                           )}
+                        </>
+                      )}
+                    </Popover>
+
+                    {/* The order the shelf reads in, kept on this device. Its
+                        own control rather than another row inside Filters:
+                        sorting is not narrowing, and mixing the two is how you
+                        end up with "3 filters" meaning "sorted by name". */}
+                    <Popover
+                      align="right"
+                      width={240}
+                      label="Sort"
+                      trigger={({ open, toggle }) => (
+                        <button className="rb-focus" onClick={toggle} aria-expanded={open} aria-haspopup="dialog" style={{ ...toolbarButton, gap: 9 }}>
+                          <span style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                            <span style={{ font: `500 11px/1 ${UI}`, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(var(--on-page), calc(.45 * var(--ink-k)))" }}>Sort</span>
+                            <span style={{ font: `600 13.5px/1 ${UI}`, color: "rgb(var(--on-page))", whiteSpace: "nowrap" }}>
+                              {SORTS.find((s2) => s2.id === sort)?.label || "Newest first"}
+                            </span>
+                          </span>
+                          <span aria-hidden style={{ fontSize: 12, color: "rgba(var(--on-page), calc(.6 * var(--ink-k)))" }}>▾</span>
+                        </button>
+                      )}
+                    >
+                      {(close) => (
+                        <>
+                          <p style={menuLabel}>Sort by</p>
+                          {sortChoices.map((s2) => (
+                            <button
+                              key={s2.id}
+                              className="rb-focus"
+                              aria-pressed={sort === s2.id}
+                              onClick={() => { setSort(s2.id); close(); }}
+                              style={menuRow(sort === s2.id)}
+                            >
+                              <span>{s2.label}</span>
+                              {sort === s2.id && <span aria-hidden style={{ color: "var(--card-accent)" }}>✓</span>}
+                            </button>
+                          ))}
                         </>
                       )}
                     </Popover>
@@ -8239,7 +8587,10 @@ export default function RecipeBox() {
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
                       {scope !== "all" && chip("scope", `Searching ${{ ingredient: "ingredients", author: "authors", equipment: "equipment" }[scope]}`, () => setScope("all"))}
                       {favOnly && chip("fav", "★ Favorites", () => setFavOnly(false))}
-                      {tagFilter && chip("tag", tagFilter, () => setTagFilter(null))}
+                      {maxMinutes && chip("time", TIME_LIMITS.find((t) => t.id === maxMinutes)?.label || `Under ${maxMinutes} minutes`, () => setMaxMinutes(null))}
+                      {courseFilter && chip("course", courseLabel(courseFilter), () => setCourseFilter(""))}
+                      {cuisineFilter && chip("cuisine", cuisineFilter, () => setCuisineFilter(""))}
+                      {tagFilters.map((t) => chip(`tag-${t}`, t, () => toggleTag(t)))}
                     </div>
                   )}
 
@@ -8264,7 +8615,7 @@ export default function RecipeBox() {
                     ? "You haven't starred any recipes yet. Tap the star on a recipe to keep it here."
                     : favOnly
                     ? "None of your favorites match that."
-                    : activeBox && activeBox !== UNFILED && !query && !tagFilter
+                    : activeBox && activeBox !== UNFILED && !query && !countFilters(filters)
                     ? `${activeBox} hasn't added a recipe yet. Anything you add from here gets filed to this box.`
                     : "No recipe matches that search."}
                 </p>
@@ -8297,7 +8648,20 @@ export default function RecipeBox() {
                         <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "rgba(var(--on-page), calc(.6 * var(--ink-k)))", margin: "7px 0 0", display: "flex", gap: 13, flexWrap: "wrap" }}>
                           <span>{r.steps.length} steps</span>
                           <span>{r.ingredients.length} ingredients</span>
-                          {r.time && <span>{r.time}</span>}
+                          {/* Prep and cook added up when it knows them, and the
+                              written line when that is all there is. */}
+                          {(() => {
+                            const mins = totalMinutes(r);
+                            const numbers = r.prepMinutes || r.cookMinutes;
+                            return numbers && mins ? <span>{minutesLabel(mins)}</span> : r.time ? <span>{r.time}</span> : null;
+                          })()}
+                          {/* How many of the family kept it. Shown from two up:
+                              one star is a person's own taste, not a verdict. */}
+                          {lovedCounts[r.id] > 1 && (
+                            <span style={{ color: "#E0A21B" }} title={`${lovedCounts[r.id]} people keep this as a favorite`}>
+                              ★ {lovedCounts[r.id]}
+                            </span>
+                          )}
                         </p>
                       </article>
                       <button
@@ -8432,6 +8796,82 @@ export default function RecipeBox() {
         )}
 
         {/* ═══════ THE WEEK'S PLAN ═══════ */}
+        {/* ══ Browse: the whole box by course, and the cuisines inside each ══
+            The shelf's table of contents. Filters answer "narrow what I am
+            looking at"; this answers "what is in here at all", which is the
+            question you have when you do not yet know what you want. */}
+        {!loading && view === "browse" && (() => {
+          const shelves = browseShelf(box.recipes);
+          const goCourse = (id) => openShelfWith({ course: id });
+          return (
+            <article className="rb-sheet" style={{ ...sheet, maxWidth: 1040 }}>
+              <Grain card />
+              <div className="rb-pad" style={{ position: "relative", padding: "32px 30px 36px" }}>
+                <button
+                  className="rb-btn rb-focus rb-noprint"
+                  onClick={leaveShopping}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 16,
+                    background: "transparent", border: "none", padding: "4px 0",
+                    color: "var(--card-accent)", font: `600 13.5px/1 ${UI}`,
+                  }}
+                >
+                  <span aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>←</span>
+                  {toolBackLabel()}
+                </button>
+
+                <h2 style={{ font: `300 30px/1.2 ${DISPLAY}`, margin: "0 0 6px", color: "var(--card-text)" }}>Browse the box</h2>
+                <p style={{ font: `400 14px/1.6 ${UI}`, color: "var(--card-muted)", margin: "0 0 26px", maxWidth: "52ch" }}>
+                  {box.recipes.length} {box.recipes.length === 1 ? "recipe" : "recipes"}, by what sort of thing they are.
+                  Tap a course to see all of it, or a cuisine to narrow it further.
+                </p>
+
+                {shelves.length === 0 ? (
+                  <p style={{ font: `400 15px/1.7 ${UI}`, color: "var(--card-muted)", margin: 0 }}>
+                    Nothing in the box yet.
+                  </p>
+                ) : (
+                  <div className="rb-browse">
+                    {shelves.map((sh) => (
+                      <section key={sh.id || "rest"} className="rb-browse-shelf">
+                        <button
+                          type="button"
+                          className="rb-focus rb-browse-course"
+                          onClick={() => (sh.id ? goCourse(sh.id) : openShelfWith({}))}
+                        >
+                          <span>{sh.label}</span>
+                          <span className="rb-num" style={{ color: "var(--card-accent)" }}>{sh.recipes.length}</span>
+                        </button>
+                        {sh.cuisines.length > 0 && (
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                            {sh.cuisines.map((c) => (
+                              <button
+                                key={c.name}
+                                className="rb-focus"
+                                style={pillStyle(false)}
+                                onClick={() => openShelfWith({ course: sh.id, cuisine: c.name })}
+                              >
+                                {c.name} <span className="rb-num" style={{ opacity: 0.6 }}>{c.count}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {/* A course nobody has said a cuisine for still needs a
+                            way in, so the heading itself is always the link. */}
+                        {sh.cuisines.length === 0 && (
+                          <p style={{ font: `400 12.5px/1.5 ${UI}`, color: "var(--card-muted)", margin: "10px 0 0" }}>
+                            No cuisine named yet.
+                          </p>
+                        )}
+                      </section>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </article>
+          );
+        })()}
+
         {!loading && view === "plan" && (
           <article className="rb-sheet" style={{ ...sheet, maxWidth: 1040 }}>
             <Grain card />
@@ -9296,8 +9736,18 @@ export default function RecipeBox() {
                   );
                 })()}
               </div>
-              {openRecipe.contributor && (
-                <p style={{ font: `italic 400 17px/1.4 ${PROSE}`, color: "var(--card-accent)", margin: "0 0 20px" }}>from {openRecipe.contributor}'s kitchen</p>
+              {(openRecipe.contributor || lovedCounts[openRecipe.id] > 1) && (
+                <p style={{ font: `italic 400 17px/1.4 ${PROSE}`, color: "var(--card-accent)", margin: "0 0 20px" }}>
+                  {openRecipe.contributor && `from ${openRecipe.contributor}'s kitchen`}
+                  {/* The family's own measure of a recipe, in place of a rating
+                      nobody with a dozen cooks could fill in honestly. Who
+                      starred it is never said — only how many. */}
+                  {lovedCounts[openRecipe.id] > 1 && (
+                    <span style={{ font: `500 13.5px/1.4 ${UI}`, color: "#E0A21B", marginLeft: openRecipe.contributor ? 12 : 0 }}>
+                      ★ kept by {lovedCounts[openRecipe.id]} of you
+                    </span>
+                  )}
+                </p>
               )}
               {openRecipe.description && (
                 <p className="rb-lede" style={{ font: `400 17px/1.72 ${PROSE}`, color: "var(--card-text)", maxWidth: "60ch", margin: "0 0 26px" }}>
@@ -9334,10 +9784,37 @@ export default function RecipeBox() {
                 {openRecipe.servings && (
                   <div><dt>Serves</dt><dd className="rb-num">{servesOnly(openRecipe.servings, factor)}</dd></div>
                 )}
-                {openRecipe.time && <div><dt>Time</dt><dd>{openRecipe.time}</dd></div>}
+                {/* Prep, cook and the two added together, then the written line
+                    when it says something the numbers can't (shared/shelf.js). */}
+                {timeParts(openRecipe).map((t) => (
+                  <div key={t.key}><dt>{t.label}</dt><dd>{t.text}</dd></div>
+                ))}
                 <div><dt>Ingredients</dt><dd className="rb-num">{openRecipe.ingredients.length}</dd></div>
                 <div><dt>Steps</dt><dd className="rb-num">{openRecipe.steps.length}</dd></div>
               </dl>
+
+              {/* What sort of thing it is. Both open the shelf filtered to it,
+                  so one is a way in as well as a label. */}
+              {(openRecipe.course || openRecipe.cuisine) && (
+                <div className="rb-noprint" style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 22px" }}>
+                  {[
+                    openRecipe.course && { key: "course", label: courseLabel(openRecipe.course), go: () => openShelfWith({ course: openRecipe.course }) },
+                    openRecipe.cuisine && { key: "cuisine", label: openRecipe.cuisine, go: () => openShelfWith({ cuisine: openRecipe.cuisine }) },
+                  ].filter(Boolean).map((c) => (
+                    <button
+                      key={c.key}
+                      className="rb-focus"
+                      onClick={c.go}
+                      style={{
+                        font: `500 12.5px/1 ${UI}`, padding: "7px 13px", borderRadius: 999, cursor: "pointer",
+                        border: `1px solid var(--card-edge)`, background: "var(--card-lift)", color: "var(--card-accent)",
+                      }}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <div className="rb-detail">
                 <div>
@@ -9350,31 +9827,41 @@ export default function RecipeBox() {
                       </>
                     ) : "Tap each one as it goes in."}
                   </p>
-                  <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                    {openRecipe.ingredients.map((ing, i) => {
-                      const [qty, rest] = splitQty(showLine(ing, factor, units));
-                      const got = marks.ing.includes(i);
-                      const strike = got ? "line-through" : "none";
-                      return (
-                        <li key={i} style={{ borderBottom: `1px solid var(--card-edge)` }}>
-                          <button
-                            type="button"
-                            className={`rb-focus${got ? " rb-done" : ""}`}
-                            aria-pressed={got}
-                            onClick={() => toggleMark(openRecipe.id, "ing", i)}
-                            style={{
-                              display: "grid", gridTemplateColumns: qty ? "auto 1fr" : "1fr", gap: 12, alignItems: "baseline",
-                              width: "100%", padding: "9px 0", background: "none", border: "none", textAlign: "left", cursor: "pointer",
-                              opacity: got ? 0.45 : 1, transition: "opacity 150ms ease",
-                            }}
-                          >
-                            {qty && <span className="rb-num" style={{ fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap", textDecoration: strike }}>{qty}</span>}
-                            <span style={{ font: `400 14.5px/1.5 ${UI}`, color: "var(--card-text)", textDecoration: strike }}>{rest}</span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                  {/* One run per heading — "For the sauce" — and a single
+                      unnamed run when the recipe has none, so there is one
+                      shape to render either way (shared/sections.js). Each
+                      line is still addressed by its real position, which is
+                      what a tick is remembered by. */}
+                  {bySection(openRecipe.ingredients, openRecipe.ingredientSections).map((run) => (
+                    <div key={`${run.at}-${run.name}`}>
+                      {run.name && <h4 className="rb-part">{run.name}</h4>}
+                      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                        {run.items.map(({ value: ing, index: i }) => {
+                          const [qty, rest] = splitQty(showLine(ing, factor, units));
+                          const got = marks.ing.includes(i);
+                          const strike = got ? "line-through" : "none";
+                          return (
+                            <li key={i} style={{ borderBottom: `1px solid var(--card-edge)` }}>
+                              <button
+                                type="button"
+                                className={`rb-focus${got ? " rb-done" : ""}`}
+                                aria-pressed={got}
+                                onClick={() => toggleMark(openRecipe.id, "ing", i)}
+                                style={{
+                                  display: "grid", gridTemplateColumns: qty ? "auto 1fr" : "1fr", gap: 12, alignItems: "baseline",
+                                  width: "100%", padding: "9px 0", background: "none", border: "none", textAlign: "left", cursor: "pointer",
+                                  opacity: got ? 0.45 : 1, transition: "opacity 150ms ease",
+                                }}
+                              >
+                                {qty && <span className="rb-num" style={{ fontSize: 15, color: "var(--card-accent)", whiteSpace: "nowrap", textDecoration: strike }}>{qty}</span>}
+                                <span style={{ font: `400 14.5px/1.5 ${UI}`, color: "var(--card-text)", textDecoration: strike }}>{rest}</span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
 
                   {openRecipe.equipment?.length > 0 && (
                     <div style={{ marginTop: 30 }}>
@@ -9429,78 +9916,86 @@ export default function RecipeBox() {
                       </>
                     ) : "Tap a step when it's done."}
                   </p>
-                  <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                    {openRecipe.steps.map((s, i) => {
-                      const { title, text } = stepParts(s);
-                      const secs = stepDuration(s);
-                      const done = marks.steps.includes(i);
-                      const current = i === currentStep;
-                      return (
-                        <li
-                          key={i}
-                          className={done ? "rb-done" : undefined}
-                          /* the whole step is the target — a kitchen tap is not precise — but not
-                             its timer button, and not while you are selecting text to copy */
-                          onClick={(e) => {
-                            if (e.target.closest("button") || window.getSelection()?.toString()) return;
-                            toggleMark(openRecipe.id, "steps", i);
-                          }}
-                          style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, marginBottom: 24, cursor: "pointer", opacity: done ? 0.45 : 1, transition: "opacity 150ms ease" }}
-                        >
-                          <button
-                            type="button"
-                            className="rb-focus rb-num"
-                            aria-pressed={done}
-                            aria-label={`Step ${i + 1} done`}
-                            onClick={() => toggleMark(openRecipe.id, "steps", i)}
-                            style={{
-                              background: "none", border: "none", padding: "0 4px 0 0", cursor: "pointer", alignSelf: "start",
-                              fontSize: 26, lineHeight: 1.15, textAlign: "right",
-                              color: done || current ? "var(--card-accent)" : "var(--card-edge)",
-                            }}
-                          >
-                            {done ? "✓" : i + 1}
-                          </button>
-                          <div style={{ maxWidth: "64ch" }}>
-                            {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
-                            <p style={{ font: `400 16.5px/1.75 ${PROSE}`, color: "var(--card-text)", margin: 0 }}>{showText(text, factor, units)}</p>
-                            {Array.isArray(s?.photos) && s.photos.length > 0 && (
-                              <div
-                                className="rb-stepshots rb-noprint"
-                                data-count={Math.min(s.photos.length, STEP_PHOTO_MAX)}
-                              >
-                                {s.photos.slice(0, STEP_PHOTO_MAX).map((id, k) => (
-                                  <button
-                                    key={id}
-                                    type="button"
-                                    className="rb-stepshot rb-focus"
-                                    onClick={() => setLightbox({
-                                      src: stepPhotoSrc(id),
-                                      alt: `Step ${i + 1}${title ? `: ${title}` : ""}`,
-                                      caption: `${openRecipe.title} · step ${i + 1}`,
-                                    })}
-                                    aria-label={`See photo ${k + 1} of step ${i + 1} full size`}
-                                  >
-                                    <img src={stepPhotoSrc(id)} alt="" loading="lazy" onError={(e) => { e.currentTarget.parentElement.style.display = "none"; }} />
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            {secs && (
+                  {/* The same runs as the ingredients: a heading over the steps
+                      that belong to it. Steps keep their real numbers across a
+                      heading, because step 4 is step 4 whichever part it opens. */}
+                  {bySection(openRecipe.steps, openRecipe.stepSections).map((run) => (
+                    <div key={`${run.at}-${run.name}`}>
+                      {run.name && <h4 className="rb-part">{run.name}</h4>}
+                      <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                        {run.items.map(({ value: s, index: i }) => {
+                          const { title, text } = stepParts(s);
+                          const secs = stepDuration(s);
+                          const done = marks.steps.includes(i);
+                          const current = i === currentStep;
+                          return (
+                            <li
+                              key={i}
+                              className={done ? "rb-done" : undefined}
+                              /* the whole step is the target — a kitchen tap is not precise — but not
+                                 its timer button, and not while you are selecting text to copy */
+                              onClick={(e) => {
+                                if (e.target.closest("button") || window.getSelection()?.toString()) return;
+                                toggleMark(openRecipe.id, "steps", i);
+                              }}
+                              style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, marginBottom: 24, cursor: "pointer", opacity: done ? 0.45 : 1, transition: "opacity 150ms ease" }}
+                            >
                               <button
-                                className="rb-btn rb-focus rb-noprint"
-                                style={{ ...btnQuiet, marginTop: 10, padding: "7px 14px", fontSize: 13 }}
-                                disabled={hasTimer(timerKey(openRecipe.id, i))}
-                                onClick={() => startTimer(`${openRecipe.title} — ${title || `step ${i + 1}`}`, secs, timerKey(openRecipe.id, i))}
+                                type="button"
+                                className="rb-focus rb-num"
+                                aria-pressed={done}
+                                aria-label={`Step ${i + 1} done`}
+                                onClick={() => toggleMark(openRecipe.id, "steps", i)}
+                                style={{
+                                  background: "none", border: "none", padding: "0 4px 0 0", cursor: "pointer", alignSelf: "start",
+                                  fontSize: 26, lineHeight: 1.15, textAlign: "right",
+                                  color: done || current ? "var(--card-accent)" : "var(--card-edge)",
+                                }}
                               >
-                                {hasTimer(timerKey(openRecipe.id, i)) ? `${durLabel(secs)} timer running` : `Start a ${durLabel(secs)} timer`}
+                                {done ? "✓" : i + 1}
                               </button>
-                            )}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ol>
+                              <div style={{ maxWidth: "64ch" }}>
+                                {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
+                                <p style={{ font: `400 16.5px/1.75 ${PROSE}`, color: "var(--card-text)", margin: 0 }}>{showText(text, factor, units)}</p>
+                                {Array.isArray(s?.photos) && s.photos.length > 0 && (
+                                  <div
+                                    className="rb-stepshots rb-noprint"
+                                    data-count={Math.min(s.photos.length, STEP_PHOTO_MAX)}
+                                  >
+                                    {s.photos.slice(0, STEP_PHOTO_MAX).map((id, k) => (
+                                      <button
+                                        key={id}
+                                        type="button"
+                                        className="rb-stepshot rb-focus"
+                                        onClick={() => setLightbox({
+                                          src: stepPhotoSrc(id),
+                                          alt: `Step ${i + 1}${title ? `: ${title}` : ""}`,
+                                          caption: `${openRecipe.title} · step ${i + 1}`,
+                                        })}
+                                        aria-label={`See photo ${k + 1} of step ${i + 1} full size`}
+                                      >
+                                        <img src={stepPhotoSrc(id)} alt="" loading="lazy" onError={(e) => { e.currentTarget.parentElement.style.display = "none"; }} />
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                {secs && (
+                                  <button
+                                    className="rb-btn rb-focus rb-noprint"
+                                    style={{ ...btnQuiet, marginTop: 10, padding: "7px 14px", fontSize: 13 }}
+                                    disabled={hasTimer(timerKey(openRecipe.id, i))}
+                                    onClick={() => startTimer(`${openRecipe.title} — ${title || `step ${i + 1}`}`, secs, timerKey(openRecipe.id, i))}
+                                  >
+                                    {hasTimer(timerKey(openRecipe.id, i)) ? `${durLabel(secs)} timer running` : `Start a ${durLabel(secs)} timer`}
+                                  </button>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    </div>
+                  ))}
 
                   {openRecipe.notes && (
                     <div className="rb-notes" style={{ marginTop: 28, padding: "18px 20px", background: "var(--card-lift)", borderLeft: `3px solid var(--card-accent)` }}>
@@ -9833,9 +10328,9 @@ export default function RecipeBox() {
                     <button className="rb-btn rb-focus" style={btnQuiet} onClick={downloadTemplate}>Download template</button>
                   </div>
                   <p style={{ font: `400 12px/1.6 ${UI}`, color: "var(--card-muted)", margin: "10px 0 0" }}>
-                    The template is a prompt for Claude plus the exact schema this importer reads —
-                    ingredients, timers, equipment and estimated nutrition. Fill it in, then paste the
-                    result above or drop the file anywhere on the page.
+                    The template is a prompt for any AI that writes — plus the exact schema this
+                    importer reads: ingredients, timers, equipment and estimated nutrition. Fill it in,
+                    then paste the result above or drop the file anywhere on the page.
                   </p>
                 </div>
               )}
@@ -9926,8 +10421,55 @@ export default function RecipeBox() {
                   </Field>
                 </div>
                 <div style={{ flex: "1 1 140px" }}>
-                  <Field label="Time">
+                  <Field label="Time" hint="In words, for anything the minutes below can't say — &quot;plus overnight&quot;.">
                     <input className="rb-focus" style={input} value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} placeholder="About 2 hours" />
+                  </Field>
+                </div>
+              </div>
+
+              {/* Prep and cook as numbers. The written line above still says what
+                  a number cannot, but these are what the shelf sorts and filters
+                  on, so "under 30 minutes" can be asked of the whole box. */}
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 120px" }}>
+                  <Field label="Prep" hint="Minutes, hands on.">
+                    <input
+                      className="rb-focus" style={input} inputMode="numeric" value={form.prepText}
+                      onChange={(e) => setForm({ ...form, prepText: e.target.value.replace(/[^\d]/g, "").slice(0, 5) })}
+                      placeholder="15"
+                    />
+                  </Field>
+                </div>
+                <div style={{ flex: "1 1 120px" }}>
+                  <Field label="Cook" hint="Minutes, in the oven or on the hob.">
+                    <input
+                      className="rb-focus" style={input} inputMode="numeric" value={form.cookText}
+                      onChange={(e) => setForm({ ...form, cookText: e.target.value.replace(/[^\d]/g, "").slice(0, 5) })}
+                      placeholder="40"
+                    />
+                  </Field>
+                </div>
+                <div style={{ flex: "1 1 160px" }}>
+                  <Field label="Course" hint="What sort of thing it is. The shelf browses by this.">
+                    <select
+                      className="rb-focus" style={{ ...input, cursor: "pointer" }} value={form.course}
+                      onChange={(e) => setForm({ ...form, course: e.target.value })}
+                    >
+                      <option value="">Not saying</option>
+                      {COURSES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <div style={{ flex: "1 1 160px" }}>
+                  <Field label="Cuisine" hint="Anywhere that cooks — type your own.">
+                    <input
+                      className="rb-focus" style={input} list="rb-cuisines" value={form.cuisine}
+                      onChange={(e) => setForm({ ...form, cuisine: e.target.value })}
+                      placeholder="Italian"
+                    />
+                    <datalist id="rb-cuisines">
+                      {CUISINE_HINTS.map((c) => <option key={c} value={c} />)}
+                    </datalist>
                   </Field>
                 </div>
               </div>
@@ -9936,7 +10478,7 @@ export default function RecipeBox() {
                 <textarea className="rb-focus" rows={2} style={input} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
               </Field>
 
-              <Field label="Ingredients" hint="One per line, quantity first — that's what gets scaled.">
+              <Field label="Ingredients" hint="One per line, quantity first — that's what gets scaled. A line starting with # is a heading: write &quot;# For the sauce&quot; above the lines it belongs to.">
                 <textarea className="rb-focus" rows={8} style={input} value={form.ingredientText} onChange={(e) => setForm({ ...form, ingredientText: e.target.value })} />
               </Field>
 
@@ -9945,7 +10487,7 @@ export default function RecipeBox() {
                   onChange={(e) => setForm({ ...form, equipmentText: e.target.value })} />
               </Field>
 
-              <Field label="Steps" hint={'One per line. Write "Short title: the actual instruction" and the title shows in cooking mode. Any duration you mention becomes a timer — "blend 60 seconds" as readily as "bake 40 minutes".'}>
+              <Field label="Steps" hint={'One per line. Write "Short title: the actual instruction" and the title shows in cooking mode. A line starting with # is a heading, the same as in the ingredients. Any duration you mention becomes a timer — "blend 60 seconds" as readily as "bake 40 minutes".'}>
                 <textarea
                   className="rb-focus"
                   rows={8}

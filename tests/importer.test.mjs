@@ -20,11 +20,21 @@ const slice = (from, to) => {
   return src.slice(a, b);
 };
 
-/* fold() lives far from the rest, so it is restated rather than dragged in */
-const fold = "const fold = (v) => String(v || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\n";
+/* What the sliced-out part imports from elsewhere in the app. A data: module
+   cannot import by path, so they are handed over through globalThis and named
+   at the top of the slice — fold() is restated because it lives far from the
+   rest of this code, the other two are real modules. */
+import { asSections } from "../shared/sections.js";
+import { minutesLabel } from "../shared/shelf.js";
+globalThis.__asSections = asSections;
+globalThis.__minutesLabel = minutesLabel;
+
+const prelude =
+  "const fold = (v) => String(v || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\n" +
+  "const asSections = globalThis.__asSections, minutesLabel = globalThis.__minutesLabel;\n";
 const { isoMinutes, schemaSteps, schemaServings, schemaTime } = await import(
   "data:text/javascript," +
-    encodeURIComponent(fold + slice("const htmlToText", "function schemaImage") +
+    encodeURIComponent(prelude + slice("const htmlToText", "function schemaImage") +
       "\nexport { isoMinutes, schemaSteps, schemaServings, schemaTime };")
 );
 const { findRecipe } = await import(new URL("../functions/api/fetch-recipe.js", here));
@@ -57,12 +67,21 @@ const steps = schemaSteps([
     { "@type": "HowToStep", text: "Beat until it holds a peak." },
   ] },
 ]);
-is("every step comes out of its sections", steps.length, 4);
-is("...in order", steps.map((s) => (typeof s === "string" ? s : s.text))[0], "Cream the butter and sugar.");
-is("a name that adds something becomes a title", steps[2].title, "Rest the batter");
-is("...but a name that only repeats the text does not", typeof steps[1], "string");
-is("plain strings still work", schemaSteps(["One.", "Two."]).length, 2);
-is("a single blob is split into lines", schemaSteps("First do this.\nThen do that.").length, 2);
+is("every step comes out of its sections", steps.steps.length, 4);
+is("...in order", steps.steps.map((s) => (typeof s === "string" ? s : s.text))[0], "Cream the butter and sugar.");
+is("a name that adds something becomes a title", steps.steps[2].title, "Rest the batter");
+is("...but a name that only repeats the text does not", typeof steps.steps[1], "string");
+/* The headings themselves are kept now, rather than flattened away, so an
+   imported recipe arrives laid out the way the page published it. */
+is("the section headings are kept, above the step each one opens",
+  steps.sections, [{ at: 0, name: "For the cake" }, { at: 3, name: "For the icing" }]);
+is("plain strings still work", schemaSteps(["One.", "Two."]).steps.length, 2);
+is("...and have no headings", schemaSteps(["One.", "Two."]).sections, []);
+is("a single blob is split into lines", schemaSteps("First do this.\nThen do that.").steps.length, 2);
+is("a plain unnamed list is not mistaken for a section",
+  schemaSteps({ "@type": "ItemList", name: "Instructions", itemListElement: ["One.", "Two."] }).sections, []);
+is("a section with no name opens nothing",
+  schemaSteps([{ "@type": "HowToSection", itemListElement: ["One."] }]).sections, []);
 
 /* ── ISO 8601 durations ── */
 is("PT45M", isoMinutes("PT45M"), 45);

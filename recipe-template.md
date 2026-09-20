@@ -1,8 +1,12 @@
 # Recipe template for the recipe box
 
 Everything here targets the importer as it actually behaves — structured frontmatter,
-`{id}` placeholders, explicit timers, equipment. Paste section 1 into Claude and the
-output will import without touching a single field by hand.
+`{id}` placeholders, explicit timers, equipment. Paste section 1 into whichever AI you
+use and the output will import without touching a single field by hand.
+
+Nothing here is particular to one assistant. It is a plain-text prompt and a schema, so
+any model that can follow a format will do — and if one writes something the importer
+cannot read, the rules in section 1 are what to hold it to.
 
 ---
 
@@ -20,8 +24,11 @@ output will import without touching a single field by hand.
 > description: "One or two sentences. What it tastes like, when to make it."
 > servings: 4
 > yield: "Makes about 6 cups"
+> prep_time_minutes: 15
+> cook_time_minutes: 30
 > total_time_minutes: 45
-> category: "Dinner"
+> course: "Dinner"
+> cuisine: "Italian"
 > tags:
 >   - weeknight
 >   - one-pan
@@ -31,13 +38,16 @@ output will import without touching a single field by hand.
 >   - instant-read thermometer
 > ingredients:
 >   - id: "onion"
+>     group: "For the base"
 >     amount: 1
 >     name: "yellow onion, diced"
 >   - id: "butter"
+>     group: "For the base"
 >     amount: 2
 >     unit: "tbsp"
 >     name: "unsalted butter"
 >   - id: "thyme"
+>     group: "To finish"
 >     amount: 0.5
 >     unit: "tsp"
 >     name: "dried thyme"
@@ -53,6 +63,7 @@ output will import without touching a single field by hand.
 >   sodium: "410 mg"
 > steps:
 >   - id: "s1"
+>     group: "For the base"
 >     title: "Short imperative title"
 >     content: "The instruction. Reference ingredients as {onion} and {butter} — the site
 >       swaps in the real amounts. Say why a step matters, not just what to do."
@@ -82,6 +93,19 @@ output will import without touching a single field by hand.
 > - Durations left in the prose alone have to be 20 seconds or longer to be spotted.
 >   An explicit `timer_seconds` has no floor, so declare anything shorter.
 > - `servings` must be a bare number — it drives the serving-size scaler.
+> - `prep_time_minutes` and `cook_time_minutes` are bare numbers of minutes. Give both
+>   where the recipe has both: they are what the site sorts and filters the box by, and
+>   "under 30 minutes" cannot be asked of a recipe that only wrote its time in words.
+>   Keep `total_time_minutes` in step with them.
+> - `course` is one of: Breakfast, Lunch, Dinner, Starter, Side, Salad, Soup, Snack,
+>   Baking, Dessert, Drinks, Sauces and dressings, Preserves. Anything else is read as
+>   near to that list as it can be, so prefer the words above.
+> - `cuisine` is open — whatever is true, one or two words.
+> - `group` is optional, and only earns its place on a recipe with genuinely separate
+>   parts: a sauce and a base, a cake and its icing. Give it to every ingredient and
+>   every step in that part, spelled the same each time, and leave it off entirely on a
+>   recipe that is just one thing. Consecutive items sharing a group become one heading
+>   above the first of them.
 > - List `equipment` for anything beyond a knife and a bowl, including measuring tools.
 > - Work out `nutrition` yourself: take each ingredient at the amount listed, look up
 >   what that quantity contributes, total the recipe, then divide by `servings`. The
@@ -108,14 +132,18 @@ contributor: ""
 description: ""
 servings: 4
 yield: ""
+prep_time_minutes: 0
+cook_time_minutes: 0
 total_time_minutes: 0
-category: ""
+course: ""
+cuisine: ""
 tags:
   - 
 equipment:
   - 
 ingredients:
   - id: ""
+    group: ""
     amount: 0
     unit: ""
     name: ""
@@ -130,6 +158,7 @@ nutrition:
   sodium: ""
 steps:
   - id: "s1"
+    group: ""
     title: ""
     content: ""
     timer_seconds: 0
@@ -148,8 +177,11 @@ title: "Skillet Cornbread"
 contributor: "Devon"
 description: "Crisp-edged, barely sweet cornbread baked in a preheated cast iron pan."
 servings: 8
+prep_time_minutes: 10
+cook_time_minutes: 25
 total_time_minutes: 35
-category: "Sides"
+course: "Side"
+cuisine: "American"
 tags:
   - baking
   - quick

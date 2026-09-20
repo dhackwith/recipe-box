@@ -11,6 +11,17 @@ after it explains what they can now do.
 Write it for whoever is cooking, not for whoever is coding, and leave the plumbing
 out unless they would notice it.
 
+## 2026-09-19
+
+- **A recipe can be told in parts.** A recipe with a sauce and a base no longer arrives as one long list. Write "# For the sauce" on a line of its own in the ingredients or the steps and everything under it sits beneath that heading, on the recipe and in cooking mode — where the top of the screen now says which part you're on, so you know when you've moved from the chicken to the crumb. Steps keep counting straight through, because step four is step four whichever part it opens. Imported recipes bring their own headings with them where the site publishes them.
+- **Prep and cook, as numbers.** The recipe form now has a Prep and a Cook box in minutes, and the recipe shows both along with the total. The written line is still there for anything a number can't say — "plus overnight" — and every recipe already in the box keeps the one it had.
+- **Say what sort of thing it is.** Every recipe can now carry a course — dinner, baking, dessert — and a cuisine. Importing a link fills both in on its own. They show under the title, and tapping either one shows you everything else of that kind.
+- **Browse the whole box.** A new Browse button lays the box out by course, with the cuisines inside each and how many of each there are, for when you don't yet know what you're looking for.
+- **Put the box in the order you want.** A Sort control sits beside Filters: newest, oldest, A to Z, quickest first, or most loved. Whichever you pick is remembered on that device.
+- **Filters ask more, and several at once.** Alongside the tags there's now Ready in — under 15 minutes, under 30, under an hour — plus course and cuisine. Tags can be picked several at a time and all of them have to match, where before it was one tag or none.
+- **The template works with any AI.** The recipe template used to name one assistant. It never needed to — it is a plain prompt and a schema, and any model that can follow a format will do. The wording says so now, and the file you download is called recipe-template.md.
+- **See what the family keeps.** A recipe two or more of you have starred now shows "★ 4" on its tile and "kept by 4 of you" under its title, and Most loved sorts the box by it. Your own stars are still private — the site only ever says how many, never who.
+
 ## 2026-09-16
 
 - **Sign in with Google or GitHub.** No more waiting for a code in your email: pick Google or GitHub on the sign-in page and you're in with a tap, as long as that account uses the email address you were invited with. The emailed code still works if you'd rather use it.
@@ -129,7 +140,7 @@ out unless they would notice it.
 - **Tick things off as you cook.** Ingredients and steps cross out as you go, and the marks last the day.
 - **Estimated nutrition.** Recipes can carry a per-serving panel that rescales along with the servings stepper, as does the wording of each step.
 - **One timer per step.** Any duration written into a step becomes a button you can start with one tap.
-- **The recipe template, handed out from the app.** Take the template, give it to Claude, and paste the result straight back in.
+- **The recipe template, handed out from the app.** Take the template, give it to an AI, and paste the result straight back in.
 - **Export everything.** Take a backup of every recipe in the box whenever you like.
 
 ## 2026-09-09
