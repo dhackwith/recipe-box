@@ -14,7 +14,7 @@
  * POST { leave: n }              -> out
  */
 
-import { identity, personFor } from "../../shared/access.js";
+import { identity, providerIdentity, personFor } from "../../shared/access.js";
 import { ensureGuests, arrive, directory } from "../../shared/guests.js";
 import { poke } from "../../shared/live.js";
 import { ensureGroups, groupRow, membersOf, toMembers } from "../../shared/groups.js";
@@ -68,7 +68,7 @@ export async function onRequest({ request, env }) {
     await ensureGroups(db);
     await ensureVoice(db);
     await ensureGuests(db);
-    await arrive(db, email);
+    await arrive(db, email, () => providerIdentity(request));
 
     if (request.method === "GET") {
       const g = await yours(url.searchParams.get("room"));

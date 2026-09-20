@@ -15,7 +15,7 @@
  * POST { leave: n }              -> yourself; a creator hands the group to the longest member
  */
 
-import { identity, personFor } from "../../shared/access.js";
+import { identity, providerIdentity, personFor } from "../../shared/access.js";
 import { ensureGuests, arrive, directory } from "../../shared/guests.js";
 import { hasHate } from "../../shared/hate.js";
 import { poke } from "../../shared/live.js";
@@ -61,7 +61,7 @@ export async function onRequest({ request, env }) {
     await ensureGroups(db);
     await ensureVoice(db);
     await ensureGuests(db);
-    await arrive(db, email);
+    await arrive(db, email, () => providerIdentity(request));
 
     if (request.method === "GET") {
       const pictureOf = url.searchParams.get("picture");

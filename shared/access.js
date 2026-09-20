@@ -24,9 +24,9 @@ export const POLICY_AUD = "f6ab6d8de36d5a27b9d93a5d619d1b761ba360f573a5c53b009a9
    per visit. Built once at module scope for that reason. */
 const jwks = createRemoteJWKSet(new URL(`${TEAM_DOMAIN}/cdn-cgi/access/certs`));
 
-/* The signed-in email, or null. Expired, wrong-audience, wrong-issuer and
-   outright forged tokens all get the same answer: we do not know you. */
-export async function identity(request) {
+/* The token and its claims once the signature, issuer and audience check out,
+   or null. */
+async function verified(request) {
   const token = request.headers.get("Cf-Access-Jwt-Assertion");
   if (!token) return null;
   try {
@@ -34,10 +34,98 @@ export async function identity(request) {
       issuer: TEAM_DOMAIN,
       audience: POLICY_AUD,
     });
-    return typeof payload.email === "string" ? payload.email.toLowerCase() : null;
+    return typeof payload.email === "string" ? { token, payload, email: payload.email.toLowerCase() } : null;
   } catch {
     return null;
   }
+}
+
+/* The signed-in email, or null. Expired, wrong-audience, wrong-issuer and
+   outright forged tokens all get the same answer: we do not know you. */
+export async function identity(request) {
+  const found = await verified(request);
+  return found ? found.email : null;
+}
+
+/* ── What Google or GitHub says about somebody ────────────────────
+   People can sign in with Google, GitHub or an emailed PIN. The token names
+   the address only, so the name the provider knows them by comes from Access's
+   get-identity endpoint, asked with the same token the request arrived with.
+   Cloudflare documents the endpoint but not a name field, so several shapes are
+   tried; whatever cannot be found is null, and the site carries on with the
+   address as before. A PIN sign-in has no name to give. */
+
+const LOOKUP_MS = 3000;
+const REMEMBER_MS = 10 * 60 * 1000;
+const remembered = new Map();
+
+/* A name fit to show other people, or null. Anything holding an @ is refused,
+   because a provider that has no name tends to hand back the address instead,
+   and a guest's address is never shown. */
+export function cleanName(raw) {
+  if (typeof raw !== "string") return null;
+  const name = raw.normalize("NFKC").replace(/\p{C}+/gu, "").replace(/\s+/g, " ").trim();
+  if (!name || name.includes("@")) return null;
+  return [...name].slice(0, 60).join("").trim();
+}
+
+function nameIn(found) {
+  for (const place of [found, found.oidc_fields, found.custom, found.idp]) {
+    if (!place || typeof place !== "object") continue;
+    const whole = cleanName(place.name);
+    if (whole) return whole;
+    const joined = cleanName([place.given_name, place.family_name].filter((s) => typeof s === "string").join(" "));
+    if (joined) return joined;
+  }
+  return null;
+}
+
+/* "google", "github", "onetimepin", or null when Access doesn't say. */
+const providerIn = (found) =>
+  typeof found?.idp?.type === "string" && /^[a-z0-9-]{1,32}$/i.test(found.idp.type) ? found.idp.type.toLowerCase() : null;
+
+async function getIdentity(url, token) {
+  try {
+    const res = await fetch(url, {
+      headers: { Cookie: `CF_Authorization=${token}` },
+      redirect: "manual",
+      signal: AbortSignal.timeout(LOOKUP_MS),
+    });
+    if (!res.ok || !(res.headers.get("content-type") || "").includes("json")) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The signed-in person as their login provider knows them:
+ * { email, name, provider }, with name and provider null when unknown, or null
+ * when nobody is signed in. Asked of the team domain, then of the site's own
+ * address, and kept for ten minutes per sign-in.
+ */
+export async function providerIdentity(request) {
+  const found = await verified(request);
+  if (!found) return null;
+  const key = String(found.payload.identity_nonce || found.token);
+  const kept = remembered.get(key);
+  if (kept && kept.until > Date.now()) return kept.value;
+
+  let got = null;
+  const origin = new URL(request.url).origin;
+  for (const base of [TEAM_DOMAIN, origin]) {
+    got = await getIdentity(`${base}/cdn-cgi/access/get-identity`, found.token);
+    if (got) break;
+  }
+  /* Only believed about the person the verified token names. */
+  const same = got && typeof got.email === "string" && got.email.toLowerCase() === found.email;
+  const value = { email: found.email, name: same ? nameIn(got) : null, provider: same ? providerIn(got) : null };
+
+  if (got) {
+    if (remembered.size > 500) remembered.clear();
+    remembered.set(key, { value, until: Date.now() + REMEMBER_MS });
+  }
+  return value;
 }
 
 /* Who is who.
@@ -130,12 +218,25 @@ export function addressKey(email) {
 /** Everyone the box knows: ids and names, and never anybody's address. */
 export const people = () => PEOPLE.map(({ id, name }) => ({ id, name }));
 
-/** The person a signed-in address belongs to. */
-export function personFor(email) {
+/* Letters and digits only, lower case, for telling whether two names are the
+   same person's however they are spaced or punctuated. */
+const bareName = (s) => String(s).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+const ROSTER_NAMES = new Set(PEOPLE.map((p) => bareName(p.name)));
+
+/** The person a signed-in address belongs to. Somebody on the roster is
+    always called what the roster says, whatever their Google or GitHub name.
+    A guest is called by the name their provider gave, when there is one —
+    unless it is the name of somebody on the roster, which anybody could type
+    into their own account; then they are named from their address. */
+export function personFor(email, providerName = null) {
   const parts = addressOf(email);
   if (!parts) return null;
   const known = BY_ADDRESS.get(parts.addr) || BY_ADDRESS.get(parts.local);
-  return known ? { id: known.id, name: known.name } : { id: guestIdFor(parts.addr), name: fromAddress(parts.local) };
+  if (known) return { id: known.id, name: known.name };
+  const given = cleanName(providerName);
+  const bare = given ? bareName(given) : "";
+  const name = bare && !ROSTER_NAMES.has(bare) ? given : fromAddress(parts.local);
+  return { id: guestIdFor(parts.addr), name };
 }
 
 /** What to call a roster id. A guest's name lives in D1 (shared/guests.js),

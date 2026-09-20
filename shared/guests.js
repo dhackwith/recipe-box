@@ -94,28 +94,39 @@ const seen = new WeakMap();
  * address-keyed rows moved) the first time; somebody on the roster who used to
  * be a guest has their guest rows moved to their roster id. After the first
  * time in an isolate this costs nothing.
+ *
+ * `lookup`, when given, is asked for the name Google or GitHub knows a guest
+ * by (providerIdentity in shared/access.js). It is only asked about guests, and
+ * only once per isolate, because it costs a request to Cloudflare. A guest
+ * already written down under a name made from their address takes the
+ * provider's name once there is one; a PIN sign-in has none and changes nothing.
  */
-export async function arrive(db, email) {
+export async function arrive(db, email, lookup = null) {
   const address = addressKey(email);
-  const me = personFor(email);
-  if (!address || !me) return;
+  const plain = personFor(email);
+  if (!address || !plain) return;
   let done = seen.get(db);
   if (!done) { done = new Set(); seen.set(db, done); }
   if (done.has(address)) return;
 
   await ensureGuests(db);
-  if (isPerson(me.id)) {
+  if (isPerson(plain.id)) {
     const was = await db.prepare("SELECT id FROM guests WHERE address = ?1").bind(address).first();
     if (was) {
-      await rekey(db, was.id, me.id);
+      await rekey(db, was.id, plain.id);
       await db.prepare("DELETE FROM guests WHERE id = ?1").bind(was.id).run();
     }
   } else {
+    const given = lookup ? (await Promise.resolve(lookup()).catch(() => null))?.name : null;
+    const me = personFor(email, given);
     const made = await db
       .prepare("INSERT OR IGNORE INTO guests (id, name, address, at) VALUES (?1, ?2, ?3, ?4)")
       .bind(me.id, me.name, address, new Date().toISOString())
       .run();
     if (made?.meta?.changes) await rekey(db, address, me.id);
+    else if (me.name !== plain.name) {
+      await db.prepare("UPDATE guests SET name = ?2 WHERE id = ?1 AND name <> ?2").bind(me.id, me.name).run();
+    }
   }
   done.add(address);
 }

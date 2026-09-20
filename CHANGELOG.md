@@ -11,6 +11,11 @@ after it explains what they can now do.
 Write it for whoever is cooking, not for whoever is coding, and leave the plumbing
 out unless they would notice it.
 
+## 2026-09-16
+
+- **Sign in with Google or GitHub.** No more waiting for a code in your email: pick Google or GitHub on the sign-in page and you're in with a tap, as long as that account uses the email address you were invited with. The emailed code still works if you'd rather use it.
+- **New friends show up by their real name.** Someone who signs in with Google or GitHub before they've been added to the family list now appears in Friends under the name on that account, instead of one made up from their email address.
+
 ## 2026-09-15
 
 - **Calls stop ringing sooner.** A call now rings five times, about twenty seconds, instead of three quarters of a minute. If nobody picks up it says so and ends, and a missed call is left in the chat as before. Calling used to be able to sit on "Calling…" well past that if your phone or laptop briefly lost touch with the site; now it gives up on its own.
