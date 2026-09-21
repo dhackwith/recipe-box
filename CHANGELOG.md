@@ -11,6 +11,10 @@ after it explains what they can now do.
 Write it for whoever is cooking, not for whoever is coding, and leave the plumbing
 out unless they would notice it.
 
+## 2026-09-20
+
+- **A step that gives a range starts at the shorter end.** "Bake for 28 to 30 minutes" used to offer a 30 minute timer, which is 2 minutes past the first moment the brownies might be done. The timer now starts at 28, and every running timer has a −1 and a +1 beside the clock, so you can spend the rest of the range a minute at a time once you have had a look. A timer that has already gone off takes minutes too — press +1 and it starts again for another one, and rings again at the end of it.
+
 ## 2026-09-19
 
 - **A recipe can be told in parts.** A recipe with a sauce and a base no longer arrives as one long list. Write "# For the sauce" on a line of its own in the ingredients or the steps and everything under it sits beneath that heading, on the recipe and in cooking mode — where the top of the screen now says which part you're on, so you know when you've moved from the chicken to the crumb. Steps keep counting straight through, because step four is step four whichever part it opens. Imported recipes bring their own headings with them where the site publishes them.

@@ -16,8 +16,8 @@ const a = src.indexOf("const DUR_RE =");
 const b = src.indexOf("/* ══", a);
 if (a < 0 || b < 0) throw new Error("could not find the step timers — has RecipeBox.jsx moved on?");
 
-const NAMES = "stepParts, stepDuration, clock, durLabel";
-const { stepParts, stepDuration, clock, durLabel } = await import(
+const NAMES = "stepParts, stepSpan, stepDuration, clock, durLabel";
+const { stepParts, stepSpan, stepDuration, clock, durLabel } = await import(
   "data:text/javascript," + encodeURIComponent(src.slice(a, b) + "export { " + NAMES + " };")
 );
 
@@ -51,7 +51,13 @@ for (const secs of [45, 75, 150, 600, 3600, 5400, 3700]) {
 is("a step in seconds is read in seconds", stepDuration("Blend on high for 75 seconds, stopping once to scrape down."), 75);
 is("...and that is what the button says", durLabel(stepDuration("Blend on high for 75 seconds.")), "1 min 15 sec");
 is("minutes are read as minutes", stepDuration("Simmer for 20 minutes."), 1200);
-is("a range takes the longer end", stepDuration("Bake 25-30 min until golden."), 1800);
+is("a range starts at the near end", stepDuration("Bake 25-30 min until golden."), 1500);
+is("...and keeps the far end to spend", stepSpan("Bake 25-30 min until golden."), { secs: 1500, upTo: 1800 });
+is("a parenthesised range is still a range", stepSpan("Bake for 28 (to 30 minutes) until the edges are firm."), { secs: 1680, upTo: 1800 });
+is("an en dash joins a range too", stepSpan("Simmer 20 – 25 minutes."), { secs: 1200, upTo: 1500 });
+is("a lone duration has no far end", stepSpan("Simmer for 20 minutes."), { secs: 1200, upTo: null });
+is("a bracketed aside is not a range", stepSpan("Step 2 (10 minutes): fold the batter."), { secs: 600, upTo: null });
+is("a near end too brief to time falls to the far end", stepSpan("Rest 10 to 30 seconds."), { secs: 30, upTo: null });
 is("hours are read as hours", stepDuration("Rest in the fridge for 2 hours."), 7200);
 is("a fractional minute lands on the second", durLabel(stepDuration("Whisk for 1.5 minutes.")), "1 min 30 sec");
 is("an explicit timer wins over the words", stepDuration({ text: "Blend for 75 seconds.", seconds: 90 }), 90);

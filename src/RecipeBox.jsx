@@ -2754,7 +2754,10 @@ function mergeLists(mine, theirs) {
 /* ══════════════════════════════════════════════════════════════════
    Steps — titles and timers
    ══════════════════════════════════════════════════════════════════ */
-const DUR_RE = /(\d+(?:\.\d+)?)\s*(?:–|-|to)?\s*(\d+(?:\.\d+)?)?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/i;
+/* A duration, and the far end of it when the step gives a range. The second
+   number is only a range if something joins it to the first — a dash, "to",
+   or "(to". Without that, "step 2 (10 minutes)" would read as two to ten. */
+const DUR_RE = /(\d+(?:\.\d+)?)\s*(?:\(?\s*(?:–|—|-|to)\s*(\d+(?:\.\d+)?)\s*)?\(?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/i;
 
 function stepParts(step) {
   if (step && typeof step === "object")
@@ -2768,17 +2771,30 @@ function stepParts(step) {
   return m ? { title: m[1].trim(), text: m[2].trim(), seconds: null } : { title: "", text: s, seconds: null };
 }
 
-function stepDuration(step) {
+/* What a step is worth timing for: { secs, upTo }. A range gives its near end
+   as the timer — "bake 28 to 30 minutes" sets 28, because the only wrong thing
+   to do with a range is find out late, and a minute more is a minute the cook
+   can add once they have looked. upTo carries the far end so the rest of the
+   range can still be named. */
+function stepSpan(step) {
   const { title, text, seconds } = stepParts(step);
   if (seconds === 0) return null;               // author said this step has no timer
-  if (seconds) return Number(seconds);          // an explicit timer always wins
+  if (seconds) return { secs: Number(seconds), upTo: null };  // an explicit timer always wins
   const m = `${title} ${text}`.match(DUR_RE);
   if (!m) return null;
-  const value = Number(m[2] || m[1]);
   const unit = m[3].toLowerCase();
   const mult = unit.startsWith("h") ? 3600 : unit.startsWith("m") ? 60 : 1;
-  const secs = Math.round(value * mult);
-  return secs >= 20 && secs <= 60 * 60 * 24 ? secs : null;
+  const near = Math.round(Number(m[1]) * mult);
+  const far = m[2] ? Math.round(Number(m[2]) * mult) : 0;
+  /* A near end too brief to be worth a timer — "rest 10 to 30 seconds" — is no
+     reason to drop the step's timer; the far end still is one. */
+  const secs = near >= 20 ? near : far;
+  if (secs < 20 || secs > 60 * 60 * 24) return null;
+  return { secs, upTo: far > secs ? far : null };
+}
+
+function stepDuration(step) {
+  return stepSpan(step)?.secs ?? null;
 }
 
 const clock = (s) => {
@@ -3711,7 +3727,8 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
                       marks, onToggle, onFinish, photoSrc, onOpenPhoto }) {
   const steps = recipe.steps;
   const step = stepParts(steps[stepIndex]);
-  const secs = stepDuration(steps[stepIndex]);
+  const span = stepSpan(steps[stepIndex]);
+  const secs = span?.secs || null;
   const done = marks.steps.includes(stepIndex);
   /* Which part of the recipe this step belongs to — "For the sauce". Worth a
      line here more than anywhere: one step fills the screen, so without it
@@ -3790,6 +3807,7 @@ function CookingMode({ recipe, stepIndex, setStepIndex, factor, setFactor, baseS
               className="rb-btn rb-focus"
               style={{ ...btnPrimary, marginTop: 26 }}
               disabled={hasTimer(timerKey(recipe.id, stepIndex))}
+              title={span?.upTo ? `The step gives ${durLabel(secs)} to ${durLabel(span.upTo)}. The timer starts at ${durLabel(secs)} — add a minute from it when you have had a look.` : undefined}
               onClick={() => startTimer(`${recipe.title} — ${step.title || `step ${stepIndex + 1}`}`, secs, timerKey(recipe.id, stepIndex))}
             >
               {hasTimer(timerKey(recipe.id, stepIndex)) ? `${durLabel(secs)} timer running` : `Start a ${durLabel(secs)} timer`}
@@ -6641,6 +6659,28 @@ export default function RecipeBox() {
     ]));
   };
   const hasTimer = (key) => timers.some((t) => t.key === key);
+  /* A minute either way, which is how a cook actually reads a range: start at
+     the near end, look, and spend the rest a minute at a time. A timer already
+     gone off takes minutes too — that is the whole point of "28 to 30" — so
+     adding to a finished one starts it running again, and forgetting that it
+     has rung lets it ring again at the new end. */
+  const adjustTimer = (id, delta) =>
+    setTimers((p) =>
+      p.map((t) => {
+        if (t.id !== id) return t;
+        const remaining = t.remaining + delta;
+        if (remaining <= 0) return t;           // never take a timer down to the alarm
+        if (t.remaining === 0) firedRef.current.delete(id);
+        const running = t.running || t.remaining === 0;
+        return {
+          ...t,
+          total: t.total + delta,
+          remaining,
+          running,
+          endsAt: running ? Date.now() + remaining * 1000 : null,
+        };
+      })
+    );
   const toggleTimer = (id) =>
     setTimers((p) =>
       p.map((t) => {
@@ -7176,14 +7216,17 @@ export default function RecipeBox() {
     @keyframes rb-pulse { 0%, 100% { opacity: .18; } 50% { opacity: .9; } }
     .rb-chip-done { animation: rb-chip 1.6s ease-in-out infinite; }
     /* Timers: a small stack in the top right corner, above everything but
-       out of the messenger's way. Only as wide as a clock and two buttons. */
-    .rb-timers { position: fixed; top: 12px; right: 12px; z-index: 70; width: 250px; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 72px); overflow-y: auto; }
+       out of the messenger's way. Only as wide as a clock and its buttons. */
+    .rb-timers { position: fixed; top: 12px; right: 12px; z-index: 70; width: 272px; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 72px); overflow-y: auto; }
     .rb-timer { padding: 7px 10px 6px; border: 1px solid rgba(var(--on-page), calc(.24 * var(--ink-k))); border-radius: 8px; background: rgba(var(--deep-rgb), .96); box-shadow: 0 12px 30px -14px rgba(0, 0, 0, .6); }
     .rb-timer.is-done { border-color: var(--page-accent); background: linear-gradient(rgba(var(--accent-rgb), .16), rgba(var(--accent-rgb), .16)), rgba(var(--deep-rgb), .96); }
-    .rb-timer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .rb-timer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
     .rb-timer-clock { font-size: 22px; line-height: 1.15; color: rgb(var(--on-page)); }
     .rb-timer.is-done .rb-timer-clock { color: var(--page-accent); }
-    .rb-timer-btns { display: inline-flex; gap: 6px; }
+    .rb-timer-btns { display: inline-flex; gap: 5px; }
+    /* The minute buttons are a pair, so they are the same width whichever
+       sign is in them, and the minus is the real one, not a hyphen. */
+    .rb-timer-step { min-width: 30px; font-variant-numeric: tabular-nums; }
     .rb-timer-label { margin: 2px 0 0; font: 400 12px/1.35 ${UI}; color: rgba(var(--on-page), calc(.7 * var(--ink-k))); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     @keyframes rb-chip { 0%, 100% { border-color: var(--page-accent); } 50% { border-color: rgba(var(--accent-rgb), .35); } }
     @media (prefers-reduced-motion: reduce) {
@@ -8005,7 +8048,7 @@ export default function RecipeBox() {
       .rb-actions button { flex: 1 1 auto; }
       .rb-corner { top: 8px !important; right: 16px !important; }
 
-      .rb-timers { top: 48px; right: 8px; width: min(250px, calc(100vw - 16px)); }
+      .rb-timers { top: 48px; right: 8px; width: min(272px, calc(100vw - 16px)); }
     }
     @media (max-width: 400px) {
 
@@ -9938,7 +9981,8 @@ export default function RecipeBox() {
                       <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
                         {run.items.map(({ value: s, index: i }) => {
                           const { title, text } = stepParts(s);
-                          const secs = stepDuration(s);
+                          const span = stepSpan(s);
+                          const secs = span?.secs || null;
                           const done = marks.steps.includes(i);
                           const current = i === currentStep;
                           return (
@@ -9997,6 +10041,7 @@ export default function RecipeBox() {
                                     className="rb-btn rb-focus rb-noprint"
                                     style={{ ...btnQuiet, marginTop: 10, padding: "7px 14px", fontSize: 13 }}
                                     disabled={hasTimer(timerKey(openRecipe.id, i))}
+                                    title={span?.upTo ? `The step gives ${durLabel(secs)} to ${durLabel(span.upTo)}. The timer starts at ${durLabel(secs)} — add a minute from it when you have had a look.` : undefined}
                                     onClick={() => startTimer(`${openRecipe.title} — ${title || `step ${i + 1}`}`, secs, timerKey(openRecipe.id, i))}
                                   >
                                     {hasTimer(timerKey(openRecipe.id, i)) ? `${durLabel(secs)} timer running` : `Start a ${durLabel(secs)} timer`}
@@ -11040,12 +11085,33 @@ export default function RecipeBox() {
                 <div className="rb-timer-row">
                   <span className="rb-num rb-timer-clock">{clock(t.remaining)}</span>
                   <span className="rb-timer-btns">
+                    {/* The minute either way sits beside the clock, because it
+                        is about the number on it and nothing else. */}
+                    <button
+                      className="rb-btn rb-focus rb-timer-step"
+                      style={{ ...btnGhost, padding: "4px 7px", fontSize: 12 }}
+                      onClick={() => adjustTimer(t.id, -60)}
+                      disabled={t.remaining <= 60}
+                      aria-label="Take a minute off this timer"
+                      title="A minute less"
+                    >
+                      −1
+                    </button>
+                    <button
+                      className="rb-btn rb-focus rb-timer-step"
+                      style={{ ...btnGhost, padding: "4px 7px", fontSize: 12 }}
+                      onClick={() => adjustTimer(t.id, 60)}
+                      aria-label={done ? "Give it another minute" : "Add a minute to this timer"}
+                      title={done ? "Another minute" : "A minute more"}
+                    >
+                      +1
+                    </button>
                     {!done && (
-                      <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "4px 10px", fontSize: 12 }} onClick={() => toggleTimer(t.id)}>
+                      <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "4px 9px", fontSize: 12 }} onClick={() => toggleTimer(t.id)}>
                         {t.running ? "Pause" : "Resume"}
                       </button>
                     )}
-                    <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "4px 10px", fontSize: 12 }} onClick={() => dropTimer(t.id)}>
+                    <button className="rb-btn rb-focus" style={{ ...btnGhost, padding: "4px 9px", fontSize: 12 }} onClick={() => dropTimer(t.id)}>
                       {done ? "Clear" : "Stop"}
                     </button>
                   </span>
