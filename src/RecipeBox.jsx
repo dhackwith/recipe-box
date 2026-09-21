@@ -1722,6 +1722,10 @@ function ChatWindow({
      the bar by itself. A tap elsewhere or Escape puts either away. */
   const [openMsg, setOpenMsg] = useState(null);
   const [menuMsg, setMenuMsg] = useState(null);
+  /* Picking a reaction hushes that message's bar, so it doesn't sit there
+     under the pointer that just used it. Coming back to the message, or
+     tabbing into the bar, lets it open again. */
+  const [hushMsg, setHushMsg] = useState(null);
   useEffect(() => {
     if (openMsg === null && menuMsg === null) return;
     const away = (e) => {
@@ -2017,9 +2021,16 @@ function ChatWindow({
   /* A reaction on one of their messages. One per person: picking another
      swaps it, and picking the one you already gave takes it off. Both ends see
      it at once (shared/live.js). */
-  const react = async (m, emoji) => {
+  const react = async (m, emoji, btn, byKey) => {
     setError("");
     setOpenMsg(null);
+    /* The bar has done its job, so put it away instead of leaving it sitting
+       under the pointer that just used it. A key press keeps its place on the
+       message; a click or a tap lets the button go, so the bar isn't held open
+       by the focus left behind on it. */
+    if (byKey) btn?.closest(".rb-msg-hold")?.querySelector(".rb-msg-bubble")?.focus();
+    else btn?.blur();
+    setHushMsg(m.id);
     try {
       const res = await messagesCall("POST", "", { react: m.id, emoji: m.reacted === emoji ? null : emoji });
       setMessages((all) => all.map((x) => (x.id === res.id ? { ...x, ...res } : x)));
@@ -2396,7 +2407,12 @@ function ChatWindow({
                     : <span className="rb-face-gap" aria-hidden />)}
                   <div className={`rb-msg-wrap${openMsg === m.id || menuMsg === m.id ? " is-open" : ""}`}>
                   {m.mine && more}
-                  <div className="rb-msg-hold">
+                  <div
+                    className={`rb-msg-hold${hushMsg === m.id ? " is-hushed" : ""}`}
+                    onPointerEnter={() => setHushMsg((h) => (h === m.id ? null : h))}
+                    onFocus={(e) => { if (e.target.closest(".rb-react")) setHushMsg((h) => (h === m.id ? null : h)); }}
+                    onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setHushMsg((h) => (h === m.id ? null : h)); }}
+                  >
                   <div
                     className={`rb-msg-bubble${photo ? " has-photo" : ""}${bigEmoji ? " is-emoji" : ""}${m.deleted ? " is-gone" : ""}`}
                     tabIndex={0}
@@ -2448,7 +2464,7 @@ function ChatWindow({
                           key={emoji}
                           type="button"
                           className="rb-react"
-                          onClick={() => react(m, emoji)}
+                          onClick={(e) => react(m, emoji, e.currentTarget, e.detail === 0)}
                           aria-label={label}
                           aria-pressed={m.reacted === emoji}
                           title={label}
@@ -7579,6 +7595,7 @@ export default function RecipeBox() {
     .rb-msg-row.is-near-top .rb-react-bar::after { top: auto; bottom: 100%; }
     @media (hover: hover) { .rb-msg-hold:hover .rb-react-bar { opacity: 1; transform: none; pointer-events: auto; } }
     .rb-msg-hold:focus-within .rb-react-bar, .rb-msg-wrap.is-open .rb-react-bar { opacity: 1; transform: none; pointer-events: auto; }
+    .rb-msg-hold.is-hushed .rb-react-bar { opacity: 0; transform: translateY(5px) scale(.94); pointer-events: none; }
     .rb-react { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; font-size: 19px; line-height: 1; transition: transform 120ms ease; }
     .rb-react:hover, .rb-react:focus-visible { transform: translateY(-3px) scale(1.22); outline: none; }
     .rb-react:focus-visible { background: var(--card-lift); }

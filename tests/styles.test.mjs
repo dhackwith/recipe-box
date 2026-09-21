@@ -161,5 +161,21 @@ is("and neither flexible column keeps its content's width", detailCols.filter((c
 is("the step's text column has a floor of zero", src.includes('gridTemplateColumns: "38px minmax(0, 1fr)"'), true);
 is("so does the ingredient's name column", src.includes('gridTemplateColumns: qty ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)"'), true);
 
+/* Pointing at one of their messages opens the reaction bar, and picking a face
+   from it used to leave the bar sitting there under the pointer that had just
+   used it — the pick had happened, and nothing said so. A message whose bar has
+   been used carries .is-hushed, and that rule has to be written AFTER the three
+   that open the bar: all four are one class and one refinement deep, so the
+   cascade settles it on source order alone, and moving the rule up the
+   stylesheet would quietly bring the bug back. */
+console.log("\n— the reaction bar closes once it has been used —");
+const opensBar = ["@media (hover: hover) { .rb-msg-hold:hover .rb-react-bar", ".rb-msg-hold:focus-within .rb-react-bar", ".rb-msg-wrap.is-open .rb-react-bar"];
+const hushAt = css.indexOf(".rb-msg-hold.is-hushed .rb-react-bar");
+const hushRule = hushAt < 0 ? "" : css.slice(hushAt, css.indexOf("}", hushAt));
+is("a used bar is hushed", hushAt > -1, true);
+is("unseen, and out of reach while it is", [hushRule.includes("opacity: 0"), hushRule.includes("pointer-events: none")], [true, true]);
+is("and the rules that open it were all found", opensBar.filter((r) => css.includes(r)).length, 3);
+is("every one of which it is written after", opensBar.filter((r) => css.indexOf(r) > hushAt), []);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

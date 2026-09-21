@@ -15,6 +15,7 @@ out unless they would notice it.
 
 - **A step that gives a range starts at the shorter end.** "Bake for 28 to 30 minutes" used to offer a 30 minute timer, which is 2 minutes past the first moment the brownies might be done. The timer now starts at 28, and every running timer has a −1 and a +1 beside the clock, so you can spend the rest of the range a minute at a time once you have had a look. A timer that has already gone off takes minutes too — press +1 and it starts again for another one, and rings again at the end of it.
 - **Steps stop being cut off at the edge of a phone.** A recipe that held a long link or one very long word anywhere in its ingredients, steps or notes could push that whole column wider than the page on a narrow screen, and every line in it — the method, the nutrition figures — was sliced off at the right edge. The column now stays inside the card whatever is in it, and a link too long for the line wraps onto the next one.
+- **The reactions put themselves away once you have picked one.** Pointing at one of their messages opens the row of six faces above it, and choosing one used to leave that row sitting open on top of the message, so it was never quite clear the reaction had gone through. It closes as soon as you pick now, and comes back the next time you point at the message.
 
 ## 2026-09-19
 
