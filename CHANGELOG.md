@@ -14,6 +14,7 @@ out unless they would notice it.
 ## 2026-09-20
 
 - **A step that gives a range starts at the shorter end.** "Bake for 28 to 30 minutes" used to offer a 30 minute timer, which is 2 minutes past the first moment the brownies might be done. The timer now starts at 28, and every running timer has a −1 and a +1 beside the clock, so you can spend the rest of the range a minute at a time once you have had a look. A timer that has already gone off takes minutes too — press +1 and it starts again for another one, and rings again at the end of it.
+- **Steps stop being cut off at the edge of a phone.** A recipe that held a long link or one very long word anywhere in its ingredients, steps or notes could push that whole column wider than the page on a narrow screen, and every line in it — the method, the nutrition figures — was sliced off at the right edge. The column now stays inside the card whatever is in it, and a link too long for the line wraps onto the next one.
 
 ## 2026-09-19
 

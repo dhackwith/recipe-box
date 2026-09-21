@@ -148,5 +148,18 @@ const unstyled = [...used].filter((name) => !css.includes(`.${name}`));
 is("no class is asked for that nothing styles", unstyled, []);
 is("and there were classes to check", used.size > 20, true);
 
+/* A grid track will not fall below the min-content width of what sits in it,
+   and a link pasted into a step is one unbreakable run wide. That set the floor
+   for the whole ingredients-and-method column, which then reached past the
+   sheet and had every line in it clipped at the right edge — on a phone, in one
+   recipe, while every other recipe looked fine. The floor has to be written
+   down as zero, in the stylesheet and in the two rows laid out inline. */
+console.log("\n— the recipe card's columns can be squeezed —");
+const detailCols = [...css.matchAll(/\.rb-detail\s*\{[^}]*grid-template-columns:\s*([^;}]+)/g)].map((m) => m[1].trim());
+is("the detail grid says what its columns are, twice", detailCols.length, 2);
+is("and neither flexible column keeps its content's width", detailCols.filter((c) => c.replace(/minmax\([^)]*\)/g, "").includes("1fr")), []);
+is("the step's text column has a floor of zero", src.includes('gridTemplateColumns: "38px minmax(0, 1fr)"'), true);
+is("so does the ingredient's name column", src.includes('gridTemplateColumns: qty ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)"'), true);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -7938,8 +7938,16 @@ export default function RecipeBox() {
     }
     .rb-browse-course:hover { color: var(--card-accent); }
     .rb-browse-course .rb-num { font-size: 15px; }
-    .rb-detail { display: grid; grid-template-columns: 1fr; gap: 34px; }
-    @media (min-width: 760px) { .rb-detail { grid-template-columns: 292px 1fr; gap: 52px; } }
+    /* minmax(0, 1fr), never a bare 1fr: a grid track will not fall below the
+       min-content width of what is in it, and one unbreakable run — a link
+       pasted into a step, a long compound word — is min-content enough to push
+       the whole column past the sheet, which then clips every line in it. The
+       floor of zero lets the track stay inside the card, and the break-word
+       below lets that one run wrap instead of sticking out on its own. */
+    .rb-detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 34px; }
+    @media (min-width: 760px) { .rb-detail { grid-template-columns: 292px minmax(0, 1fr); gap: 52px; } }
+    .rb-detail > div { min-width: 0; }
+    .rb-detail p, .rb-detail li, .rb-detail dt, .rb-detail dd, .rb-detail h4 { overflow-wrap: break-word; }
     /* A tile is a photograph with its name under it — no card, no border, no
        shadow. Lifting every recipe off the page flattened the hierarchy; the
        picture is the thing that should catch the eye. */
@@ -9904,7 +9912,7 @@ export default function RecipeBox() {
                                 aria-pressed={got}
                                 onClick={() => toggleMark(openRecipe.id, "ing", i)}
                                 style={{
-                                  display: "grid", gridTemplateColumns: qty ? "auto 1fr" : "1fr", gap: 12, alignItems: "baseline",
+                                  display: "grid", gridTemplateColumns: qty ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)", gap: 12, alignItems: "baseline",
                                   width: "100%", padding: "9px 0", background: "none", border: "none", textAlign: "left", cursor: "pointer",
                                   opacity: got ? 0.45 : 1, transition: "opacity 150ms ease",
                                 }}
@@ -9995,7 +10003,7 @@ export default function RecipeBox() {
                                 if (e.target.closest("button") || window.getSelection()?.toString()) return;
                                 toggleMark(openRecipe.id, "steps", i);
                               }}
-                              style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, marginBottom: 24, cursor: "pointer", opacity: done ? 0.45 : 1, transition: "opacity 150ms ease" }}
+                              style={{ display: "grid", gridTemplateColumns: "38px minmax(0, 1fr)", gap: 10, marginBottom: 24, cursor: "pointer", opacity: done ? 0.45 : 1, transition: "opacity 150ms ease" }}
                             >
                               <button
                                 type="button"
@@ -10011,7 +10019,7 @@ export default function RecipeBox() {
                               >
                                 {done ? "✓" : i + 1}
                               </button>
-                              <div style={{ maxWidth: "64ch" }}>
+                              <div style={{ maxWidth: "64ch", minWidth: 0 }}>
                                 {title && <p style={{ font: `500 17px/1.3 ${DISPLAY}`, color: "var(--card-text)", margin: "0 0 5px" }}>{title}</p>}
                                 <p style={{ font: `400 16.5px/1.75 ${PROSE}`, color: "var(--card-text)", margin: 0 }}>{showText(text, factor, units)}</p>
                                 {Array.isArray(s?.photos) && s.photos.length > 0 && (
